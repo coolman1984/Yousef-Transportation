@@ -13,3 +13,4 @@ gateway/.wrangler/
 dist/
 build/
 .DS_Store
+server/_assets.py

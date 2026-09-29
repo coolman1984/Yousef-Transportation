@@ -4,6 +4,28 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phase 1a – engine fork (2026-09-29)
+
+**What:** copied the BAMS engine (BAMS commit `5f5b3ce`, version 2.4.0), renamed everything to Trip Orders
+(`TO-` hash domains and headers, `TO_HOME`, `trips.db`, `TripOrders.exe`, ports 8090/8453, new installer AppId),
+replaced the break-area domain by the trip domain in `store.ENTITIES` (13 entities, `docs/EXECUTION_PLAN.md` P2.1),
+new permission groups and 7 built-in profiles in `auth.py`, permission mapping and category scopes in `app.py`
+(a person can be limited to trip categories; journal/audit column `scope_id`, user field `scopes`).
+
+**Tests:** engine tests kept. In-process tests use a test-only break-area style domain (`tests/engine_domain.py`,
+registered by `tests/cluster.py`, never shipped) so counters, `max`/`rank`/`follow` resolvers and restores stay
+covered; the multi-PC tests were rewritten on trips (photos = `tripPhotos`, limited user = category scope).
+Removed: the upgrade-from-version-1 tests (they rebuilt BAMS history from git).
+Result: unit + convergence 32 OK, multi-PC 35 OK.
+
+**Mistakes / lessons**
+- A blind `sed s/bams_/to_/` shortened the backup file prefix from 5 to 3 characters and broke code that sliced
+  file names by position (`name[4:]`, `n[5:20]`). Lesson: after a rename, grep for numeric slices of the renamed strings.
+- `git rm --cached -r .` was run by mistake while cleaning up; it only changed the index (fixed by `git reset`).
+  Lesson: never run index-wide commands as a side effect of a rename.
+- Fields like `description` that tests used are not real trip fields; conflict resolution must use the real field
+  name (`notes`).
+
 ## Phase 0b – playbook for every agent (2026-09-29)
 
 **What:** `docs/EXECUTION_PLAN.md` (how to work, environment, every task with exact rules, data model, API,

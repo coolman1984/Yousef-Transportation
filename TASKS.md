@@ -11,9 +11,9 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [ ] P0.5 Owner answers the remaining open questions (defaults apply meanwhile) – see PLAN §4
 
 ## Phase 1 – Engine fork + shell
-- [ ] P1.1 Copy the engine from BAMS (record its commit)
-- [ ] P1.2 Rename BAMS → TO (strings, headers, folders, ports 8090/8453)
-- [ ] P1.3 Remove the break-area domain; engine tests green (gate)
+- [x] P1.1 Copy the engine from BAMS (commit 5f5b3ce). Not copied: `runtime/` portable Python (21 MB binary) – add it at delivery (P7.2) or use system Python for `start.bat`
+- [x] P1.2 Rename BAMS → TO (strings, headers, folders, ports 8090/8453, own installer AppId)
+- [x] P1.3 Remove the break-area domain; engine tests green (gate): unit+convergence 32, multi-PC 35
 - [ ] P1.4 Tokens + 5 themes + contrast test
 - [ ] P1.5 Fonts bundled (OFL) + subset tool
 - [ ] P1.6 i18n EN/AR + RTL + checks
@@ -60,7 +60,7 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 
 ## Phase 7 – Hardening & delivery
 - [ ] P7.1 Independent review + fixes
-- [ ] P7.2 Installer + release workflow
+- [ ] P7.2 Installer + release workflow (also remove the 'data of the old version' page of the installer, add the portable runtime)
 - [ ] P7.3 Guides (dispatcher, admin, driver) + release notes
 
 ## Phase 8 – Backlog

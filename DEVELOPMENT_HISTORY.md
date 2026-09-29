@@ -4,6 +4,20 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phase 0b – playbook for every agent (2026-09-29)
+
+**What:** `docs/EXECUTION_PLAN.md` (how to work, environment, every task with exact rules, data model, API,
+gateway protocol, workbook layout, checks, pitfalls, owner answers), `TASKS.md` (tracker), project skill
+`.claude/skills/trip-orders/SKILL.md`, `.gitignore` for `samples/private/`.
+
+**Why:** the owner wants any later agent to continue without mistakes, the same way.
+
+**Owner answer:** demo data = the real sheet. The repository is **public**, so the real workbook is loaded at first
+start on the office PC and never committed; the repo gets a synthetic sample with the same shape.
+
+**Lessons**
+- Check repository visibility before committing anything derived from the owner's files.
+
 ## Phase 0 – study and plan (2026-09-29)
 
 **What:** studied the BAMS reference repository, the paper trip order and the September workbook; wrote

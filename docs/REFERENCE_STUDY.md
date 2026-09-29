@@ -77,10 +77,10 @@ Verified with a script on `Extra_Sep-26_Recovered.xlsx` (sheet `All Car`, `Table
 | 232 trips | **232** ✓ | 141 `Manager car`, 91 `Extra` |
 | 28 days | dates 1→28 Sep, **25 distinct days** | Fridays absent |
 | 42 drivers | 42 raw strings, **41 after whitespace normalisation** | proves the need for normalisation |
-| 46 cars | 46 raw plate strings, **44 after normalisation**, 7 trips with no plate | e.g. `' ل ص ط 1865'` (leading space) |
+| 46 cars | 46 raw plate strings, **44 after normalisation**, 7 trips with no plate | e.g. a plate stored with a leading space |
 | 20 departments / 54 requesters | **20 / 54** ✓ | |
 | Start/End empty in every row | **0 of 232 filled** ✓ | OT never computed |
-| 13 odometer back-steps | **12** in row order with normalised plates (13 depending on ordering) | biggest: `و ق ر 3581` 191,220 → 160,200 (~31,000 km typo) |
+| 13 odometer back-steps | **12** in row order with normalised plates (13 depending on ordering) | biggest: one car 191,220 → 160,200 (~31,000 km typo) |
 | 56 of 224 Misr ≠ km | **56 of 223** trips with both kms | 8 trips have no km at all |
 | 87 destinations | **90 raw, 89 case-insensitive** | top: `SEEG-BNS-SEEG` ×28 |
 | `Column1` 1–7 on Extra | ✓ values 1–7 only on `Extra` rows | daily sequence of extra trips |

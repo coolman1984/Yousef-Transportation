@@ -1,8 +1,9 @@
 # Trip Orders – rules for every change
 
 Owner: Mohamed. Users are dispatchers, GA staff, finance and drivers who are **not technical**.
-Sibling of BAMS (`coolman1984/Mr.Ayman-HR`): same engine, same discipline. Start with `docs/PLAN.md`,
-`docs/DESIGN.md`, `docs/REFERENCE_STUDY.md`.
+Sibling of BAMS (`coolman1984/Mr.Ayman-HR`): same engine, same discipline. Start with `docs/EXECUTION_PLAN.md`
+(the playbook), then `TASKS.md` (where to continue), `docs/PLAN.md`, `docs/DESIGN.md`, `docs/REFERENCE_STUDY.md`.
+Project skill: `.claude/skills/trip-orders/SKILL.md`.
 
 ## Always
 
@@ -22,3 +23,5 @@ Sibling of BAMS (`coolman1984/Mr.Ayman-HR`): same engine, same discipline. Start
 - Never let a link carry administrator rights.
 - Never put a company name, logo or law reference in code – only in `config.json` (`brand.*`, `form.legal_text`).
 - Never push to `main` or force-push.
+- This repository is **public**: never commit the owner's workbook, form, photos, secrets or real names
+  (use `samples/private/`, gitignored).

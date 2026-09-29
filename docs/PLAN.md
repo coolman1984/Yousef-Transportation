@@ -1,6 +1,7 @@
 # Plan — Trip Orders (working name)
 
 Source of truth for scope: the owner's master prompt (2026-09-29). This file records how we execute it.
+Step-by-step playbook for every agent: `docs/EXECUTION_PLAN.md`; progress: `TASKS.md`.
 Design: `docs/DESIGN.md`. Reference study: `docs/REFERENCE_STUDY.md`.
 Supersedes the first idea note (`PROJECT_PLAN.md`, removed): passenger QR confirmation is **not** in version 1
 (paper signatures stay; proof = photos).
@@ -54,8 +55,9 @@ Each phase: tests green, docs updated in the same PR, short Arabic summary to th
 1. `Misr car KM` meaning (A1).
 2. Default office language (A3).
 3. Location on the driver page (A4).
-4. Can the demo data use the real names from the September workbook on the office PC, or should the sample be
-   anonymised? Default: **anonymised** sample (real structure and numbers, fake names/plates).
+4. ~~Demo data real or anonymised?~~ **Answered 2026-09-29: real, like the sheet.** The owner's workbook is loaded
+   at first start into the office data folder ("Load my real workbook"). The repository is public, so it keeps only
+   a synthetic sample with the same structure (see EXECUTION_PLAN P3.6).
 5. Is there an official price per km / per OT hour per vendor now (for reconciliation screens)? Default: empty,
    admin fills it.
 6. A Cloudflare account: will the owner create it (free, no card) when we reach Phase 4? Default: yes, with our

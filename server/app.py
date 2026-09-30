@@ -7,6 +7,7 @@ do is set by the administrator (Users page) and checked here for every request.
 """
 import hashlib
 import html
+import re
 import json
 import logging
 import logging.handlers
@@ -29,6 +30,7 @@ sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the scri
 import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
+import excel_io  # noqa: E402
 import tripsvc  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
@@ -495,6 +497,20 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.me())
         if p == '/api/state':
             return self.send(200, STORE.state(self.u['scopes']))
+        if p in ('/api/excel/export', '/api/excel/template'):
+            self.need('excel.export')
+            self.need_all_scopes()
+            ym = qs.get('ym', '')
+            if p.endswith('template'):
+                data, name = excel_io.template(), 'Trips_template.xlsx'
+            else:
+                if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
+                    raise BadRequest('Choose the month to export.')
+                st = STORE.state(self.u['scopes'])
+                data = excel_io.export_today(st, ym) if qs.get('layout', 'today') == 'today' else excel_io.export_clean(st, ym, qs.get('lang', 'en'))
+                name = f'Trips_{ym}_{"clean" if qs.get("layout") == "clean" else "same-as-today"}.xlsx'
+            STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Excel export', 'target': name}])
+            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="{name}"'})
         if p == '/api/insights':
             self.need('trips.view')
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
@@ -677,6 +693,28 @@ class Handler(BaseHTTPRequestHandler):
             res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops')), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
+        if p.startswith('/api/excel/'):
+            action = p[len('/api/excel/'):]
+            self.need('excel.import')
+            self.need_all_scopes()
+            try:
+                if action == 'preview':
+                    data = self.body(30 * 1048576)
+                    pid, plan = excel_io.make_preview(self.user, data, STORE.state(), qs.get('name', '')[:120])
+                    return self.send(200, {'id': pid, **plan})
+                if action == 'commit':
+                    d = self.json_body()
+                    plan = excel_io.get_preview(str(d.get('id')), self.user)
+                    ops, n = excel_io.build_ops(plan, STORE.state(), tripsvc.my_letter(JOURNAL, NODE.id), d.get('skip') or [], d.get('merges') or [],
+                                                include_problems=bool(d.get('includeProblems')))
+                    BACKUPS.create('pre-import')
+                    res = STORE.commit(self.user, self.ip, f'Excel import {plan.get("filename") or ""} ({n} trips)', ops, user_id=self.u['id'])
+                    excel_io.drop_preview(str(d.get('id')))
+                    STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': 'Excel import', 'target': plan.get('filename') or '', 'detail': f'{n} trips'}])
+                    return self.send(200, {'trips': n, 'changes': res['changes']})
+            except excel_io.ImportError_ as e:
+                raise BadRequest(str(e))
+            return self.send(404, {'error': 'Not found'})
         if p.startswith('/api/trips/'):
             d = self.json_body()
             action = p[len('/api/trips/'):]

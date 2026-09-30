@@ -53,7 +53,13 @@ def main():
     assert os.path.exists(os.path.join(dist, 'TripOrders.exe')), 'TripOrders.exe was not built'
     leaks = [p for p in glob.glob(os.path.join(dist, '**', '*.py'), recursive=True)]
     assert not leaks, f'source files in the program folder: {leaks}'
-    run([iscc(), f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'triporders.iss')])
+    # the internet-mailbox files travel with the program, so the owner finds them next to it (docs/GATEWAY_SETUP.md)
+    run(['node', os.path.join('gateway', 'build.js')])
+    gw = os.path.join(dist, 'gateway')
+    os.makedirs(gw, exist_ok=True)
+    for src in ('gateway/dist/trip-orders-gateway.js', 'gateway/dist/schema.sql', 'docs/GATEWAY_SETUP.md'):
+        shutil.copy(os.path.join(ROOT, src), gw)
+    run([iscc(), f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'trip-orders.iss')])
     print('Done:', glob.glob(os.path.join(ROOT, 'dist', f'TripOrders-Setup-{VERSION}.exe')))
 
 

@@ -24,9 +24,20 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Tests (unit, convergence, several PCs)
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Browser for the screen tests
+        run: |
+          python -m pip install playwright
+          python -m playwright install --with-deps chromium
+          echo "TO_CHROMIUM=$(python -c "from playwright.sync_api import sync_playwright as s; p=s().start(); print(p.chromium.executable_path); p.stop()")" >> "$GITHUB_ENV"
+      - name: Gateway tests (Worker + D1 stand-in)
+        working-directory: gateway
+        run: node --test --no-warnings test/gateway.test.js
+      - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_multinode
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_gateway_client test_multinode test_e2e_browser test_e2e_driver test_e2e_link_ui
 
   windows-installer:
     needs: test
@@ -37,6 +48,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Build tools
         run: |
           python -m pip install --upgrade pip
@@ -85,3 +99,4 @@ jobs:
           fi
           gh release create "v$v" dist/TripOrders-Setup-*.exe --target "$GITHUB_SHA" \
             --title "Trip Orders $v" --notes-file docs/RELEASE_NOTES.md
+          gh release upload "v$v" gateway/dist/trip-orders-gateway.js gateway/dist/schema.sql docs/GATEWAY_SETUP.md --clobber

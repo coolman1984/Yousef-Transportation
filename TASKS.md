@@ -58,15 +58,15 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - Test map: `test_gateway_client` (9), `test_e2e_link_ui` (2), plus the driver and gateway tests above
 
 ## Phase 6 – Reports & presentation
-- [ ] P6.1 Month sheet, per-entity reports
-- [ ] P6.2 Vendor reconciliation + cost allocation + overtime
-- [ ] P6.3 Anomalies
-- [ ] P6.4 Presentation mode + live board polish
+- [x] P6.1 `reports.py` summaries per vehicle/driver/department/requester/category/day + top routes; `/api/reports`
+- [x] P6.2 Vendor reconciliation, cost allocation, overtime (page + Excel clean export + Word report)
+- [x] P6.3 Anomalies list
+- [x] P6.4 Reports page with bar charts and presentation mode (`js/views/reports.js`); browser test `ReportsPageTest`
 
 ## Phase 7 – Hardening & delivery
-- [ ] P7.1 Independent review + fixes
-- [ ] P7.2 Installer + release workflow (also remove the 'data of the old version' page of the installer, add the portable runtime)
-- [ ] P7.3 Guides (dispatcher, admin, driver) + release notes
+- [x] P7.1 Independent review + fixes
+- [x] P7.2 Installer + release workflow (also remove the 'data of the old version' page of the installer, add the portable runtime)
+- [x] P7.3 Guides (dispatcher, admin, driver) + release notes
 
 ## Phase 8 – Backlog
 - [ ] Sealing · WhatsApp API · OCR · location · standing driver link · SMS

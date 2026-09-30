@@ -4,6 +4,18 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phases 6-7 – reports, release (2026-09-30)
+
+**What:** Reports page and presentation mode; version 1.0.0; the installer script no longer asks about "old version data" (BAMS leftover)
+and the build now puts `gateway\` (worker bundle, schema, setup guide) next to the program; the workflow runs every test group
+(node gateway tests, Playwright screen tests) and attaches the gateway files to the release; guides for dispatcher, admin, driver.
+
+**Mistake:** rewriting `server/version.py` with `open(p,'w').write(open(p).read()...)` truncated the file before reading it. Read first, then write.
+
+**Not verified here:** the Windows build (Nuitka/Inno Setup) and a real Cloudflare deployment - CI and the owner's first run are the check.
+
+---
+
 ## Phases 4-5 – gateway, driver page, office link (2026-09-30)
 
 **What:** `gateway/` (Cloudflare Worker + D1, no dependencies), the driver PWA, `server/gateway_client.py`, the link/WhatsApp/print

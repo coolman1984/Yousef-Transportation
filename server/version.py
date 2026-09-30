@@ -1,5 +1,5 @@
 """Program version and owner. The installer build reads VERSION from here (tools/build_windows.py)."""
-VERSION = '2.4.0'
+VERSION = '1.0.0'
 PRODUCT = 'Trip Orders'
 DEVELOPER = 'Mohamed Fawzy'
 COPYRIGHT = f'© 2026 {DEVELOPER}. All rights reserved.'

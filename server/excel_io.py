@@ -345,6 +345,10 @@ def make_preview(user, data, state, filename=''):
     rows, report = read_workbook(data)
     p = plan(rows, state, filename)
     p['sheets'] = report
+    return store_preview(user, p)
+
+
+def store_preview(user, p):
     now = time.time()
     for k in [k for k, v in _PREVIEWS.items() if now - v['at'] > _PREVIEW_TTL]:
         _PREVIEWS.pop(k, None)
@@ -427,7 +431,7 @@ def build_ops(p, state, letter, skip_rows=(), merges=(), new_id=None, include_pr
             end_at = e.isoformat()
         tid = new_id('tr')
         row = {'no': no, 'date': r['date'], 'categoryId': cat_id, 'vehicleId': veh, 'driverId': drv, 'requesterId': req, 'departmentId': dep,
-               'destination': r['destination'], 'purpose': r.get('purpose') or '', 'status': 'closed', 'source': 'excel', 'locked': True, 'importKey': r['key'],
+               'destination': r['destination'], 'purpose': r.get('purpose') or '', 'status': 'closed', 'source': p.get('source', 'excel'), 'locked': True, 'importKey': r['key'],
                'gaApproved': '', 'seq': r['seq'], 'startKm': r['startKm'], 'endKm': r['endKm'], 'billableKm': r['billableKm'], 'startAt': start_at, 'endAt': end_at,
                'importWarn': False}
         row = {k: v for k, v in row.items() if v not in (None, '') and k != 'importWarn'}

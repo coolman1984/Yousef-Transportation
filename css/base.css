@@ -374,6 +374,24 @@ table.tbl { border-collapse: separate; border-spacing: 0; width: 100%; }
   .kv { grid-template-columns: 1fr; gap: .1rem 0; }
   .kv dd { margin-bottom: .5rem; }
 }
+/* ---- Excel & Word page ---- */
+.dropzone { display: grid; place-items: center; gap: .5rem; text-align: center; padding: 2.4rem 1rem; border: 2px dashed var(--line); border-radius: var(--r-2); background: var(--surface-2); cursor: pointer; transition: border-color var(--t-fast), background var(--t-fast), transform var(--t-fast); }
+.dropzone:hover, .dropzone:focus-visible, .dropzone.over { border-color: var(--brand); background: var(--brand-soft); transform: translateY(-1px); }
+.dropzone .art { color: var(--brand); }
+.actionbar { position: sticky; inset-block-end: 0; display: flex; justify-content: flex-end; gap: .6rem; padding: .8rem 1rem; background: color-mix(in srgb, var(--surface) 90%, transparent); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: var(--r-2); box-shadow: var(--shadow-2); }
+.choice { display: flex; gap: .7rem; align-items: flex-start; padding: .9rem 1rem; border: 1px solid var(--line); border-radius: var(--r-2); background: var(--surface-2); cursor: pointer; }
+.choice:has(input:checked) { border-color: var(--brand); background: var(--brand-soft); }
+.choice small { display: block; color: var(--ink-2); margin-block-start: .2rem; }
+.notes { margin: 0; padding-inline-start: 1.1rem; color: var(--ink-2); font-size: .88rem; display: grid; gap: .2rem; }
+.errline { display: grid; gap: .2rem; padding-block-end: .7rem; border-block-end: 1px solid var(--line); }
+.errline:last-child { border-block-end: 0; padding-block-end: 0; }
+.tip.bad { background: var(--bad-soft); border-color: color-mix(in srgb, var(--bad) 30%, transparent); }
+.tip.bad .ic { color: var(--bad); }
+.tip.warn { background: var(--warn-soft); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+.tip.warn .ic { color: var(--warn); }
+.row.between { justify-content: space-between; }
+.art.ok { color: var(--ok); background: var(--ok-soft); }
+
 @media print {
   .sidebar, .topbar, #panels, #toasts, .btn, .toolbar { display: none !important; }
   .app { display: block; }

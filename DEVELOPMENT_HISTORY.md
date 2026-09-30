@@ -4,6 +4,26 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phase 3 – Excel and Word in and out (2026-09-30)
+
+**What:** dependency-free xlsx reader/writer and docx reader/writer; `excel_io.py` (find the header row by names, read every
+sheet, match drivers/cars/people/departments/categories/places, duplicate detection by an import key, alerts, place-spelling
+merge suggestions, one confirmed commit after an automatic `pre-import` backup); export in the owner's exact three-sheet
+layout with live formulas, and a clean 10-sheet report; `reports.py` (summaries, overtime, vendor reconciliation, cost,
+anomalies); `word_io.py` (printable form, reading filled forms, monthly report); the Excel page (import review, export, Word, Guide).
+
+**Tests:** `test_xlsx`, `test_excel_io` (13), `test_word_io` (8), browser flow. openpyxl reads our files (acceptance check).
+
+**Mistakes / lessons**
+- The reader returned `0` for time-formatted cells until the built-in number formats 18-21 were treated as times.
+- LibreOffice in this sandbox cannot load any xlsx (not even openpyxl's), so that check is skipped here; the openpyxl
+  acceptance test replaces it. Open the exported files in real Excel once on the office PC.
+- A test password containing the user name is refused by the server (good) - use another.
+- The page state must be reset when the tab changes: a test that waited for the drop zone while the Guide tab was active failed.
+- Import messages arrive as English text plus a code; the browser shows them from the dictionaries by code.
+
+---
+
 ## Phase 2 – domain core and office screens (2026-09-30)
 
 **What:** `server/domain.py` (text/plate/mobile normalisation, trip numbers with the PC letter, overtime, odometer chain,

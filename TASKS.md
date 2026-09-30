@@ -29,14 +29,17 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P2.3 Screens: Overview, Trips, Trip panel, New trip, Today board, Review queue, Vehicles, Drivers, People + Departments, Places, Categories (Settings → Trips & rules), Activity log, Recycle Bin + backups (Settings → Data). TODO later: standard routes screen (entity exists), odometer chain chart on the vehicle page, per-place merge tool
 - [x] P2.4 Permissions + profiles + category restriction (Settings → People & access: users, personal links, tick boxes, profiles)
 
-## Phase 3 – Excel
-- [ ] P3.1 `xlsx_read.py`
-- [ ] P3.2 Layout spec (`excel_io.LAYOUT`)
-- [ ] P3.3 Writer: formulas, dates, styles, tables, panes
-- [ ] P3.4 Import preview + commit
-- [ ] P3.5 Export today + clean
-- [ ] P3.6 Samples: synthetic generator + fixtures; "load my real workbook" at first start
-- [ ] P3.7 Round-trip test
+## Phase 3 – Excel + Word
+- [x] P3.1 `xlsx_read.py` (dependency-free reader, dates/times/durations, zip-bomb limits)
+- [x] P3.2 Layout spec (`excel_io.TODAY_HEADERS`, `HEADER_FIELDS`)
+- [x] P3.3 `xlsx_write.py`: formulas with cached values, dates, styles, tables, panes, totals
+- [x] P3.4 Import preview + commit (`/api/excel/preview|commit`, review UI in `js/views/excel.js`)
+- [x] P3.5 Export "same as today" + "clean report" (10 sheets, EN/AR) + empty template
+- [x] P3.6 Synthetic sample (`tools/make_sample_workbook.py`, `tests/fixtures/`); real workbook stays in `samples/private/`
+- [x] P3.7 Round-trip test (`test_excel_io`): import → export equals the original cells
+- [x] P3.8 Word: `docx_write.py`, `docx_read.py`, `word_io.py` (trip order form EN/AR blank or filled, read filled forms incl. the original paper form, monthly report), `/api/word/*`, `test_word_io`
+- [x] P3.9 Review step, alerts, plain error messages, month summary, Guide (12 Q&A + error list) in the Excel page; browser test `ExcelPageTest`
+- Test map: `test_xlsx` (reader/writer), `test_excel_io` (plan, alerts, API flow), `test_word_io` (times/dates/forms/API), `test_e2e_browser.ExcelPageTest`
 
 ## Phase 4 – Gateway + driver page
 - [ ] P4.1 Worker routes + D1 schema + retention cron

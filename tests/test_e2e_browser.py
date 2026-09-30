@@ -291,6 +291,35 @@ class ExcelPageTest(BrowserBase):
         self.assertEqual(self.errors, [])
 
 
+@SKIP
+class ReportsPageTest(BrowserBase):
+    def test_reports_and_presentation(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        from harness import ADMIN
+        c = self.S.client()
+        c.login(ADMIN[0], ADMIN[1])
+        with open(os.path.join(here, 'fixtures', 'sample_sep26_synthetic.xlsx'), 'rb') as f:
+            pv = c.call('POST', '/api/excel/preview?name=s.xlsx', raw=f.read(), headers={'Content-Type': 'application/octet-stream'})
+        c.post('/api/excel/commit', {'id': pv['id'], 'includeProblems': True})
+        api = c.get('/api/reports?ym=2026-09')
+        self.assertEqual(api['summary']['total']['trips'], 247)
+        self.assertTrue(api['reconciliation'] and api['anomalies'])
+        pg = self.open({'lang': 'en'})
+        pg.goto(self.S.base + '/#/reports')
+        pg.fill('#rp-ym', '2026-09')
+        pg.wait_for_selector('.bar-row')
+        self.assertIn('247', pg.inner_text('#rp-body'))
+        pg.click('[data-g="byDriver"]')
+        self.assertGreater(pg.locator('#rp-body table tbody tr').count(), 5)
+        pg.click('[data-present]')
+        pg.wait_for_selector('.present .ps')
+        pg.keyboard.press('ArrowRight')
+        self.assertIn('1 / 6'.replace('1', '2', 1), pg.inner_text('.present .pn'))
+        pg.keyboard.press('Escape')
+        self.assertEqual(pg.locator('.present').count(), 0)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()
 

@@ -191,10 +191,21 @@ async function office(request, env, url, parts) {
 }
 
 // ---------------------------------------------------------------- static pages and the entry point
+// In the single-file bundle (build.js) the driver page files are embedded here; with wrangler they come from env.ASSETS.
+let EMBEDDED_ASSETS = null;
+const MIME = { html: 'text/html; charset=utf-8', js: 'text/javascript; charset=utf-8', css: 'text/css; charset=utf-8', svg: 'image/svg+xml', webmanifest: 'application/manifest+json' };
+async function fetchAsset(env, request, path) {
+  if (env.ASSETS) {
+    const u = new URL(request.url);
+    u.pathname = path;
+    return env.ASSETS.fetch(new Request(u.toString(), { method: 'GET' }));
+  }
+  const text = EMBEDDED_ASSETS && EMBEDDED_ASSETS[path];
+  if (text === undefined || text === null) return new Response('Not found', { status: 404 });
+  return new Response(text, { status: 200, headers: { 'Content-Type': MIME[path.split('.').pop()] || 'text/plain' } });
+}
 async function asset(env, request, path, extra) {
-  const u = new URL(request.url);
-  u.pathname = path;
-  const r = await env.ASSETS.fetch(new Request(u.toString(), { method: 'GET' }));
+  const r = await fetchAsset(env, request, path);
   const h = new Headers(r.headers);
   for (const [k, v] of Object.entries(HEADERS)) h.set(k, v);
   h.set('Cache-Control', path.startsWith('/app/fonts/') ? 'public, max-age=31536000, immutable' : 'no-cache');

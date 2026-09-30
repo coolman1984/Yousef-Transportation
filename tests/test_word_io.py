@@ -114,6 +114,11 @@ class ApiTest(unittest.TestCase):
         text = ' '.join(c for tb in docx_read.read(rep)['tables'] for r in tb for c in r)
         self.assertIn('Ali Hassan', text)
         self.assertIn('120', text)
+        ac.post('/api/commit', {'label': 'brand', 'ops': [{'e': 'settings', 'id': 'systemName', 'op': 'put', 'row': {'value': 'Acme Test Co'}},
+                                                            {'e': 'settings', 'id': 'legalText', 'op': 'put', 'row': {'value': 'Legal line from settings'}}]})
+        branded = docx_read.read(ac.call('GET', '/api/word/form?lang=en'))
+        self.assertIn('Acme Test Co', ' '.join(branded['paragraphs']))
+        self.assertIn('Legal line from settings', ' '.join(branded['paragraphs']))
         rep_en = ac.call('GET', '/api/word/report?ym=2026-09&lang=en')
         self.assertIn('Monthly trips report', ' '.join(docx_read.read(rep_en)['paragraphs']))
 

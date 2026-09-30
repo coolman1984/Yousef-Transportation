@@ -523,7 +523,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, STORE.state(self.u['scopes']))
+            return self.send(200, {**STORE.state(self.u['scopes']), 'gateway': bool(SECRETS.configured)})
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -541,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
         if p in ('/api/word/form', '/api/word/report'):
             st = STORE.state(self.u['scopes'])
             lang = 'ar' if qs.get('lang') == 'ar' else 'en'
-            cfg = {x.get('id'): x.get('value') for x in st.get('settings', []) if isinstance(x, dict)}
+            cfg = st.get('settings') or {}
             brand = {'name': cfg.get('systemName') or '', 'footer': cfg.get('formFooter') or ''}
             if p.endswith('report'):
                 self.need('excel.export')
@@ -572,6 +572,14 @@ class Handler(BaseHTTPRequestHandler):
                 raise BadRequest('The mailbox is not set up yet.')
             STORE.log_activity(self.user, self.ip, [{'type': 'security', 'action': 'Mailbox secret viewed', 'target': 'gateway'}])
             return self.send(200, {'officeSecret': SECRETS.data['officeSecret'], 'setupCode': SECRETS.setup_code()})
+        if p == '/api/reports':
+            self.need('reports.view')
+            ym = qs.get('ym', '')
+            if ym and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
+                raise BadRequest('Choose the month.')
+            st = STORE.state(self.u['scopes'])
+            return self.send(200, {'summary': reports.summaries(st, ym), 'overtime': reports.overtime(st, ym), 'reconciliation': reports.reconciliation(st, ym),
+                                   'allocation': reports.allocation(st, ym), 'anomalies': reports.anomalies(st, ym)[:300]})
         if p == '/api/insights':
             self.need('trips.view')
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))

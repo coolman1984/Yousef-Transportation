@@ -135,6 +135,43 @@
     return TO.esc(m[field] ? m[field]() : v);
   }
 
+  /* ---------- driver link, print, Word ---------- */
+  function linkCard(t) {
+    var open = t.status !== 'cancelled' && !t.locked, ready = TO.data.state && TO.data.state.gateway, can = TO.can('trips.send');
+    var body = '';
+    if (open && can) {
+      if (!ready) body += '<div class="tip">' + TO.icon('info') + '<span>' + TO.esc(TO.t('link.notset')) + '</span></div>';
+      else {
+        body += '<p class="muted">' + TO.esc(t.linkHash ? (t.boundDevice ? TO.t('link.bound') : TO.t('link.made')) : TO.t('link.none')) + '</p>' +
+          '<div class="row wrap" style="gap:.5rem"><button class="btn primary" data-a="wa">' + TO.icon('chat', 'sm') + TO.esc(TO.t('link.wa')) + '</button>' +
+          '<button class="btn" data-a="copylink">' + TO.icon('copy', 'sm') + TO.esc(TO.t('link.copy')) + '</button>' +
+          (t.linkHash ? '<button class="btn" data-a="newlink">' + TO.esc(TO.t('link.new')) + '</button>' : '') +
+          (t.boundDevice && TO.can('trips.amend') ? '<button class="btn" data-a="release">' + TO.esc(TO.t('link.release')) + '</button>' : '') + '</div>';
+      }
+    }
+    body += '<div class="row wrap" style="gap:.5rem;margin-top:.8rem"><button class="btn" data-a="print">' + TO.icon('doc', 'sm') + TO.esc(TO.t('link.print')) + '</button>' +
+      '<a class="btn" href="/api/word/form?lang=' + TO.lang + '&trip=' + encodeURIComponent(t.id) + '" download>' + TO.icon('download', 'sm') + TO.esc(TO.t('link.word')) + '</a></div>';
+    return '<section class="card"><h3 style="margin-bottom:.8rem">' + TO.esc(TO.t('link.title')) + '</h3>' + body + '</section>';
+  }
+  function linkDialog(url) {
+    var el = TO.dialog({ title: TO.t('link.copy'), body: '<div class="field"><input class="input" id="lk" readonly dir="ltr" value="' + TO.esc(url) + '"><span class="help">' + TO.esc(TO.t('link.copy.help')) + '</span></div>',
+      footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.close')) + '</button><button class="btn primary" data-copy>' + TO.esc(TO.t('common.copy')) + '</button>' });
+    var inp = el.querySelector('#lk'); inp.focus(); inp.select();
+    el.querySelector('[data-copy]').addEventListener('click', function () {
+      var ok = function () { TO.toast(TO.t('link.copied')); };
+      if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(url).then(ok, function () { inp.select(); document.execCommand('copy'); ok(); });
+      else { inp.select(); try { document.execCommand('copy'); ok(); } catch (e) { /* the text stays selected for Ctrl+C */ } }
+    });
+  }
+  function waMessage(t, r) {
+    var v = TO.data.get('vehicles', t.vehicleId) || {};
+    return TO.t('wa.msg', { no: t.no, date: U.day(t.date), plate: v.plate || '–', dest: t.destination || '–', link: r.url });
+  }
+  function sendLink(t, replace, sent, then) {
+    return TO.post('/api/trips/link', { id: t.id, replace: !!replace, sent: !!sent }).then(function (r) { return TO.data.load().then(function () { then(r); refreshPanel(t.id); TO.rerender(); }); },
+      function (e) { TO.toast(U.errorText(e), 'bad', 6000); });
+  }
+
   /* ---------- the trip panel ---------- */
   var openId = null;
   function panelHTML(t) {
@@ -153,6 +190,7 @@
         kv('f.destination', TO.esc(t.destination || '–')) + (t.purpose ? kv('f.purpose', TO.esc(t.purpose)) : '') + (t.notes ? kv('f.notes', TO.esc(t.notes)) : '') +
         kv('f.ga', t.gaApproved === 'yes' ? '<span class="badge ok">' + TO.esc(TO.t('ga.yes')) + '</span> <span class="muted">' + TO.esc(t.gaBy || '') + '</span>' : t.gaApproved === 'no' ? '<span class="badge bad">' + TO.esc(TO.t('ga.no')) + '</span>' : '<span class="badge">' + TO.esc(TO.t('ga.pending')) + '</span>') +
       '</dl></section>' +
+      linkCard(t) +
       '<section class="card"><h3 style="margin-bottom:.8rem">' + TO.esc(TO.t('trip.section.odo')) + '</h3><dl class="kv">' +
         kv('f.startKm', U.num(t.startKm)) + kv('f.endKm', U.num(t.endKm)) + kv('f.km', ins.km === null || ins.km === undefined ? '–' : '<b class="num">' + TO.fmt.num(ins.km) + '</b>') +
         (t.billableKm ? kv('f.billableKm', U.num(t.billableKm)) : '') + kv('f.startAt', U.dt(t.startAt)) + kv('f.endAt', U.dt(t.endAt)) +
@@ -181,6 +219,11 @@
           var a = e.target.closest('[data-a]'); if (!a) return;
           var cur = TO.data.get('trips', id);
           if (a.dataset.a === 'amend') amendDialog(cur);
+          else if (a.dataset.a === 'print') TO.printTrip(cur);
+          else if (a.dataset.a === 'copylink') sendLink(cur, false, false, function (r) { linkDialog(r.url); });
+          else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
+          else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
+          else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'approve') U.run(TO.post('/api/trips/approve', { id: id, yes: true }), 'trip.approved').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'cancel') U.confirm({ title: TO.t('trip.cancel'), body: TO.t('trip.cancel.body'), reason: TO.t('amend.reason'), danger: true, ok: TO.t('trip.cancel') }).then(function (reason) {
             if (reason) U.run(TO.post('/api/trips/cancel', { id: id, reason: reason }), 'trip.cancelled').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });

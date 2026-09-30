@@ -181,3 +181,21 @@ test('card updates keep the bound phone unless the office releases it', async ()
   assert.equal(removed.status, 200);
   assert.equal((await call(env, 'GET', '/api/card/' + TOKEN)).status, 404);
 });
+
+test('the single-file bundle serves the driver page without any asset binding', async () => {
+  const { execFileSync } = await import('node:child_process');
+  const { pathToFileURL, fileURLToPath } = await import('node:url');
+  const { dirname, join } = await import('node:path');
+  const here = dirname(fileURLToPath(import.meta.url));
+  execFileSync('node', [join(here, '..', 'build.js')]);
+  const bundle = (await import(pathToFileURL(join(here, '..', 'dist', 'trip-orders-gateway.js')).href + '?t=' + Date.now())).default;
+  const env = newEnv();
+  delete env.ASSETS;
+  const get = (p) => bundle.fetch(new Request('http://gw.test' + p, { headers: { 'CF-Connecting-IP': '1.1.1.1' } }), env);
+  const page = await get('/t/' + TOKEN);
+  assert.equal(page.status, 200);
+  assert.match(await page.text(), /<div id="app"/);
+  assert.equal((await get('/app/app.js')).status, 200);
+  assert.match((await get('/app/style.css')).headers.get('content-type'), /css/);
+  assert.equal((await get('/sw.js')).headers.get('service-worker-allowed'), '/');
+});

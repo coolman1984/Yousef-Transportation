@@ -4,6 +4,30 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phases 4-5 – gateway, driver page, office link (2026-09-30)
+
+**What:** `gateway/` (Cloudflare Worker + D1, no dependencies), the driver PWA, `server/gateway_client.py`, the link/WhatsApp/print
+screens and Settings -> Mailbox, `docs/GATEWAY_SETUP.md`.
+
+**Decisions**
+- Tests run the *real* worker code in Node with a D1 stand-in on `node:sqlite` (`gateway/dev/d1.js`) - no wrangler download needed,
+  and the same dev server is used by the Python tests, so the office client is tested against the real gateway code.
+- A second phone is never blocked: its events are accepted and marked (trust rule `R_SECOND_DEVICE`, red). "Technology never blocks."
+- Photos are one BLOB row each (<= 600 KB after compression to ~250 KB); D1 allows 2 MB per row, so no splitting.
+- The dashboard bundle (`build.js`) embeds the driver page in the worker so the owner can deploy by copy/paste.
+- The phone time and the gateway time are put in the *phone's own* zone before the drift check; otherwise a +03:00 phone looked 3 hours off.
+
+**Mistakes / lessons**
+- The service worker install failed silently because `/index.html` is not a route (only `/t/<token>`); offline reload then failed. Fixed by
+  caching the shell from `/t/shell`. Lesson: test offline reload, not just offline sending.
+- An event that failed while offline was not marked `queued` (only HTTP answers counted as a try). Network errors now count.
+- `state.settings` is an object `{id: value}`, not a list: two places read it wrongly (Word brand text and print sheet). A test now sets the
+  brand and reads it back.
+- `wait_for_function` with a string is blocked by the strict CSP: poll with `evaluate` of a function instead.
+- Not verified here: a real Cloudflare deployment (no account/network in the sandbox). The owner runs the 9-step smoke test.
+
+---
+
 ## Phase 3 – Excel and Word in and out (2026-09-30)
 
 **What:** dependency-free xlsx reader/writer and docx reader/writer; `excel_io.py` (find the header row by names, read every

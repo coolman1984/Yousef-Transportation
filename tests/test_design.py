@@ -70,7 +70,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-JS_FILES = ['shell.js', 'core.js', 'prefs.js', 'app.js', 'data.js', 'ui.js', 'views/auth.js', 'views/overview.js', 'views/soon.js', 'views/settings.js', 'views/help.js', 'views/lists.js', 'views/trips.js', 'views/board.js', 'views/activity.js', 'views/access.js', 'views/datatab.js', 'views/excel.js']
+JS_FILES = ['shell.js', 'core.js', 'prefs.js', 'app.js', 'data.js', 'ui.js', 'views/auth.js', 'views/overview.js', 'views/soon.js', 'views/settings.js', 'views/help.js', 'views/lists.js', 'views/trips.js', 'views/board.js', 'views/activity.js', 'views/access.js', 'views/datatab.js', 'views/excel.js', 'views/mailbox.js', 'views/print.js', 'views/reports.js']
 
 
 def dict_keys(lang):

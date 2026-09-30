@@ -42,18 +42,20 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - Test map: `test_xlsx` (reader/writer), `test_excel_io` (plan, alerts, API flow), `test_word_io` (times/dates/forms/API), `test_e2e_browser.ExcelPageTest`
 
 ## Phase 4 – Gateway + driver page
-- [ ] P4.1 Worker routes + D1 schema + retention cron
-- [ ] P4.2 Security (HMAC, limits, headers, no token logs)
-- [ ] P4.3 Event + card formats
-- [ ] P4.4 Driver page (5 screens, outbox, camera, stamp, service worker)
-- [ ] P4.5 Local run + gateway tests + mobile browser tests
+- [x] P4.1 Worker routes + D1 schema + daily cleanup (`gateway/src/worker.js`, `schema.sql`); photos stored as one BLOB (<= 600 KB, D1 row limit is 2 MB)
+- [x] P4.2 Security: HMAC (time + nonce + body hash), rate limits, size limits, CSP/nosniff/no-referrer headers, tokens stored only as hashes
+- [x] P4.3 Event + card formats (see `worker.js` header and `gateway_client.card_for`)
+- [x] P4.4 Driver page `gateway/public/` (5 steps, IndexedDB drafts + outbox, retry with backoff, live camera with stamp, gallery fallback marked, service worker, AR/EN, dark + high contrast)
+- [x] P4.5 Tests: `gateway/test/gateway.test.js` (15, node:test with a D1 stand-in), `tests/test_e2e_driver.py` (7: online trip, offline + reopen, second phone, cancelled/unknown, low km, gallery fallback, language). NOT yet run against real Cloudflare (no account in this sandbox) - do the smoke test in `docs/GATEWAY_SETUP.md` step 9
+- [x] P4.6 Single-file bundle `gateway/build.js` -> `dist/trip-orders-gateway.js` (pasteable in the Cloudflare dashboard); attached to the release by CI
 
-## Phase 5 – Office ↔ gateway
-- [ ] P5.1 `gateway_client.py` push/pull/ack/idempotency
-- [ ] P5.2 Secrets + link tokens
-- [ ] P5.3 WhatsApp sending
-- [ ] P5.4 Printable order
-- [ ] P5.5 Gateway settings page + `docs/GATEWAY_SETUP.md`
+## Phase 5 – Office <-> gateway
+- [x] P5.1 `gateway_client.py`: push cards, pull events/photos, apply as one change per trip, ack; idempotent (`ev-<uuid>`, `ph-<uuid>`); time zone-safe drift
+- [x] P5.2 Secrets in `gateway.json` per PC (never in the shared DB/logs); setup code for other PCs; link token = HMAC of trip + nonce (only its hash is stored)
+- [x] P5.3 WhatsApp `wa.me` button, copy link, new link, free the phone (trip panel)
+- [x] P5.4 Printable order (A4, QR of the trip number) + Word form
+- [x] P5.5 Settings -> Mailbox + `docs/GATEWAY_SETUP.md` (Arabic, dashboard steps)
+- Test map: `test_gateway_client` (9), `test_e2e_link_ui` (2), plus the driver and gateway tests above
 
 ## Phase 6 – Reports & presentation
 - [ ] P6.1 Month sheet, per-entity reports

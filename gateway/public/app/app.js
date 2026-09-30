@@ -218,8 +218,10 @@
     app.innerHTML = head() + '<main><p class="boot">' + D.esc(D.t('loading')) + '</p></main>';
     Promise.all([D.outbox.deviceId(), D.outbox.getDraft(KEY)]).then(function (r) {
       S.device = r[0]; S.draft = r[1];
-      return fetch('/api/card/' + D.token, { cache: 'no-cache' });
+      // offline: the copy of the card kept on this phone with the draft is enough to carry on
+      return fetch('/api/card/' + D.token, { cache: 'no-cache' }).catch(function (e) { if (S.draft && S.draft.card) return { offlineCard: true }; throw e; });
     }).then(function (res) {
+      if (res.offlineCard) return { card: S.draft.card };
       if (res.status === 404) { app.innerHTML = head() + '<main>' + screenGone('unknown') + '</main>'; return null; }
       if (res.status === 410) return res.json().then(function (j) { D.gone = true; D.goneWhy = j.cancelled ? 'cancelled' : 'expired'; draw0(); return null; });
       return res.json();
@@ -235,7 +237,7 @@
       return fetch('/api/bind/' + D.token, { method: 'POST', body: JSON.stringify({ deviceId: S.device }) }).then(function (r) { return r.json(); }).then(function (b) { if (b && b.secondDevice) S.second = true; }, function () { /* offline: bound with the first event */ });
     }).then(function () {
       if (!S.card) return;
-      save(); draw(); D.outbox.kick(true);
+      S.draft.card = S.card; save(); draw(); D.outbox.kick(true);
     }, function () {
       app.innerHTML = head() + '<main><section class="card centre"><div class="big-ok bad">!</div><h1>' + D.esc(D.t('offline')) + '</h1><button class="btn big" data-a="reload">' + D.esc(D.t('tryagain')) + '</button></section></main>';
     });

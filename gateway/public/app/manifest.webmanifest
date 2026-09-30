@@ -1,0 +1,9 @@
+{
+  "name": "Trip Order",
+  "short_name": "Trip",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f4f6fb",
+  "theme_color": "#13294b",
+  "icons": [{ "src": "/app/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

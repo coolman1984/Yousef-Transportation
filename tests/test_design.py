@@ -70,7 +70,7 @@ if __name__ == '__main__':
     unittest.main()
 
 
-JS_FILES = ['shell.js', 'core.js', 'prefs.js', 'app.js', 'views/auth.js', 'views/overview.js', 'views/soon.js', 'views/settings.js', 'views/help.js']
+JS_FILES = ['shell.js', 'core.js', 'prefs.js', 'app.js', 'data.js', 'ui.js', 'views/auth.js', 'views/overview.js', 'views/soon.js', 'views/settings.js', 'views/help.js', 'views/lists.js', 'views/trips.js', 'views/board.js', 'views/activity.js', 'views/access.js', 'views/datatab.js']
 
 
 def dict_keys(lang):
@@ -133,3 +133,17 @@ class CssHygieneTest(unittest.TestCase):
         css = read('css', 'fonts.css')
         for f in re.findall(r'url\(\.\./fonts/([^)]+)\)', css):
             self.assertTrue(os.path.exists(os.path.join(ROOT, 'fonts', f)), f)
+
+
+class PermissionLabelsTest(unittest.TestCase):
+    def test_every_permission_and_group_has_both_translations(self):
+        sys_path = os.path.join(ROOT, 'server')
+        import sys
+        sys.path.insert(0, sys_path)
+        import auth
+        keys = dict_keys('en')
+        for group, perms in auth.PERMISSIONS:
+            slug = '_'.join(re.sub(r'[^a-z]+', ' ', group.lower()).split()[:2])
+            self.assertIn('permgroup.' + slug, keys, group)
+            for p, _ in perms:
+                self.assertIn('perm.' + p, keys, p)

@@ -112,9 +112,9 @@
     TO.$('#crumbs').innerHTML = '<span class="mut">' + TO.esc(TO.t('app.name')) + '</span><span class="mut faint">/</span><b>' + TO.esc(TO.t('nav.' + page.id)) + '</b>';
     document.title = TO.t('nav.' + page.id) + ' · ' + TO.t('app.name');
     var view = TO.views[page.id] || TO.views.soon;
-    var host = TO.$('#view');
+    var old = TO.$('#view'), host = old.cloneNode(false);   // a fresh element: no listeners of the previous page stay behind, and the page-in animation replays
+    old.replaceWith(host);
     var ctx = { page: page, route: r, me: TO.me };
-    host.style.animation = 'none'; host.offsetHeight; host.style.animation = '';   // replay the page-in animation
     host.innerHTML = view.render(ctx);
     if (view.mount) view.mount(host, ctx);
     window.scrollTo(0, 0);
@@ -155,7 +155,7 @@
       el.className = 'drawer';
       el.setAttribute('role', 'dialog');
       el.setAttribute('aria-label', opts.title);
-      el.innerHTML = '<header><h2>' + TO.esc(opts.title) + '</h2><button class="icon-btn" data-pclose aria-label="' + TO.esc(TO.t('common.close')) + '">' + TO.icon('x') + '</button></header>' +
+      el.innerHTML = '<header><h2>' + (opts.ltr ? '<bdi dir="ltr">' + TO.esc(opts.title) + '</bdi>' : TO.esc(opts.title)) + '</h2><button class="icon-btn" data-pclose aria-label="' + TO.esc(TO.t('common.close')) + '">' + TO.icon('x') + '</button></header>' +
         '<div class="body">' + opts.body + '</div>' + (opts.footer ? '<footer>' + opts.footer + '</footer>' : '');
       host.appendChild(el);
       el.querySelector('[data-pclose]').addEventListener('click', function () { TO.panel.close(); });
@@ -191,7 +191,7 @@
       return { icon: p.icon, label: TO.t('nav.' + p.id), group: TO.t('pal.g.pages'), hint: 'G ' + p.key.toUpperCase(), run: function () { TO.go(p.id); } };
     });
     items.push(
-      { icon: 'plus', label: TO.t('act.newtrip'), group: TO.t('pal.g.actions'), hint: 'N', run: function () { TO.toast(TO.t('common.soon')); } },
+      { icon: 'plus', label: TO.t('act.newtrip'), group: TO.t('pal.g.actions'), hint: 'N', run: function () { TO.newTrip(); } },
       { icon: 'moon', label: TO.t('act.theme.toggle'), group: TO.t('pal.g.appearance'), hint: 'T', run: function () { TO.prefs.toggleTheme(); } },
       { icon: 'globe', label: TO.t('act.lang.toggle'), group: TO.t('pal.g.appearance'), hint: 'L', run: function () { TO.prefs.toggleLang(); } },
       { icon: 'collapse', label: TO.t('act.collapse'), group: TO.t('pal.g.appearance'), hint: '[', run: function () { toggleCollapse(); } },
@@ -223,6 +223,7 @@
     q.addEventListener('input', function () {
       var n = norm(q.value);
       list = all.filter(function (it) { return !n || norm(it.label).indexOf(n) >= 0 || norm(it.group).indexOf(n) >= 0; });
+      if (n.length >= 2 && TO.data && TO.data.state && TO.paletteRecords) list = list.concat(TO.paletteRecords(q.value).slice(0, 8));
       sel = 0; paint();
     });
     q.addEventListener('keydown', function (e) {
@@ -326,7 +327,8 @@
     else if (code === 'KeyG') { goPending = Date.now(); }
     else if (code === 'KeyT') { TO.prefs.toggleTheme(); }
     else if (code === 'KeyL') { TO.prefs.toggleLang(); }
-    else if (code === 'KeyN') { TO.toast(TO.t('common.soon')); }
+    else if (code === 'KeyN') { if (TO.can('trips.create')) { e.preventDefault(); TO.newTrip(); } }
+    else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && TO.boardShift) { var rtl = document.documentElement.dir === 'rtl'; if (TO.boardShift((e.key === 'ArrowRight') === rtl ? -1 : 1)) e.preventDefault(); }
     else if (e.key === '[') { toggleCollapse(); }
     else if (e.key === '/') { e.preventDefault(); openPalette(); }
   });

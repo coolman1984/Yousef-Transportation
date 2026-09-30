@@ -24,10 +24,10 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [ ] P1.11 Brand config: TODO Settings → Organisation (name, short name, logo, colours) + `config.json` `brand`/`form` keys; the name is still the generic dictionary text
 
 ## Phase 2 – Domain core
-- [ ] P2.1 Entities + resolvers
-- [ ] P2.2 `domain.py` rules + `test_domain.py`
-- [ ] P2.3 Screens: Overview, Trips, Trip panel, New trip, Today board, Review queue, Vehicles, Drivers, People, Departments, Places, Categories
-- [ ] P2.4 Permissions + profiles + category restriction
+- [x] P2.1 Entities + resolvers (done in phase 1a; `trips.status` rank, followers)
+- [x] P2.2 `domain.py` rules + `test_domain.py` (23 cases) + `tripsvc.py` (numbering, amend, cancel, approve, insights) + `test_trips_api.py` (7)
+- [x] P2.3 Screens: Overview, Trips, Trip panel, New trip, Today board, Review queue, Vehicles, Drivers, People + Departments, Places, Categories (Settings → Trips & rules), Activity log, Recycle Bin + backups (Settings → Data). TODO later: standard routes screen (entity exists), odometer chain chart on the vehicle page, per-place merge tool
+- [x] P2.4 Permissions + profiles + category restriction (Settings → People & access: users, personal links, tick boxes, profiles)
 
 ## Phase 3 – Excel
 - [ ] P3.1 `xlsx_read.py`

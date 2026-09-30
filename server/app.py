@@ -29,6 +29,7 @@ sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the scri
 import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
+import tripsvc  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
@@ -216,6 +217,8 @@ def commit_guard(u):
             if scope is not None and e not in SHARED_LISTS and not {sc, c.get('scope_before', sc)} <= scope:
                 raise Forbidden('You are limited to certain trip categories and cannot add new ones.' if e == 'tripCategories' and op == 'insert'
                                 else 'You can only change the trip categories assigned to you.')
+            if e == 'trips' and op == 'update' and (c.get('before') or {}).get('locked') and not perms.intersection(('trips.amend', 'trips.review')):
+                raise Forbidden('This trip is locked. A change needs the permission "' + PERM_LABEL['trips.amend'] + '" and a written reason.')
             need = required(e, op, c['changes'])
             if not perms.intersection(need):
                 raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".')
@@ -492,6 +495,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.me())
         if p == '/api/state':
             return self.send(200, STORE.state(self.u['scopes']))
+        if p == '/api/insights':
+            self.need('trips.view')
+            return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
                                    'sync': SYNC.summary()})
@@ -668,9 +674,27 @@ class Handler(BaseHTTPRequestHandler):
                     BACKUPS.create('pre-import')
             if any(isinstance(o, dict) and 'resolve' in o for o in (d.get('ops') or []) if isinstance(d.get('ops'), list)):
                 raise Forbidden('Conflicts are decided only in Devices & Sync by an administrator.')
-            res = STORE.commit(self.user, self.ip, label, d.get('ops'), force, guard=commit_guard(self.u), user_id=self.u['id'])
+            res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops')), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
+        if p.startswith('/api/trips/'):
+            d = self.json_body()
+            action = p[len('/api/trips/'):]
+            g = commit_guard(self.u)
+            args = (STORE, self.user, self.ip, self.u['id'])
+            if action == 'new':
+                self.need('trips.create')
+                return self.send(200, tripsvc.create_trip(STORE, JOURNAL, NODE.id, self.user, self.ip, self.u['id'], d, guard=g))
+            if action == 'amend':
+                self.need('trips.amend', 'trips.review')
+                return self.send(200, tripsvc.amend(*args, str(d.get('id')), d.get('field'), d.get('value'), d.get('reason'), guard=g))
+            if action == 'cancel':
+                self.need('trips.cancel')
+                return self.send(200, tripsvc.cancel(*args, str(d.get('id')), d.get('reason'), guard=g))
+            if action == 'approve':
+                self.need('trips.approve')
+                return self.send(200, tripsvc.approve(*args, str(d.get('id')), bool(d.get('yes')), guard=g))
+            return self.send(404, {'error': 'Not found'})
         if p == '/api/first-run':
             self.need('data.import')
             won = STORE.claim_first_run()

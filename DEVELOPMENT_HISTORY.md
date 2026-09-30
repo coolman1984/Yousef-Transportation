@@ -4,6 +4,28 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phase 2 – domain core and office screens (2026-09-30)
+
+**What:** `server/domain.py` (text/plate/mobile normalisation, trip numbers with the PC letter, overtime, odometer chain,
+unusual km, drift, trust colour), `server/tripsvc.py` (new trip, amendment, cancel, GA approval, insights, duplicate
+refusal), locked-trip rule in the commit guard, `/api/trips/*` and `/api/insights`. UI: data layer with polling, shared
+forms/tables (`ui.js`), lists (vehicles, drivers, people + departments, places, categories), trips list with filters and
+summary, trip side panel, new-trip dialog (people created on the fly), Today board, Review queue, Activity log,
+Settings → People & access (users, links, profiles, permission ticks in both languages), Settings → Data (Recycle Bin,
+backups, complete export). Palette now finds trips, plates and drivers.
+
+**Tests:** `test_domain` 23, `test_trips_api` 7, browser flow tests (lists, new trip, amendment, users, bin).
+Whole suite: 118+ tests green.
+
+**Mistakes / lessons**
+- The page element `#view` was reused between pages, so every visit added another click handler and one click opened
+  several panels. Fix: replace the element with a clean clone on every route change. Lesson: mount code must never
+  attach listeners to an element that outlives the page.
+- Bidi again: a trip number in an RTL drawer title reversed itself (`A-00002-26`); titles that hold codes need `dir="ltr"`.
+- A phone overflowed by 9 px because a preview row could not wrap; every row that holds badges/plates needs `wrap`.
+- Server-side normalisation (plates, names, mobiles) belongs in one place (`tripsvc.normalize_ops`), because the Excel
+  import must produce the same keys as the screens. Duplicates of plates/drivers/places are refused, people may share names.
+
 ## Phase 1b – design system and application shell (2026-09-30)
 
 **What:** `css/tokens.css` (5 themes: daylight, night, asphalt, highway, contrast; font, size, density, motion switches),

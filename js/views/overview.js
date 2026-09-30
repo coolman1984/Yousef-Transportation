@@ -54,18 +54,17 @@
     mount: function (root) {
       root.querySelector('[data-a="tour"]').addEventListener('click', function () { TO.tour.start(); });
       root.querySelector('[data-a="slides"]').addEventListener('click', function () { TO.slides.open(); });
-      TO.get('/api/state').then(function (st) {
-        var today = new Date().toISOString().slice(0, 10);
-        var trips = st.trips || [];
+      TO.data.load().then(function (D) {
+        var today = TO.ui.today(), trips = D.list('trips');
         var v = {
-          today: trips.filter(function (t) { return t.date === today; }).length,
+          today: trips.filter(function (t) { return t.date === today && t.status !== 'cancelled'; }).length,
           road: trips.filter(function (t) { return t.status === 'started'; }).length,
-          review: 0,
-          fleet: (st.vehicles || []).filter(function (x) { return x.active !== false; }).length
+          review: trips.filter(function (t) { var c = D.trust(t.id).trust; return t.status !== 'cancelled' && (c === 'red' || c === 'yellow'); }).length,
+          fleet: D.list('vehicles').filter(function (x) { return x.active !== false; }).length
         };
         TO.$$('[data-count]', root).forEach(function (el) { TO.countUp(el, v[el.dataset.count]); });
         var rc = TO.$('#rec-count', root);
-        if (rc) rc.textContent = TO.fmt.num(trips.length + (st.vehicles || []).length + (st.drivers || []).length + (st.people || []).length);
+        if (rc) rc.textContent = TO.fmt.num(trips.length + D.list('vehicles').length + D.list('drivers').length + D.list('people').length);
       }, function () {
         TO.$$('[data-count]', root).forEach(function (el) { el.textContent = '–'; });
       });

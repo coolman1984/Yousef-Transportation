@@ -40,9 +40,9 @@
   }
   function preview() {
     return '<aside class="card" style="position:sticky;top:calc(var(--topbar-h) + 1rem)"><header><h3>' + TO.esc(TO.t('ap.preview')) + '</h3></header>' +
-      '<div class="preview-box"><div class="row"><b>' + TO.esc(TO.t('ap.preview.title')) + ' <span class="num">26-A-00233</span></b><span class="grow"></span><span class="badge ok"><i class="trust green"></i>' + TO.esc(TO.t('ap.preview.status')) + '</span></div>' +
+      '<div class="preview-box"><div class="row wrap"><b>' + TO.esc(TO.t('ap.preview.title')) + ' <span class="num">26-A-00233</span></b><span class="grow"></span><span class="badge ok"><i class="trust green"></i>' + TO.esc(TO.t('ap.preview.status')) + '</span></div>' +
       '<div class="muted">' + TO.esc(TO.t('ap.preview.body')) + '</div>' +
-      '<div class="row"><span class="plate"><b>ط و ي</b><i>6829</i></span><span class="grow"></span><span class="muted">' + TO.esc(TO.t('ap.preview.km')) + '</span><b class="num">291,382 → 291,747</b></div>' +
+      '<div class="row wrap"><span class="plate"><b>ط و ي</b><i>6829</i></span><span class="grow"></span><span class="muted">' + TO.esc(TO.t('ap.preview.km')) + '</span><b class="num">291,382 → 291,747</b></div>' +
       '<div class="row wrap"><button class="btn primary sm" type="button">' + TO.icon('chat', 'sm') + TO.esc(TO.t('common.save')) + '</button><button class="btn sm" type="button">' + TO.esc(TO.t('common.cancel')) + '</button><span class="badge warn">' + TO.esc(TO.t('ov.trust.yellow')) + '</span><span class="badge bad">' + TO.esc(TO.t('ov.trust.red')) + '</span></div></div></aside>';
   }
   function later(tab) {
@@ -57,10 +57,16 @@
       }).join('') + '</div>';
       return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('set.title')) + '</h1><p>' + TO.esc(TO.t('set.sub')) + '</p></div></div>' +
         '<div class="toolbar">' + tabs + '</div>' +
-        (tab === 'appearance' ? '<div class="grid" style="grid-template-columns:minmax(0,1fr) minmax(16rem,22rem);align-items:start"><section class="card">' + appearance() + '</section>' + preview() + '</div>'
+        (tab === 'appearance' ? '<div class="grid two-col"><section class="card">' + appearance() + '</section>' + preview() + '</div>'
+          : tab === 'access' ? TO.accessTab.render()
+          : tab === 'data' ? TO.dataTab.render()
+          : tab === 'rules' ? (TO.data.state ? '<h2 style="margin-bottom:.8rem">' + TO.esc(TO.t('set.cats')) + '</h2>' + TO.listPage(TO.lists.tripCategories) : '<div class="skeleton" style="height:10rem"></div>')
           : '<section class="card">' + later(tab) + '</section>');
     },
     mount: function (root, ctx) {
+      if (ctx.route.q.tab === 'data') TO.dataTab.mount(root);
+      if (ctx.route.q.tab === 'access') { TO.data.load().then(function () { TO.accessTab.mount(root); }); }
+      if (ctx.route.q.tab === 'rules') { if (!TO.data.state) { TO.data.load().then(function () { TO.rerender(); }); return; } TO.mountList(root, TO.lists.tripCategories); }
       root.addEventListener('click', function (e) {
         var b = e.target.closest('[data-pref]');
         if (b) { var v = b.dataset.v; TO.prefs.set(b.dataset.pref, v); if (b.dataset.pref !== 'lang') TO.rerender(); return; }

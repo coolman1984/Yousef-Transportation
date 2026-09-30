@@ -15,8 +15,8 @@
     { id: 'drivers', icon: 'wheel', group: 'fleet', perm: 'fleet.view', key: 'd', phase: 2 },
     { id: 'people', icon: 'users', group: 'fleet', perm: 'people.view', key: 'p', phase: 2 },
     { id: 'places', icon: 'pin', group: 'fleet', perm: 'people.view', key: 'l', phase: 2 },
-    { id: 'reports', icon: 'chart', group: 'insight', perm: 'reports.view', key: 'e', phase: 6 },
-    { id: 'excel', icon: 'sheet', group: 'insight', perm: ['excel.import', 'excel.export'], key: 'x', phase: 3 },
+    { id: 'reports', icon: 'chart', group: 'insight', perm: 'reports.view', key: 'e', phase: 1 },
+    { id: 'excel', icon: 'sheet', group: 'insight', perm: ['excel.import', 'excel.export'], key: 'x', phase: 1 },
     { id: 'activity', icon: 'activity', group: 'control', perm: 'logs.view', key: 'a', phase: 2 },
     { id: 'settings', icon: 'settings', group: 'control', perm: null, key: 's', phase: 1 },
     { id: 'help', icon: 'help', group: 'control', perm: null, key: 'h', phase: 1 }

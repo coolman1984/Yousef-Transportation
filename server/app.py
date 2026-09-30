@@ -7,6 +7,7 @@ do is set by the administrator (Users page) and checked here for every request.
 """
 import hashlib
 import html
+import re
 import json
 import logging
 import logging.handlers
@@ -29,6 +30,10 @@ sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the scri
 import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
+import excel_io  # noqa: E402
+import gateway_client as gwc  # noqa: E402
+import word_io  # noqa: E402
+import reports  # noqa: E402
 import tripsvc  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
@@ -71,7 +76,8 @@ IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'}
 INLINE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf'}
 TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
          '.json': 'application/json', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.heic': 'image/heic',
-         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}
+         '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+         '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'}
 
 
 def load_config():
@@ -150,8 +156,31 @@ if INSTANCE:
     SYSTEM = System(DATA_DIR, CFG, UPLOADS, resolve(CFG['backup_dir']), [resolve(d) for d in CFG['extra_backup_dirs']], log=say)
     STORE, AUTH, BACKUPS, JOURNAL, NODE = SYSTEM.store, SYSTEM.auth, SYSTEM.backups, SYSTEM.journal, SYSTEM.node
     SYNC = SyncService(SYSTEM, CFG, UPLOADS, log=say)
+    SECRETS = gwc.Secrets(os.path.join(DATA_DIR, 'gateway.json'))
 else:
-    SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = None
+    SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = SECRETS = None
+GATE = None
+
+
+def store_bytes(data, ext, user='gateway', ip='', user_id=''):
+    """Save bytes content-addressed in the uploads folder and register the file. Returns (path as the pages use it, sha256)."""
+    sha = hashlib.sha256(data).hexdigest()
+    os.makedirs(os.path.join(UPLOADS, 'cas'), exist_ok=True)
+    path = os.path.join(UPLOADS, 'cas', sha + ext)
+    if not os.path.exists(path):
+        tmp = os.path.join(UPLOADS, 'cas', f'.{sha}.{uuid.uuid4().hex[:8]}.tmp')
+        with open(tmp, 'wb') as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    src = f'/files/cas/{sha}{ext}'
+    STORE.record_file(src, sha, len(data), mimetypes.guess_type(path)[0] or '', user, ip, user_id)
+    return src, sha
+
+
+if INSTANCE:
+    GATE = gwc.GatewaySync(STORE, JOURNAL, NODE.id, SECRETS, store_bytes, log_fn=say)
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
                b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\u2026</text></svg>')
@@ -494,13 +523,69 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, STORE.state(self.u['scopes']))
+            return self.send(200, {**STORE.state(self.u['scopes']), 'gateway': bool(SECRETS.configured)})
+        if p in ('/api/excel/export', '/api/excel/template'):
+            self.need('excel.export')
+            self.need_all_scopes()
+            ym = qs.get('ym', '')
+            if p.endswith('template'):
+                data, name = excel_io.template(), 'Trips_template.xlsx'
+            else:
+                if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
+                    raise BadRequest('Choose the month to export.')
+                st = STORE.state(self.u['scopes'])
+                data = excel_io.export_today(st, ym) if qs.get('layout', 'today') == 'today' else excel_io.export_clean(st, ym, qs.get('lang', 'en'))
+                name = f'Trips_{ym}_{"clean" if qs.get("layout") == "clean" else "same-as-today"}.xlsx'
+            STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Excel export', 'target': name}])
+            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="{name}"'})
+        if p in ('/api/word/form', '/api/word/report'):
+            st = STORE.state(self.u['scopes'])
+            lang = 'ar' if qs.get('lang') == 'ar' else 'en'
+            cfg = st.get('settings') or {}
+            brand = {'name': cfg.get('systemName') or '', 'footer': cfg.get('formFooter') or ''}
+            if p.endswith('report'):
+                self.need('excel.export')
+                self.need_all_scopes()
+                ym = qs.get('ym', '')
+                if ym and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
+                    raise BadRequest('Choose the month.')
+                data, name = word_io.report(st, ym, lang, brand), f'Trips_report_{ym or "all"}.docx'
+            else:
+                self.need('trips.view')
+                ctx, name = {}, 'Trip_order_blank.docx'
+                t = next((x for x in st.get('trips', []) if x['id'] == qs.get('trip')), None) if qs.get('trip') else None
+                if t:
+                    n = reports._names(st)
+                    ctx = {'no': t.get('no', ''), 'passenger': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'department': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
+                           'driver': (n['drv'].get(t.get('driverId')) or {}).get('name', ''), 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''),
+                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'startDate': t.get('date', ''), 'route': t.get('destination', '')}
+                    name = f'Trip_order_{t.get("no") or "draft"}.docx'
+                data = word_io.form(ctx, lang, brand, cfg.get('legalText') or '')
+            STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Word export', 'target': name}])
+            return self.send(200, data, TYPES['.docx'], {'Content-Disposition': f'attachment; filename="{name}"'})
+        if p == '/api/gateway':
+            self.need('gateway.manage')
+            return self.send(200, GATE.status())
+        if p == '/api/gateway/secrets':
+            self.need('gateway.manage')
+            if not SECRETS.configured:
+                raise BadRequest('The mailbox is not set up yet.')
+            STORE.log_activity(self.user, self.ip, [{'type': 'security', 'action': 'Mailbox secret viewed', 'target': 'gateway'}])
+            return self.send(200, {'officeSecret': SECRETS.data['officeSecret'], 'setupCode': SECRETS.setup_code()})
+        if p == '/api/reports':
+            self.need('reports.view')
+            ym = qs.get('ym', '')
+            if ym and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
+                raise BadRequest('Choose the month.')
+            st = STORE.state(self.u['scopes'])
+            return self.send(200, {'summary': reports.summaries(st, ym), 'overtime': reports.overtime(st, ym), 'reconciliation': reports.reconciliation(st, ym),
+                                   'allocation': reports.allocation(st, ym), 'anomalies': reports.anomalies(st, ym)[:300]})
         if p == '/api/insights':
             self.need('trips.view')
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
-                                   'sync': SYNC.summary()})
+                                   'sync': SYNC.summary(), 'gateway': SECRETS.configured})
         if p == '/api/info':
             urls = lan_urls(CFG['port'])
             if not self.can('settings.view'):
@@ -677,6 +762,67 @@ class Handler(BaseHTTPRequestHandler):
             res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops')), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
+        if p == '/api/word/preview':
+            self.need('excel.import')
+            self.need_all_scopes()
+            try:
+                pid, plan = word_io.preview(self.user, self.body(30 * 1048576), STORE.state(), qs.get('category', ''), qs.get('name', '')[:120])
+                return self.send(200, {'id': pid, **plan})
+            except (word_io.WordError, excel_io.ImportError_) as e:
+                raise BadRequest(str(e))
+        if p.startswith('/api/excel/'):
+            action = p[len('/api/excel/'):]
+            self.need('excel.import')
+            self.need_all_scopes()
+            try:
+                if action == 'preview':
+                    data = self.body(30 * 1048576)
+                    pid, plan = excel_io.make_preview(self.user, data, STORE.state(), qs.get('name', '')[:120])
+                    return self.send(200, {'id': pid, **plan})
+                if action == 'commit':
+                    d = self.json_body()
+                    plan = excel_io.get_preview(str(d.get('id')), self.user)
+                    ops, n = excel_io.build_ops(plan, STORE.state(), tripsvc.my_letter(JOURNAL, NODE.id), d.get('skip') or [], d.get('merges') or [],
+                                                include_problems=bool(d.get('includeProblems')))
+                    BACKUPS.create('pre-import')
+                    res = STORE.commit(self.user, self.ip, f'{"Word" if plan.get("source") == "word" else "Excel"} import {plan.get("filename") or ""} ({n} trips)', ops, user_id=self.u['id'])
+                    excel_io.drop_preview(str(d.get('id')))
+                    STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': 'Excel import', 'target': plan.get('filename') or '', 'detail': f'{n} trips'}])
+                    return self.send(200, {'trips': n, 'changes': res['changes']})
+            except excel_io.ImportError_ as e:
+                raise BadRequest(str(e))
+            return self.send(404, {'error': 'Not found'})
+        if p.startswith('/api/gateway/'):
+            self.need('gateway.manage')
+            d = self.json_body()
+            action = p[len('/api/gateway/'):]
+            try:
+                if action == 'save':
+                    SECRETS.set_url(d.get('url'))
+                    poll = int(d.get('pollSeconds') or 60)
+                    SECRETS.data['pollSeconds'] = min(600, max(15, poll))
+                    SECRETS.save()
+                elif action == 'generate':
+                    if SECRETS.configured and not d.get('replace'):
+                        raise BadRequest('Secrets already exist. Replacing them stops every existing driver link until the gateway is updated.')
+                    SECRETS.generate()
+                    GATE.pushed.clear()
+                elif action == 'code':
+                    SECRETS.from_code(d.get('code'))
+                    GATE.pushed.clear()
+                elif action == 'test':
+                    st = GATE.client().status()
+                    return self.send(200, {'ok': True, **st})
+                elif action == 'pull':
+                    GATE.cycle()
+                    return self.send(200, GATE.status())
+                else:
+                    return self.send(404, {'error': 'Not found'})
+            except gwc.GatewayError as e:
+                raise BadRequest(str(e))
+            STORE.log_activity(self.user, self.ip, [{'type': 'security', 'action': 'Mailbox ' + action, 'target': 'gateway'}])
+            GATE.kick()
+            return self.send(200, GATE.status())
         if p.startswith('/api/trips/'):
             d = self.json_body()
             action = p[len('/api/trips/'):]
@@ -691,6 +837,12 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'cancel':
                 self.need('trips.cancel')
                 return self.send(200, tripsvc.cancel(*args, str(d.get('id')), d.get('reason'), guard=g))
+            if action == 'link':
+                self.need('trips.send')
+                return self.send(200, tripsvc.make_link(STORE, GATE, self.user, self.ip, self.u['id'], str(d.get('id')), bool(d.get('replace')), bool(d.get('sent')), guard=g))
+            if action == 'release-device':
+                self.need('trips.amend')
+                return self.send(200, tripsvc.release_device(STORE, GATE, self.user, self.ip, self.u['id'], str(d.get('id')), guard=g))
             if action == 'approve':
                 self.need('trips.approve')
                 return self.send(200, tripsvc.approve(*args, str(d.get('id')), bool(d.get('yes')), guard=g))
@@ -878,18 +1030,7 @@ class Handler(BaseHTTPRequestHandler):
         if not data:
             raise BadRequest('Empty file')
         # content-addressed: the name is the SHA-256 of the content, so the same file is stored once and every PC can check its copy
-        sha = hashlib.sha256(data).hexdigest()
-        os.makedirs(os.path.join(UPLOADS, 'cas'), exist_ok=True)
-        path = os.path.join(UPLOADS, 'cas', sha + ext)
-        if not os.path.exists(path):
-            tmp = os.path.join(UPLOADS, 'cas', f'.{sha}.{uuid.uuid4().hex[:8]}.tmp')
-            with open(tmp, 'wb') as f:
-                f.write(data)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, path)
-        src = f'/files/cas/{sha}{ext}'
-        STORE.record_file(src, sha, len(data), mimetypes.guess_type(path)[0] or '', self.user, self.ip, self.u['id'])
+        src, _ = store_bytes(data, ext, self.user, self.ip, self.u['id'])
         log.info('UPLOAD %s (%s) %s -> %s %d bytes', self.user, self.ip, name, src, len(data))
         self.send(200, {'src': src, 'size': len(data)})
 
@@ -963,6 +1104,7 @@ def main(background=False):
         say('Startup backup failed: ' + str(e))
     BACKUPS.start()
     SYNC.start()
+    GATE.start()
 
     print('=' * 64)
     print(' Trip Orders is running')
@@ -986,6 +1128,7 @@ def main(background=False):
     except KeyboardInterrupt:
         pass
     finally:
+        GATE.stop()
         SYNC.shutdown()
         JOURNAL.flush_activity()
         say('Server stopped')

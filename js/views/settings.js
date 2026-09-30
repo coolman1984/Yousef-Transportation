@@ -60,11 +60,13 @@
         (tab === 'appearance' ? '<div class="grid two-col"><section class="card">' + appearance() + '</section>' + preview() + '</div>'
           : tab === 'access' ? TO.accessTab.render()
           : tab === 'data' ? TO.dataTab.render()
+          : tab === 'gateway' ? TO.mailboxTab.render()
           : tab === 'rules' ? (TO.data.state ? '<h2 style="margin-bottom:.8rem">' + TO.esc(TO.t('set.cats')) + '</h2>' + TO.listPage(TO.lists.tripCategories) : '<div class="skeleton" style="height:10rem"></div>')
           : '<section class="card">' + later(tab) + '</section>');
     },
     mount: function (root, ctx) {
       if (ctx.route.q.tab === 'data') TO.dataTab.mount(root);
+      if (ctx.route.q.tab === 'gateway') TO.mailboxTab.mount(root);
       if (ctx.route.q.tab === 'access') { TO.data.load().then(function () { TO.accessTab.mount(root); }); }
       if (ctx.route.q.tab === 'rules') { if (!TO.data.state) { TO.data.load().then(function () { TO.rerender(); }); return; } TO.mountList(root, TO.lists.tripCategories); }
       root.addEventListener('click', function (e) {

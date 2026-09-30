@@ -1,0 +1,21 @@
+name = "trip-orders-gateway"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trip-orders"
+database_id = "REPLACE-WITH-THE-ID-FROM-wrangler-d1-create"
+
+[triggers]
+crons = ["17 3 * * *"]
+
+[vars]
+RETENTION_DAYS = "30"
+
+# Secret (never written in this file):  npx wrangler secret put OFFICE_SECRET

@@ -250,5 +250,76 @@ class TripFlowTest(BrowserBase):
         self.assertIn('1111', pg.inner_text('#view'))
 
 
+@SKIP
+class ExcelPageTest(BrowserBase):
+    def test_import_review_confirm_and_guide(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        pg = self.open({'lang': 'en'})
+        pg.goto(self.S.base + '/#/excel')
+        pg.wait_for_selector('#dz')
+        pg.set_input_files('#imp-file', os.path.join(here, 'fixtures', 'sample_sep26_synthetic.xlsx'))
+        pg.wait_for_selector('[data-commit]')
+        self.assertIn('247', pg.inner_text('#xl-body'))
+        self.assertIn('Things to check', pg.inner_text('#xl-body'))
+        pg.click('[data-f="problem"]')
+        self.assertEqual(pg.locator('#xl-body tbody tr').count(), 7)
+        pg.click('[data-f="all"]')
+        pg.check('#imp-problems')
+        pg.click('[data-commit]')
+        pg.wait_for_selector('[data-again]')
+        self.assertIn('247', pg.inner_text('#xl-body'))
+        # the same file again is all duplicates and cannot be confirmed
+        pg.click('[data-again]')
+        pg.set_input_files('#imp-file', os.path.join(here, 'fixtures', 'sample_sep26_synthetic.xlsx'))
+        pg.wait_for_selector('[data-commit]')
+        self.assertTrue(pg.locator('[data-commit]').is_disabled())
+        # wrong file type gives a plain message
+        pg.click('[data-cancel]')
+        pg.set_input_files('#imp-file', files=[{'name': 'x.txt', 'mimeType': 'text/plain', 'buffer': b'hello'}])
+        pg.wait_for_selector('#xl-body .tip.bad')
+        self.assertIn('not an Excel', pg.inner_text('#xl-body'))
+        # export tab, Arabic, guide
+        pg.click('[data-tab="export"]')
+        pg.wait_for_selector('#ex-ym')
+        pg.click('[data-tab="guide"]')
+        self.assertEqual(pg.locator('#xl-body details').count(), 12)
+        pg.keyboard.press('KeyL')
+        pg.wait_for_function("document.documentElement.dir === 'rtl'")
+        pg.click('[data-tab="import"]')
+        pg.wait_for_selector('#dz')
+        self.assertIn('اختار', pg.inner_text('#xl-body'))
+        self.assertEqual(self.errors, [])
+
+
+@SKIP
+class ReportsPageTest(BrowserBase):
+    def test_reports_and_presentation(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        from harness import ADMIN
+        c = self.S.client()
+        c.login(ADMIN[0], ADMIN[1])
+        with open(os.path.join(here, 'fixtures', 'sample_sep26_synthetic.xlsx'), 'rb') as f:
+            pv = c.call('POST', '/api/excel/preview?name=s.xlsx', raw=f.read(), headers={'Content-Type': 'application/octet-stream'})
+        c.post('/api/excel/commit', {'id': pv['id'], 'includeProblems': True})
+        api = c.get('/api/reports?ym=2026-09')
+        self.assertEqual(api['summary']['total']['trips'], 247)
+        self.assertTrue(api['reconciliation'] and api['anomalies'])
+        pg = self.open({'lang': 'en'})
+        pg.goto(self.S.base + '/#/reports')
+        pg.fill('#rp-ym', '2026-09')
+        pg.wait_for_selector('.bar-row')
+        self.assertIn('247', pg.inner_text('#rp-body'))
+        pg.click('[data-g="byDriver"]')
+        self.assertGreater(pg.locator('#rp-body table tbody tr').count(), 5)
+        pg.click('[data-present]')
+        pg.wait_for_selector('.present .ps')
+        pg.keyboard.press('ArrowRight')
+        self.assertIn('1 / 6'.replace('1', '2', 1), pg.inner_text('.present .pn'))
+        pg.keyboard.press('Escape')
+        self.assertEqual(pg.locator('.present').count(), 0)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()
+

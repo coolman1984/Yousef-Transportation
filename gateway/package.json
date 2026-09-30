@@ -1,0 +1,6 @@
+{
+  "name": "trip-orders-gateway",
+  "private": true,
+  "type": "module",
+  "scripts": { "test": "node --test --no-warnings test/gateway.test.js", "dev": "node --no-warnings dev/server.js" }
+}

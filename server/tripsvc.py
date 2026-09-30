@@ -2,7 +2,7 @@
 and the read-side "insights" (trust colour, km, overtime, odometer chain) for every trip.
 Each operation is ONE store commit, so it is saved completely or not at all and appears as one change in the history."""
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import domain
 from store import BadRequest
@@ -111,6 +111,50 @@ def approve(store, user, ip, user_id, trip_id, yes, guard=None):
     row = {**t, 'gaApproved': 'yes' if yes else 'no', 'gaBy': user, 'gaAt': _now()}
     store.commit(user, ip, f'GA {"approved" if yes else "declined"} trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}],
                  guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
+def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False, guard=None):
+    """Give the trip its driver link (or a new one) and, when the dispatcher pressed "send", mark it sent.
+    Only the hash of the link is saved; the link itself is made again from the link secret when needed."""
+    import gateway_client as gwc
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') in ('cancelled', 'closed') or t.get('locked'):
+        raise BadRequest('A link cannot be made for a trip that is finished or cancelled')
+    nonce = t.get('linkNonce') if t.get('linkNonce') and not replace else gwc.new_nonce()
+    try:
+        tok, url = gate.make_link(trip_id, nonce)
+    except gwc.GatewayError as e:
+        raise BadRequest(str(e))
+    h = gwc.token_hash(tok)
+    exp = max(datetime.now() + timedelta(days=7), (domain.parse_dt(t.get('date')) or datetime.now()) + timedelta(days=3)).isoformat(timespec='seconds')
+    ver = t.pop('ver')
+    row = {**t, 'linkHash': h, 'linkNonce': nonce, 'linkExpiry': exp}
+    if replace:
+        row['boundDevice'] = ''
+    if sent and (row.get('status') or 'draft') == 'draft':
+        row['status'] = 'sent'
+    if row != t:
+        store.commit(user, ip, f'Driver link for trip {t.get("no")}' + (' replaced' if replace else ''), [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}], guard=guard, user_id=user_id)
+    if replace:
+        gate.release.add(h)
+    gate.kick()
+    drv = _row(store, 'drivers', t.get('driverId')) if t.get('driverId') else None
+    return {'url': url, 'no': t.get('no'), 'driver': (drv or {}).get('name', ''), 'mobile': (drv or {}).get('mobile', ''), 'status': row.get('status')}
+
+
+def release_device(store, gate, user, ip, user_id, trip_id, guard=None):
+    """The driver changed phone: let the next phone that opens the link become the bound one."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    ver = t.pop('ver')
+    store.commit(user, ip, f'Released the phone of trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': {**t, 'boundDevice': ''}}], guard=guard, user_id=user_id)
+    if t.get('linkHash'):
+        gate.release.add(t['linkHash'])
+        gate.kick()
     return {'ok': True}
 
 

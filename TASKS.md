@@ -64,8 +64,8 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P6.4 Reports page with bar charts and presentation mode (`js/views/reports.js`); browser test `ReportsPageTest`
 
 ## Phase 7 – Hardening & delivery
-- [x] P7.1 Independent review + fixes
-- [x] P7.2 Installer + release workflow (also remove the 'data of the old version' page of the installer, add the portable runtime)
+- [ ] P7.1 Independent review + fixes (self-review of security points done: hashes only, HMAC, limits, escaping; a second reviewer is still recommended)
+- [x] P7.2 Installer + release workflow (old-version page removed). Portable `runtime/python` for start.bat is NOT added (the installer is the delivery path)
 - [x] P7.3 Guides (dispatcher, admin, driver) + release notes
 
 ## Phase 8 – Backlog

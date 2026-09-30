@@ -4,6 +4,27 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Phase 1b – design system and application shell (2026-09-30)
+
+**What:** `css/tokens.css` (5 themes: daylight, night, asphalt, highway, contrast; font, size, density, motion switches),
+`css/base.css` (shell, cards, tables, forms, drawers, dialogs, toasts, tour, slides, login, animation), bundled OFL fonts
+(`tools/install_fonts.py`), English + Arabic dictionaries with RTL, `js/` modules under one `TO` namespace
+(core, i18n, prefs, shell, views: sign-in/first setup, overview, planned pages, settings→appearance, help),
+command palette (Ctrl K), keyboard shortcuts that work on any keyboard layout (`e.code`), stackable side panels,
+guided tour, welcome slides, phone menu. Planned pages show what they will contain in the final look.
+
+**Tests:** `tests/test_design.py` (WCAG AA contrast of every theme, key parity EN/AR, no literal words in templates,
+logical CSS only, no colours outside tokens, fonts exist), `tests/test_e2e_browser.py` (Playwright: language/direction,
+theme persistence, palette + G-shortcuts, panels + Esc, live settings, phone menu, welcome slides).
+
+**Mistakes / lessons**
+- The server sends `script-src 'self'`: no inline scripts and no string `eval`; browser tests must use `wait_for_url`
+  / selectors, not `wait_for_function` with a string. The pre-paint theme script had to be an external file (`js/boot.js`).
+- `add_init_script` runs on every page load, so it must not overwrite saved settings in a reload test.
+- Keys with a dynamic suffix (`nav.` + id) cannot be checked by a regex on `TO.t('...')`; a family test lists them.
+- Bidi: a trip number like `26-A-00233` must sit in its own `.num` span or Arabic text reorders it.
+- Focus the palette input synchronously, or fast typing (and tests) lose the first letters.
+
 ## Phase 1a – engine fork (2026-09-29)
 
 **What:** copied the BAMS engine (BAMS commit `5f5b3ce`, version 2.4.0), renamed everything to Trip Orders

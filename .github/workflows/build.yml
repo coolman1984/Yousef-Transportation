@@ -26,7 +26,7 @@ jobs:
           python-version: '3.11'
       - name: Tests (unit, convergence, several PCs)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_multinode
+        run: python -m unittest test_unit test_convergence test_design test_multinode
 
   windows-installer:
     needs: test

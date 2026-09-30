@@ -14,14 +14,14 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P1.1 Copy the engine from BAMS (commit 5f5b3ce). Not copied: `runtime/` portable Python (21 MB binary) – add it at delivery (P7.2) or use system Python for `start.bat`
 - [x] P1.2 Rename BAMS → TO (strings, headers, folders, ports 8090/8453, own installer AppId)
 - [x] P1.3 Remove the break-area domain; engine tests green (gate): unit+convergence 32, multi-PC 35
-- [ ] P1.4 Tokens + 5 themes + contrast test
-- [ ] P1.5 Fonts bundled (OFL) + subset tool
-- [ ] P1.6 i18n EN/AR + RTL + checks
-- [ ] P1.7 Shell: sidebar, topbar, side panels, router with filters, motion
-- [ ] P1.8 Command palette + shortcuts
-- [ ] P1.9 Settings → Appearance (per user, admin lock)
-- [ ] P1.10 Help, tours, welcome slides skeleton
-- [ ] P1.11 Brand config (generic)
+- [x] P1.4 Tokens + 5 themes + contrast test (`tests/test_design.py`)
+- [x] P1.5 Fonts bundled (OFL) via `tools/install_fonts.py` (fontsource packages, 34 woff2, 0.8 MB)
+- [x] P1.6 i18n EN/AR + RTL + checks (key parity, no literal words in templates, logical CSS only, no colours outside tokens)
+- [x] P1.7 Shell: sidebar, topbar, side panels, router with filters, motion
+- [x] P1.8 Command palette + shortcuts (palette lists pages/actions; trips/plates/drivers search is added with their pages in P2)
+- [ ] P1.9 Settings → Appearance: DONE on this device (localStorage). TODO: per-user copy on the server (`userPrefs` entity, own id only) and the admin lock per option
+- [x] P1.10 Help, tours, welcome slides
+- [ ] P1.11 Brand config: TODO Settings → Organisation (name, short name, logo, colours) + `config.json` `brand`/`form` keys; the name is still the generic dictionary text
 
 ## Phase 2 – Domain core
 - [ ] P2.1 Entities + resolvers

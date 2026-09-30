@@ -1,0 +1,99 @@
+# Development History and Lessons Learned
+
+Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
+
+---
+
+## Phase 2 – domain core and office screens (2026-09-30)
+
+**What:** `server/domain.py` (text/plate/mobile normalisation, trip numbers with the PC letter, overtime, odometer chain,
+unusual km, drift, trust colour), `server/tripsvc.py` (new trip, amendment, cancel, GA approval, insights, duplicate
+refusal), locked-trip rule in the commit guard, `/api/trips/*` and `/api/insights`. UI: data layer with polling, shared
+forms/tables (`ui.js`), lists (vehicles, drivers, people + departments, places, categories), trips list with filters and
+summary, trip side panel, new-trip dialog (people created on the fly), Today board, Review queue, Activity log,
+Settings → People & access (users, links, profiles, permission ticks in both languages), Settings → Data (Recycle Bin,
+backups, complete export). Palette now finds trips, plates and drivers.
+
+**Tests:** `test_domain` 23, `test_trips_api` 7, browser flow tests (lists, new trip, amendment, users, bin).
+Whole suite: 118+ tests green.
+
+**Mistakes / lessons**
+- The page element `#view` was reused between pages, so every visit added another click handler and one click opened
+  several panels. Fix: replace the element with a clean clone on every route change. Lesson: mount code must never
+  attach listeners to an element that outlives the page.
+- Bidi again: a trip number in an RTL drawer title reversed itself (`A-00002-26`); titles that hold codes need `dir="ltr"`.
+- A phone overflowed by 9 px because a preview row could not wrap; every row that holds badges/plates needs `wrap`.
+- Server-side normalisation (plates, names, mobiles) belongs in one place (`tripsvc.normalize_ops`), because the Excel
+  import must produce the same keys as the screens. Duplicates of plates/drivers/places are refused, people may share names.
+
+## Phase 1b – design system and application shell (2026-09-30)
+
+**What:** `css/tokens.css` (5 themes: daylight, night, asphalt, highway, contrast; font, size, density, motion switches),
+`css/base.css` (shell, cards, tables, forms, drawers, dialogs, toasts, tour, slides, login, animation), bundled OFL fonts
+(`tools/install_fonts.py`), English + Arabic dictionaries with RTL, `js/` modules under one `TO` namespace
+(core, i18n, prefs, shell, views: sign-in/first setup, overview, planned pages, settings→appearance, help),
+command palette (Ctrl K), keyboard shortcuts that work on any keyboard layout (`e.code`), stackable side panels,
+guided tour, welcome slides, phone menu. Planned pages show what they will contain in the final look.
+
+**Tests:** `tests/test_design.py` (WCAG AA contrast of every theme, key parity EN/AR, no literal words in templates,
+logical CSS only, no colours outside tokens, fonts exist), `tests/test_e2e_browser.py` (Playwright: language/direction,
+theme persistence, palette + G-shortcuts, panels + Esc, live settings, phone menu, welcome slides).
+
+**Mistakes / lessons**
+- The server sends `script-src 'self'`: no inline scripts and no string `eval`; browser tests must use `wait_for_url`
+  / selectors, not `wait_for_function` with a string. The pre-paint theme script had to be an external file (`js/boot.js`).
+- `add_init_script` runs on every page load, so it must not overwrite saved settings in a reload test.
+- Keys with a dynamic suffix (`nav.` + id) cannot be checked by a regex on `TO.t('...')`; a family test lists them.
+- Bidi: a trip number like `26-A-00233` must sit in its own `.num` span or Arabic text reorders it.
+- Focus the palette input synchronously, or fast typing (and tests) lose the first letters.
+
+## Phase 1a – engine fork (2026-09-29)
+
+**What:** copied the BAMS engine (BAMS commit `5f5b3ce`, version 2.4.0), renamed everything to Trip Orders
+(`TO-` hash domains and headers, `TO_HOME`, `trips.db`, `TripOrders.exe`, ports 8090/8453, new installer AppId),
+replaced the break-area domain by the trip domain in `store.ENTITIES` (13 entities, `docs/EXECUTION_PLAN.md` P2.1),
+new permission groups and 7 built-in profiles in `auth.py`, permission mapping and category scopes in `app.py`
+(a person can be limited to trip categories; journal/audit column `scope_id`, user field `scopes`).
+
+**Tests:** engine tests kept. In-process tests use a test-only break-area style domain (`tests/engine_domain.py`,
+registered by `tests/cluster.py`, never shipped) so counters, `max`/`rank`/`follow` resolvers and restores stay
+covered; the multi-PC tests were rewritten on trips (photos = `tripPhotos`, limited user = category scope).
+Removed: the upgrade-from-version-1 tests (they rebuilt BAMS history from git).
+Result: unit + convergence 32 OK, multi-PC 35 OK.
+
+**Mistakes / lessons**
+- A blind `sed s/bams_/to_/` shortened the backup file prefix from 5 to 3 characters and broke code that sliced
+  file names by position (`name[4:]`, `n[5:20]`). Lesson: after a rename, grep for numeric slices of the renamed strings.
+- `git rm --cached -r .` was run by mistake while cleaning up; it only changed the index (fixed by `git reset`).
+  Lesson: never run index-wide commands as a side effect of a rename.
+- Fields like `description` that tests used are not real trip fields; conflict resolution must use the real field
+  name (`notes`).
+
+## Phase 0b – playbook for every agent (2026-09-29)
+
+**What:** `docs/EXECUTION_PLAN.md` (how to work, environment, every task with exact rules, data model, API,
+gateway protocol, workbook layout, checks, pitfalls, owner answers), `TASKS.md` (tracker), project skill
+`.claude/skills/trip-orders/SKILL.md`, `.gitignore` for `samples/private/`.
+
+**Why:** the owner wants any later agent to continue without mistakes, the same way.
+
+**Owner answer:** demo data = the real sheet. The repository is **public**, so the real workbook is loaded at first
+start on the office PC and never committed; the repo gets a synthetic sample with the same shape.
+
+**Lessons**
+- Check repository visibility before committing anything derived from the owner's files.
+
+## Phase 0 – study and plan (2026-09-29)
+
+**What:** studied the BAMS reference repository, the paper trip order and the September workbook; wrote
+`docs/REFERENCE_STUDY.md`, `docs/PLAN.md`, `docs/DESIGN.md`, `CLAUDE.md`. Removed the first idea note
+`PROJECT_PLAN.md` (it proposed passenger QR confirmation, which the owner decided against for version 1).
+
+**Why:** the owner's master prompt asks for Phase 0 first; the owner also added bilingual UI, light/dark themes,
+motion, shortcuts, slides and full admin control.
+
+**Mistakes / lessons**
+- The master prompt's workbook numbers were close but not exact (drivers 42 vs 41, cars 46 vs 44, back-steps 13 vs
+  12, destinations 87 vs 89/90) – the differences come from whitespace and case. Lesson: every count depends on
+  normalisation; tests must state the normalisation they use.
+- BAMS has no Excel reader, no i18n, no dark mode and no service worker – these are new work, not reuse.

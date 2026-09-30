@@ -1,0 +1,16 @@
+# owner's real files (repository is public) – never commit
+samples/private/
+# runtime data
+data/
+backups/
+*.db
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+node_modules/
+gateway/.wrangler/
+dist/
+build/
+.DS_Store
+server/_assets.py

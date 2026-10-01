@@ -17,6 +17,7 @@ ROUTES = [('المصنع - المطار - المصنع', 118), ('المصنع - 
           ('المصنع - المكتب الرئيسي - المصنع', 72)]
 odo = {c: 47200 + i * 9100 for i, c in enumerate(CARS)}
 rows = []
+last_end = {}
 for day in range(0, 35):                       # 1 September .. 5 October (the studio day is 6 October)
     d = dt.date(2026, 9, 1) + dt.timedelta(days=day)
     if d.weekday() in (4,):          # Friday off
@@ -38,6 +39,7 @@ for day in range(0, 35):                       # 1 September .. 5 October (the s
         busy[car] = en_dt
         s, e = odo[car], odo[car] + km
         odo[car] = e + rnd.randint(0, 3)
+        last_end[car] = e
         rows.append([d, rnd.choice(DRIVERS), car, req, req, 'سيارات الإدارة', dep, route, None, s, e, None, None, start.time(), en_dt.time(), None])
 data = [excel_io.TODAY_HEADERS]
 for i, r in enumerate(rows, 2):
@@ -48,4 +50,4 @@ with open(out, 'wb') as f:
     f.write(w.build([w.Sheet('All Car', data)]))
 print(out, len(rows))
 for car in CARS:
-    print('ODO', car, odo[car])
+    print('ODO', car, last_end.get(car, odo[car]))

@@ -53,7 +53,7 @@
 One trip order follows the whole film: **requested by منى سامي (المشتريات), car ن ج ع 4821, driver كريم فؤاد, المصنع ← المطار ← المصنع**.
 Its card stays on screen in a corner; its chips fill in as each step is *proven*:
 `طلب` → `موافقة` → `لينك` → `بداية <قراءة>` → `نهاية <قراءة>` → `الورقة` → `أخضر · 118 كم` → `في تقرير الشهر`.
-The readings come from the sample history (the car's last September/October odometer + 4 km to the office), and are read back before the cut is written – never typed into the cut by hand.
+The readings come from the sample history (the car's last recorded end reading: it stood at the office since then, so there is no gap), and are read back before the cut is written – never typed into the cut by hand.
 
 ## 4. Storyboard (≈ 120 s)
 

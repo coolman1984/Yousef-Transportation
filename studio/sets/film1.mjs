@@ -125,7 +125,8 @@ export async function buildSet({ root }) {
   await at('09:30');                                       // the shoot starts here
   await api.post('/api/gateway/pull');
 
-  const actor = { ...ACTOR, vehicleId: veh.id, startKm: lastOdo[ACTOR.plate],          // the car stood at the office since its last trip: no km without an order driverId: id('drivers', 'name', ACTOR.driver), requesterId: id('people', 'name', ACTOR.requester) };
+  // the car stood at the office since its last trip: its first reading is where it last stopped (no km without an order)
+  const actor = { ...ACTOR, vehicleId: veh.id, startKm: lastOdo[ACTOR.plate], driverId: id('drivers', 'name', ACTOR.driver), requesterId: id('people', 'name', ACTOR.requester) };
   actor.endKm = actor.startKm + ACTOR.km;
   return {
     root, repo: REPO, clock, api, base, gateway, actor, admin: ADMIN, tz: TZ,

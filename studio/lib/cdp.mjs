@@ -54,7 +54,8 @@ export class Browser {
   send(method, params = {}, sessionId) {
     const id = ++this.id;
     return new Promise((ok, bad) => {
-      this.wait.set(id, { ok, bad, method });
+      const t = setTimeout(() => { if (this.wait.has(id)) { this.wait.delete(id); bad(new Error('no answer from the browser to ' + method + ' within 45 s')); } }, 45000);
+      this.wait.set(id, { ok: (r) => { clearTimeout(t); ok(r); }, bad: (e) => { clearTimeout(t); bad(e); }, method });
       this.ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
     });
   }
@@ -71,6 +72,8 @@ export class Browser {
     const { sessionId } = await this.send('Target.attachToTarget', { targetId, flatten: true });
     const p = new Page(this, sessionId, targetId);
     await p.send('Page.enable');
+    // a native alert/confirm would freeze the page silently: accept it and say so
+    p.on('Page.javascriptDialogOpening', (d) => { console.error('[dialog] ' + d.type + ': ' + d.message); p.send('Page.handleJavaScriptDialog', { accept: true }).catch(() => {}); });
     await p.send('Runtime.enable');
     await p.send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: scale, mobile, screenWidth: width, screenHeight: height });
     if (mobile) await p.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 });

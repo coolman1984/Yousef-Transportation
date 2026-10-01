@@ -33,11 +33,11 @@ try {
   await driver.openLink(ps, set, link); await shot(pp, 'phone-card');
   const t1 = await driver.startTrip(ps, set, trip); await shot(pp, 'phone-started');
   console.log('started', t1.startKm, t1.startAt);
-  await office.board(os_, set, trip, 'على الطريق'); await shot(op, 'board');
+  console.log('-> board'); await office.board(os_, set, trip, 'على الطريق'); await shot(op, 'board');
   await set.clock.jump(2 * 3600 + 5 * 60);
   const t2 = await driver.endTrip(ps, set, trip); await shot(pp, 'phone-done');
   console.log('ended', t2.endKm, t2.endAt);
-  const proven = await office.openTrip(os_, set, trip); await shot(op, 'trip-green');
+  console.log('-> open trip'); const proven = await office.openTrip(os_, set, trip); await shot(op, 'trip-green');
   console.log('proven', proven.insight.km, proven.insight.hours, proven.photos);
   const r = await office.reports(os_, set); await shot(op, 'report');
   console.log('report', r.summary.total);

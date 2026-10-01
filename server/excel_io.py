@@ -145,10 +145,10 @@ def _check_row(row):
         wa.append(('night', 'The trip ends after midnight; the end time is taken as the next day.'))
 
 
-def read_workbook(data, name=''):
+def read_workbook(data, name='', engine='auto'):
     """bytes -> (rows, sheet report). Raises ImportError_ with a person-readable message. Any common spreadsheet type (see formats.py)."""
     try:
-        wb = formats.read_workbook(data, name)
+        wb = formats.read_workbook(data, name, engine)
     except formats.FormatError as e:
         raise ImportError_(str(e))
     rows, report = [], []
@@ -342,8 +342,8 @@ def plan(rows, state, filename=''):
             'merges': groups, 'alerts': alerts, 'sheets': None, 'catsheet': sheet_of_cat}
 
 
-def make_preview(user, data, state, filename=''):
-    rows, report = read_workbook(data, filename)
+def make_preview(user, data, state, filename='', engine='auto'):
+    rows, report = read_workbook(data, filename, engine)
     p = plan(rows, state, filename)
     p['sheets'] = report
     return store_preview(user, p)

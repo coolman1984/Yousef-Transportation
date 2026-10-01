@@ -189,6 +189,119 @@ class WordTypes(unittest.TestCase):
         self.assertIn('spreadsheet', str(e.exception).lower())
 
 
+# --------------------------------------------------------------------------- Microsoft Office (COM) route, with a pretend PowerShell
+import json  # noqa: E402
+import subprocess  # noqa: E402
+import com_office as C  # noqa: E402
+
+
+class FakePowerShell:
+    """Stands in for powershell.exe: writes the JSON Office would have produced."""
+
+    def __init__(self, answer=None, timeout=False):
+        self.answer, self.timeout, self.calls = answer, timeout, []
+
+    def __call__(self, cmd, env, timeout):
+        self.calls.append({'cmd': cmd, 'in': env['TO_IN'], 'bytes': open(env['TO_IN'], 'rb').read(), 'script': open(cmd[-1], encoding='utf-8-sig').read(), 'dir': os.path.dirname(env['TO_IN'])})
+        if self.timeout:
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        if self.answer is not None:
+            with open(env['TO_OUT'], 'w', encoding='utf-8') as f:
+                json.dump(self.answer, f)
+
+
+def excel_answer():
+    rows = [HDR] + [[{'d': 46266}, 'علي حسن', 'س ع د 555', 'Sara Adel', 'المكتب - Capital', 1000.0, 1120.0, {'d': 0.375}, {'d': 0.6458333333333334}],
+                    [{'d': 46267}, 'Ali Hassan', 'ABC 1234', 'Sara Adel', 'Factory', 1120.0, 1200.0, {'d': 0.3333333333333333}, {'d': 0.9166666666666666}]]
+    return {'date1904': False, 'sheets': [{'name': 'All Car', 'hidden': False, 'row0': 3, 'col0': 2, 'rows': rows}]}
+
+
+class OfficeRoute(unittest.TestCase):
+    def setUp(self):
+        self._avail = C.available
+        C.available = lambda app: True
+        self._run = C._subprocess_runner
+
+    def tearDown(self):
+        C.available = self._avail
+
+    def go(self, fake, fn, *a, **k):
+        old = C._subprocess_runner
+        C._subprocess_runner = fake
+        try:
+            return fn(*a, **k)
+        finally:
+            C._subprocess_runner = old
+
+    def test_protected_workbook_is_read_through_excel(self):
+        fake = FakePowerShell(excel_answer())
+        drm = b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(500)
+        rows, rep = self.go(fake, X.read_workbook, drm, 'Extra Sep-26.xlsx')
+        self.assertEqual(len(rows), 2)
+        self.assertEqual((rows[0]['date'], rows[0]['driver'], rows[0]['startKm'], rows[0]['endKm'], rows[0]['startTime'], rows[0]['endTime']),
+                         (dt.date(2026, 9, 1), 'علي حسن', 1000, 1120, dt.time(9, 0), dt.time(15, 30)))
+        c = fake.calls[0]
+        self.assertEqual(c['bytes'], drm)                       # Office was given the protected file itself, not a copy we made
+        self.assertIn('Excel.Application', c['script'])
+        self.assertTrue(c['in'].endswith('in.xlsx'))
+        self.assertFalse(os.path.exists(c['dir']), 'the work folder is removed afterwards')
+        self.assertIn('-NoProfile', c['cmd'])
+
+    def test_protected_document_is_read_through_word(self):
+        ans = {'paragraphs': ['Title'], 'tables': [[[LABELS[k], VALUES[k]] for k in LABELS]]}
+        fake = FakePowerShell(ans)
+        rec = self.go(fake, W.parse_forms, b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(500), 'form.docx')
+        self.assertEqual(rec[0]['driver'], 'علي حسن')
+        self.assertIn('Word.Application', fake.calls[0]['script'])
+
+    def test_which_door_a_protected_file_goes_to(self):
+        drm = b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(100)
+        self.assertEqual((F.door(drm, 'a.docx'), F.door(drm, 'a.xlsx'), F.door(drm, 'a.rtf'), F.door(drm, 'noext')), ('word', 'sheet', 'word', 'sheet'))
+        self.assertEqual(F.door(W.form({}, 'en'), 'a.bin'), 'word')
+
+    def test_office_failures_become_plain_messages(self):
+        drm = b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(100)
+        cases = [(FakePowerShell({'error': 'The password is wrong'}), 'password'), (FakePowerShell(timeout=True), 'took too long'),
+                 (FakePowerShell(None), 'did not give an answer'), (FakePowerShell({'error': 'Retrieving the COM class factory ... 80040154 Class not registered'}), 'not installed'),
+                 (FakePowerShell({'error': 'Something odd'}), 'security program')]
+        for fake, part in cases:
+            with self.assertRaises(X.ImportError_) as e:
+                self.go(fake, X.read_workbook, drm, 'f.xlsx')
+            self.assertIn(part, str(e.exception).lower())
+
+    def test_engine_choices(self):
+        drm = b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(100)
+        with self.assertRaises(X.ImportError_) as e:                  # never use Office: the plain explanation
+            X.read_workbook(drm, 'f.xlsx', 'native')
+        self.assertIn('document-security', str(e.exception).lower())
+        fake = FakePowerShell(excel_answer())                         # force Office even for a normal xlsx
+        data = w.build([w.Sheet('A', [HDR])])
+        self.go(fake, F.read_workbook, data, 'f.xlsx', 'office')
+        self.assertEqual(len(fake.calls), 1)
+        fake2 = FakePowerShell(excel_answer())                        # a readable file does not start Office on its own
+        self.go(fake2, F.read_workbook, data, 'f.xlsx')
+        self.assertEqual(fake2.calls, [])
+
+    def test_without_office_the_message_explains(self):
+        C.available = lambda app: False
+        with self.assertRaises(X.ImportError_) as e:
+            X.read_workbook(b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(100), 'f.xlsx')
+        self.assertIn('microsoft excel/word', str(e.exception).lower())
+        with self.assertRaises(X.ImportError_) as e:
+            X.read_workbook(w.build([w.Sheet('A', [HDR])]), 'f.xlsx', 'office')
+        self.assertIn('not available on this pc', str(e.exception).lower())
+
+    def test_the_scripts_are_plain_ascii_and_balanced(self):
+        for name, script in (('excel', C.EXCEL_SCRIPT), ('word', C.WORD_SCRIPT)):
+            self.assertTrue(script.isascii(), name)
+            for a, b in ('{}', '()', '[]'):
+                self.assertEqual(script.count(a), script.count(b), (name, a))
+            self.assertIn('$env:TO_IN', script)
+            self.assertIn('AutomationSecurity = 3', script)          # macros off
+            self.assertNotIn('.Save', script.replace('.SaveAs', 'X'))    # nothing is ever saved
+            self.assertIn('$true', script)                          # opened read-only
+
+
 # --------------------------------------------------------------------------- a minimal Word 97 file maker (OLE2 + FIB + piece table)
 def make_doc(text):
     raw = text.encode('utf-16-le')

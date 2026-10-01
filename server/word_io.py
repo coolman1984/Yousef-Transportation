@@ -140,10 +140,10 @@ def parse_km(s):
     return int(m.group(0).replace(',', '')) if m else None
 
 
-def parse_forms(data, name=''):
+def parse_forms(data, name='', engine='auto'):
     """docx bytes -> [{field: text}] one record per form found (a file may hold many forms, one after the other)."""
     try:
-        d = formats.read_document(data, name)
+        d = formats.read_document(data, name, engine)
     except formats.FormatError as e:
         raise WordError(str(e))
     records, cur = [], {}
@@ -190,12 +190,12 @@ def rows_from_forms(records, category):
     return rows
 
 
-def preview(user, data, state, category, filename=''):
+def preview(user, data, state, category, filename='', engine='auto'):
     """Word file -> review screen (same shape as the Excel review). category: the trip category the forms belong to."""
     category = domain.norm_text(category)
     if not category:
         raise WordError('Choose the trip category these forms belong to.')
-    rows = rows_from_forms(parse_forms(data, filename), category)
+    rows = rows_from_forms(parse_forms(data, filename, engine), category)
     p = excel_io.plan(rows, state, filename)
     p['source'] = 'word'
     p['sheets'] = [{'sheet': category, 'used': True, 'rows': len(rows)}]

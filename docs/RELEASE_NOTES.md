@@ -1,4 +1,11 @@
-# Trip Orders 1.0.1
+# Trip Orders 1.0.2
+
+## New
+- **Protected company files (DRM) can now be read through Microsoft Excel / Word.** On a Windows PC that has Office and the company's security program, a protected file is opened by Office itself (read-only, macros off, nothing saved) and only the cell values / text are taken. Nothing is decrypted or copied to disk, and no protection is bypassed: if Office cannot open the file, neither can Trip Orders.
+- The same route reads anything Office can open (.xlsb, Excel/Word 95, .wps...). A switch on the import page forces Office for a file that looks wrong when read directly.
+- The import page says whether Office was found on this PC.
+
+## 1.0.1
 
 ## Fixed
 - **Welcome slides** were blank after the first slide in Arabic (they slid the wrong way). Fixed, with a test for both languages.

@@ -683,6 +683,14 @@
     'imp.e.sheetgiven': 'This is a spreadsheet, not a Word document.',
     'imp.e.xlsb': 'This is an Excel Binary Workbook (.xlsb). Open it in Excel and Save As .xlsx.',
     'imp.e.oldoffice': 'This is a very old Office file. Open it in Excel/Word and Save As .xlsx / .docx.',
-    'imp.e.notable': 'No table with data was found in this file.'
+    'imp.e.notable': 'No table with data was found in this file.',
+
+    /* Microsoft Office route */
+    'imp.office.on': 'Microsoft Office was found on this PC. Protected files (for example locked by your company\'s security program) are opened through it automatically, read-only.',
+    'imp.office.off': 'Microsoft Office was not found on this PC, so protected files cannot be opened here. Save an open copy first, or use a PC that has Office and the security program.',
+    'imp.office.force': 'Always read with Microsoft Office (slower; for a file that looks wrong when read directly)',
+    'imp.e.otimeout': 'Microsoft Office took too long to open the file. Close any open Office windows and try again.',
+    'imp.e.nooffice': 'Microsoft Excel/Word is not available on this PC (it needs Windows with Office installed).',
+    'imp.e.officefail': 'Microsoft Office could not open this file. If your company protects its documents, make sure the security program is running on this PC and that you are allowed to open the file.'
   };
 })();

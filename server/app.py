@@ -161,6 +161,8 @@ if INSTANCE:
 else:
     SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = SECRETS = None
 GATE = None
+formats.OFFICE_TMP = os.path.join(DATA_DIR, 'tmp')
+OFFICE_STATE = formats.office_state()      # is Microsoft Excel / Word on this PC? (decided once at start)
 
 
 def store_bytes(data, ext, user='gateway', ip='', user_id=''):
@@ -524,7 +526,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, {**STORE.state(self.u['scopes']), 'gateway': bool(SECRETS.configured)})
+            return self.send(200, {**STORE.state(self.u['scopes']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -767,14 +769,14 @@ class Handler(BaseHTTPRequestHandler):
             self.need('excel.import')
             self.need_all_scopes()
             data, name = self.body(30 * 1048576), qs.get('name', '')[:120]
+            engine = qs.get('engine', 'auto') if qs.get('engine') in ('auto', 'office', 'native') else 'auto'
             try:
-                kind = formats.sniff(data, name)
-                if kind in formats.WORD_KINDS:
+                if formats.door(data, name, engine) == 'word':
                     if not qs.get('category', '').strip():
-                        return self.send(200, {'needCategory': True, 'kind': kind})
-                    pid, plan = word_io.preview(self.user, data, STORE.state(), qs.get('category', ''), name)
+                        return self.send(200, {'needCategory': True})
+                    pid, plan = word_io.preview(self.user, data, STORE.state(), qs.get('category', ''), name, engine)
                 else:
-                    pid, plan = excel_io.make_preview(self.user, data, STORE.state(), name)
+                    pid, plan = excel_io.make_preview(self.user, data, STORE.state(), name, engine)
                 return self.send(200, {'id': pid, **plan})
             except (word_io.WordError, excel_io.ImportError_) as e:
                 raise BadRequest(str(e))

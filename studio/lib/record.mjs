@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 export class Recorder {
-  constructor(page, dir, { quality = 82 } = {}) {
+  constructor(page, dir, { quality = 92 } = {}) {
     this.page = page; this.dir = dir; this.quality = quality; this.frames = []; this.n = 0;
     mkdirSync(join(dir, 'frames'), { recursive: true });
   }

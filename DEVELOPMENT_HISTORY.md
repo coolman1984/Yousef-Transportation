@@ -4,6 +4,21 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Product film, version 2 - cinematic camera and full resolution (2026-10-01)
+
+**Why:** the owner found version 1 poor: small, soft picture, a still wide shot, little motion.
+**What:** `studio/` re-shoots at full resolution (office 1920x1200, phone 786x1702 frames), draws its own cursor and finger taps from the
+recorded path (sharp at any zoom), bakes one smoothed camera track per device in `cut.mjs` (follow shots that push in on the action, gentle
+pull-outs, gaussian smoothing so the camera anticipates and never jerks), speed ramps for idle waits, 3D device entrances/exits, a rail with
+kinetic titles, a step line and rolling counters, a new score (pad, plucks with a room, soft groove) with whooshes/chimes/rolls on the picture's beats,
+and a 60 fps lossless-frame render in three parallel slices plus a two-pass copy under 30 MB for chat.
+**Mistakes:** the screencast silently delivered CSS-size frames (1280x800) although the page ran at scale 1.5 - the whole first film was
+recorded at a third of the pixels. It only gives device pixels when Chromium itself runs with `--force-device-scale-factor`. Then a 2x/3x shoot made
+the machine twice as slow (typing 0.65 s per letter); the hand and typing are now time-based and the scale is what the zoom needs (1.5 / 2), not more.
+**Lesson:** measure the raw material (frame size, frame rate) before judging the edit; check the first frame's pixel size in every shoot.
+
+---
+
 ## CI failure on main for 1.0.1 (2026-10-01)
 
 The release of 1.0.1 was never published: the test job failed on main (`ReportsPageTest`: "No trips in this month"). Real bug, not only a test problem:

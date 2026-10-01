@@ -10,82 +10,120 @@
 @font-face { font-family: 'Plex Arabic'; src: url('../fonts/plex-arabic-latin-400.woff2') format('woff2'); font-weight: 400; }
 @font-face { font-family: 'Plex Arabic'; src: url('../fonts/plex-arabic-latin-600.woff2') format('woff2'); font-weight: 600; }
 @font-face { font-family: 'Plex Arabic'; src: url('../fonts/plex-arabic-latin-700.woff2') format('woff2'); font-weight: 700; }
-:root { --navy: #13294b; --navy-2: #0b1a33; --amber: #f2a900; --ink: #f3f6fb; --ink-2: #a9b6cc; --ok: #3ccf8e; }
+:root { --navy: #13294b; --ink: #f3f6fb; --ink-2: #9fb0cb; --ink-3: rgba(243,246,251,.34); --amber: #f2a900; --amber-2: #ffc94a; --ok: #3ccf8e; }
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 1920px; height: 1080px; overflow: hidden; background: var(--navy-2); }
-body { font-family: 'Plex Arabic', sans-serif; color: var(--ink); }
-#stage { position: absolute; inset: 0; overflow: hidden;
-  background: radial-gradient(1200px 700px at 78% 18%, rgba(242,169,0,.13), transparent 60%), radial-gradient(1400px 900px at 20% 90%, rgba(70,120,210,.18), transparent 60%), linear-gradient(160deg, #10234a, #091629 70%); }
-.grain { position: absolute; inset: 0; background-image: radial-gradient(rgba(255,255,255,.035) 1px, transparent 1px); background-size: 4px 4px; }
-/* the program window */
-.win { position: absolute; left: 60px; top: 150px; width: 1340px; border-radius: 18px; overflow: hidden; background: #fff;
-  box-shadow: 0 40px 90px rgba(0,0,0,.55), 0 0 0 1px rgba(255,255,255,.08); transform-origin: 50% 50%; will-change: transform, opacity; }
-.win .bar { height: 38px; background: #e9edf3; display: flex; align-items: center; gap: 10px; padding: 0 16px; direction: ltr; }
-.win .bar i { width: 13px; height: 13px; border-radius: 50%; background: #c9cfd8; display: block; }
-.win .bar span { flex: 1; text-align: center; font-size: 15px; color: #56657e; direction: rtl; }
-.win .view { position: relative; width: 1340px; height: 837.5px; overflow: hidden; background: #e8edf4; }
-.win .view img { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: 50% 50%; }
-/* the phone */
-.phone { position: absolute; top: 120px; left: 520px; width: 430px; height: 905px; border-radius: 58px; background: #05070b; padding: 30px 15px 15px;
-  box-shadow: 0 40px 90px rgba(0,0,0,.6), 0 0 0 2px #2a3140, inset 0 0 0 2px #11151d; will-change: transform, opacity; }
-.phone .screen { position: relative; width: 100%; height: 100%; border-radius: 44px; overflow: hidden; background: #f4f6fb; }
-.phone .screen img { position: absolute; inset: 0; width: 100%; height: 100%; }
-.phone .notch { position: absolute; top: -20px; left: 50%; width: 96px; height: 12px; margin-left: -48px; border-radius: 10px; background: #1a1f29; z-index: 3; }
-.side { position: absolute; top: 330px; width: 380px; font-size: 30px; line-height: 1.55; color: var(--ink); will-change: transform, opacity; }
-.side b { color: var(--amber); display: block; font-size: 20px; letter-spacing: .02em; margin-bottom: 8px; }
-/* titles */
-.title { position: absolute; top: 34px; right: 60px; display: flex; align-items: baseline; gap: 18px; will-change: transform, opacity; }
-.title .k { font-size: 22px; font-weight: 700; color: var(--navy); background: var(--amber); border-radius: 999px; padding: 4px 16px 6px; }
-.title .t { font-size: 46px; font-weight: 700; letter-spacing: -.01em; }
-.cap { position: absolute; top: 46px; left: 60px; max-width: 760px; font-size: 25px; font-weight: 600; color: var(--ink); background: rgba(255,255,255,.08);
-  border: 1px solid rgba(255,255,255,.14); border-radius: 16px; padding: 10px 20px 12px; will-change: transform, opacity; }
-.cap small { color: var(--ink-2); font-weight: 400; }
-/* the persistent actor card */
-.actor { position: absolute; right: 60px; top: 150px; width: 400px; border-radius: 22px; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.14);
-  padding: 22px 24px; will-change: transform, opacity; }
-.actor h4 { font-size: 18px; color: var(--ink-2); font-weight: 400; }
-.actor .no { font-size: 36px; font-weight: 700; direction: ltr; text-align: right; letter-spacing: .02em; margin: 2px 0 6px; }
-.actor .meta { font-size: 19px; color: var(--ink-2); line-height: 1.6; }
-.actor ul { list-style: none; margin-top: 14px; display: grid; gap: 9px; }
-.actor li { display: flex; align-items: center; gap: 12px; font-size: 21px; color: rgba(243,246,251,.42); }
-.actor li i { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); display: grid; place-items: center; font-style: normal; font-size: 16px; flex: none; }
-.actor li.on { color: var(--ink); }
-.actor li:not(.on) em { visibility: hidden; }
-.actor li.on i { background: var(--ok); border-color: var(--ok); color: #062b1a; font-weight: 700; }
-.actor li em { font-style: normal; margin-inline-start: auto; color: var(--amber); font-weight: 700; direction: ltr; }
-/* stamps: below the card, never over the program */
-.stamp { position: absolute; right: 60px; width: 400px; border-radius: 22px; background: var(--amber); color: var(--navy); padding: 18px 24px 20px; box-shadow: 0 24px 60px rgba(0,0,0,.35);
-  will-change: transform, opacity; }
-.stamp .v { font-size: 50px; font-weight: 700; line-height: 1.05; direction: ltr; text-align: right; }
-.stamp .l { font-size: 20px; font-weight: 600; margin-top: 4px; }
-/* opening and end */
-.open { position: absolute; right: 60px; top: 150px; width: 430px; will-change: transform, opacity; }
-.open .big { font-size: 64px; font-weight: 700; line-height: 1.15; }
-.open .big span { color: var(--amber); }
-.open .sub { margin-top: 22px; font-size: 22px; color: var(--ink-2); line-height: 1.6; }
-.end { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; will-change: opacity; }
-.end .a { font-size: 76px; font-weight: 700; }
-.end .a span { color: var(--amber); }
-.end .b { margin-top: 26px; font-size: 26px; color: var(--ink-2); }
-.end .c { margin-top: 40px; display: inline-flex; gap: 14px; align-items: center; font-size: 24px; color: var(--ink); }
-.end .c i { width: 46px; height: 46px; border-radius: 12px; background: var(--amber); display: inline-grid; place-items: center; color: var(--navy); font-style: normal; font-weight: 700; font-size: 24px; }
-.black { position: absolute; inset: 0; background: #000; pointer-events: none; }
-.hide { display: none; }
+html, body { width: 1920px; height: 1080px; overflow: hidden; background: #050b17; }
+body { font-family: 'Plex Arabic', sans-serif; color: var(--ink); -webkit-font-smoothing: antialiased; }
+#stage { position: absolute; inset: 0; overflow: hidden; background: #071226; }
+.abs { position: absolute; }
+/* ---- background: deep navy, two slow lights, a floor glow behind the device */
+#bg { position: absolute; inset: -10%; background: radial-gradient(60% 60% at 70% 20%, #16346a 0%, transparent 70%), linear-gradient(170deg, #0c1d3d 0%, #071226 55%, #050c1a 100%); }
+.blob { position: absolute; border-radius: 50%; filter: blur(90px); will-change: transform; }
+#b1 { width: 900px; height: 700px; background: rgba(242,169,0,.13); }
+#b2 { width: 1100px; height: 900px; background: rgba(60,110,220,.22); }
+#glow { position: absolute; width: 1500px; height: 900px; border-radius: 50%; background: radial-gradient(closest-side, rgba(120,160,255,.20), transparent); will-change: transform, opacity; }
+/* ---- devices (a still camera: the device moves under it) */
+#devices { position: absolute; inset: 0; perspective: 2600px; perspective-origin: 750px 540px; }
+.rig { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; transform-style: preserve-3d; will-change: transform, opacity; }
+.win { position: absolute; left: 0; top: 0; width: 1280px; border-radius: 14px; overflow: hidden; background: #fff; transform-origin: 0 0; will-change: transform;
+  box-shadow: 0 50px 120px rgba(0,0,0,.55), 0 18px 40px rgba(0,0,0,.35), 0 0 0 1px rgba(255,255,255,.10); }
+.win .bar { height: 36px; background: linear-gradient(#f3f5f9, #e6eaf0); display: flex; align-items: center; gap: 8px; padding: 0 14px; direction: ltr; border-bottom: 1px solid #d6dce5; }
+.win .bar i { width: 12px; height: 12px; border-radius: 50%; display: block; }
+.win .bar i:nth-child(1) { background: #ff5f57; } .win .bar i:nth-child(2) { background: #febc2e; } .win .bar i:nth-child(3) { background: #28c840; }
+.win .bar span { flex: 1; text-align: center; font-size: 13px; color: #5b6a82; direction: rtl; margin-right: 52px; }
+.win .view { position: relative; width: 1280px; height: 800px; overflow: hidden; background: #eef2f7; }
+.view img, .screen img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; }
+#cursor { position: absolute; left: 0; top: 0; width: 26px; height: 30px; transform-origin: 2px 2px; filter: drop-shadow(0 2px 3px rgba(0,0,0,.35)); will-change: transform; z-index: 3; }
+.ripple { position: absolute; left: 0; top: 0; width: 60px; height: 60px; margin: -30px 0 0 -30px; border-radius: 50%; border: 3px solid var(--amber); z-index: 2; will-change: transform, opacity; }
+.phone { position: absolute; left: 0; top: 0; width: 421px; height: 879px; padding: 14px; border-radius: 62px; transform-origin: 0 0; will-change: transform;
+  background: linear-gradient(145deg, #2b313d, #0b0e14 40%, #1a1f29); box-shadow: 0 60px 130px rgba(0,0,0,.6), 0 0 0 1.5px #3a4252, inset 0 0 0 2px #0a0d12; }
+.phone .screen { position: relative; width: 393px; height: 851px; border-radius: 48px; overflow: hidden; background: #f4f6fb; }
+.phone .island { position: absolute; top: 10px; left: 50%; width: 104px; height: 30px; margin-left: -52px; border-radius: 20px; background: #000; z-index: 4; opacity: .0; }
+.tap { position: absolute; left: 0; top: 0; width: 64px; height: 64px; margin: -32px 0 0 -32px; border-radius: 50%; background: rgba(255,255,255,.38); border: 2.5px solid rgba(242,169,0,.95);
+  box-shadow: 0 0 0 6px rgba(242,169,0,.18); z-index: 3; will-change: transform, opacity; }
+/* ---- the rail (right): chapter, the trip we follow, its steps, the proof stamp */
+#rail { position: absolute; top: 0; right: 0; width: 420px; height: 1080px; padding: 64px 44px 0 40px; will-change: transform, opacity;
+  background: linear-gradient(270deg, rgba(6,14,30,.92), rgba(8,18,38,.82)); backdrop-filter: blur(22px) saturate(1.2); border-left: 1px solid rgba(255,255,255,.08); }
+#rail::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 1px; background: linear-gradient(transparent, rgba(242,169,0,.35), transparent); }
+.kick { display: flex; align-items: center; gap: 14px; font-size: 20px; font-weight: 700; color: var(--amber); letter-spacing: .06em; height: 30px; }
+.kick .ln { height: 2px; background: var(--amber); width: 60px; transform-origin: right center; }
+.kick .of { color: var(--ink-3); font-weight: 400; }
+.ttl { margin-top: 14px; height: 124px; font-size: 42px; font-weight: 700; line-height: 1.22; letter-spacing: -.005em; }
+.w { display: inline-block; overflow: hidden; vertical-align: top; padding-bottom: .12em; margin-bottom: -.12em; }
+.w > span { display: inline-block; will-change: transform; }
+.card { margin-top: 26px; padding: 20px 22px 18px; border-radius: 18px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.09); }
+.card h4 { font-size: 15px; font-weight: 400; color: var(--ink-2); letter-spacing: .02em; }
+.card .no { font-size: 32px; font-weight: 700; direction: ltr; text-align: right; letter-spacing: .03em; margin: 2px 0 6px; }
+.card .meta { font-size: 16.5px; color: var(--ink-2); line-height: 1.7; }
+#steps { position: relative; list-style: none; margin-top: 24px; }
+#steps li { position: relative; display: flex; align-items: center; height: 39px; padding-right: 42px; font-size: 19px; color: var(--ink-3); }
+#steps li .dot { position: absolute; right: 4px; top: 8px; width: 22px; height: 22px; border-radius: 50%; border: 2px solid rgba(255,255,255,.22); background: #0b1730; }
+#steps li .fill { position: absolute; inset: -2px; border-radius: 50%; background: var(--ok); transform: scale(0); will-change: transform; }
+#steps li svg { position: absolute; inset: 3px; width: 12px; height: 12px; }
+#steps li svg path { stroke: #06301c; stroke-width: 3; fill: none; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 20; stroke-dashoffset: 20; }
+#steps li .lab { will-change: color; }
+#steps li .val { margin-right: auto; color: var(--amber); font-weight: 700; direction: ltr; font-size: 19px; will-change: transform, opacity; opacity: 0; }
+#steps li.on { color: var(--ink); }
+#steps li.cur .lab { font-weight: 700; }
+#steps .rail-line { position: absolute; right: 14px; top: 20px; width: 2px; background: rgba(255,255,255,.10); }
+#steps .rail-fill { position: absolute; right: 14px; top: 20px; width: 2px; background: linear-gradient(var(--ok), var(--amber)); transform-origin: top; will-change: transform; }
+#steps .halo { position: absolute; right: -3px; width: 36px; height: 36px; border-radius: 50%; border: 2px solid rgba(60,207,142,.6); will-change: transform, opacity; }
+#stamp { position: absolute; right: 40px; left: 40px; bottom: 44px; height: 150px; padding: 20px 24px; border-radius: 20px; color: #0d1d38; overflow: hidden; will-change: transform, opacity;
+  background: linear-gradient(135deg, var(--amber-2), var(--amber)); box-shadow: 0 30px 70px rgba(242,169,0,.25), 0 10px 30px rgba(0,0,0,.35); }
+#stamp .sheen { position: absolute; top: -50%; bottom: -50%; width: 120px; background: linear-gradient(90deg, transparent, rgba(255,255,255,.55), transparent); transform: rotate(18deg); will-change: transform; }
+#stamp .v { display: flex; flex-direction: row-reverse; justify-content: flex-start; align-items: baseline; gap: 12px; height: 62px; }
+#stamp .digits { display: flex; direction: ltr; font-size: 56px; font-weight: 700; line-height: 62px; height: 62px; overflow: hidden; letter-spacing: .01em; }
+#stamp .col { display: block; height: 62px; overflow: hidden; }
+#stamp .col > div { will-change: transform; }
+#stamp .col > div span { display: block; height: 62px; text-align: center; }
+#stamp .unit { font-size: 30px; font-weight: 700; }
+#stamp .l { margin-top: 10px; font-size: 18px; font-weight: 600; opacity: .85; }
+/* ---- captions (honesty notes), side text by the phone */
+#cap { position: absolute; left: 44px; bottom: 44px; display: flex; align-items: center; gap: 12px; padding: 12px 20px 13px 18px; border-radius: 999px; font-size: 21px; font-weight: 600;
+  background: rgba(7,16,34,.78); backdrop-filter: blur(16px); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 16px 40px rgba(0,0,0,.35); will-change: transform, opacity; }
+#cap i { width: 10px; height: 10px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 5px rgba(242,169,0,.18); flex: none; }
+#side { position: absolute; left: 110px; top: 380px; width: 610px; text-align: right; will-change: opacity; }
+#side .k { font-size: 21px; font-weight: 700; color: var(--amber); letter-spacing: .04em; margin-bottom: 14px; }
+#side .ln { font-size: 40px; font-weight: 700; line-height: 1.45; }
+/* ---- opening and end */
+#open { position: absolute; left: 0; top: 0; width: 1500px; height: 1080px; display: grid; place-items: center; text-align: center; will-change: transform, opacity; }
+#open .a { font-size: 92px; font-weight: 700; line-height: 1.18; letter-spacing: -.01em; }
+#open .a .am { color: var(--amber); }
+#open .s { margin-top: 26px; font-size: 24px; color: var(--ink-2); }
+#end { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; }
+#end .a { font-size: 96px; font-weight: 700; line-height: 1.2; }
+#end .a .am { color: var(--amber); }
+#end .b { margin-top: 30px; font-size: 22px; color: var(--ink-2); will-change: opacity; }
+#end .c { margin-top: 44px; display: inline-flex; gap: 14px; align-items: center; font-size: 26px; font-weight: 700; will-change: transform, opacity; }
+#end .c i { width: 52px; height: 52px; border-radius: 14px; background: linear-gradient(135deg, var(--amber-2), var(--amber)); display: inline-grid; place-items: center; color: var(--navy); font-style: normal; font-size: 26px; }
+#vig { position: absolute; inset: 0; pointer-events: none; background: radial-gradient(120% 100% at 45% 50%, transparent 55%, rgba(0,0,0,.45) 100%); }
+#grain { position: absolute; inset: -64px; pointer-events: none; opacity: .055; mix-blend-mode: overlay; will-change: transform; }
+#black { position: absolute; inset: 0; background: #000; pointer-events: none; }
+.hide { display: none !important; }
 </style>
 </head>
 <body>
 <div id="stage">
-  <div class="grain"></div>
-  <div class="win" id="win"><div class="bar"><i></i><i></i><i></i><span id="winbar">أوامر التشغيل · كمبيوتر المكتب</span></div><div class="view"><img id="ofr" alt=""></div></div>
-  <div class="phone" id="phone"><div class="screen"><div class="notch"></div><img id="pfr" alt=""></div></div>
-  <div class="side" id="side"></div>
-  <div class="title" id="title"><span class="k" id="tk"></span><span class="t" id="tt"></span></div>
-  <div class="cap" id="cap"></div>
-  <div class="open" id="open"><div class="big">أمر تشغيل واحد<br><span>من الطلب للتقرير</span></div><div class="sub">الشاشات الحقيقية للبرنامج، شغّالة قدامك<br>شركة وبيانات تجريبية · ساعة استوديو</div></div>
-  <div class="actor" id="actor"><h4>المشوار اللي بنتابعه</h4><div class="no" id="ano"></div><div class="meta" id="ameta"></div><ul id="chips"></ul></div>
-  <div class="stamp" id="stamp"><div class="v" id="sv"></div><div class="l" id="sl"></div></div>
-  <div class="end" id="end"><div><div class="a" id="ea"></div><div class="b" id="eb"></div><div class="c"><i>✓</i><span id="ec"></span></div></div></div>
-  <div class="black" id="black"></div>
+  <div id="bg"></div><div class="blob" id="b1"></div><div class="blob" id="b2"></div><div id="glow"></div>
+  <div id="devices">
+    <div class="rig" id="rigO"><div class="win" id="win"><div class="bar"><i></i><i></i><i></i><span>أوامر التشغيل · كمبيوتر المكتب</span></div>
+      <div class="view"><img id="ofr" alt=""><div class="ripple" id="rip"></div>
+        <svg id="cursor" viewBox="0 0 26 30"><path d="M2 2 L2 24 L8 18.5 L12.5 28 L16.5 26.2 L12 17 L20 17 Z" fill="#fff" stroke="#111" stroke-width="1.5" stroke-linejoin="round"/></svg></div></div></div>
+    <div class="rig" id="rigP"><div class="phone" id="phone"><div class="screen"><img id="pfr" alt=""><div class="tap" id="tap"></div></div></div></div>
+  </div>
+  <div id="side"></div>
+  <div id="open"><div><div class="a" id="oa"></div><div class="s" id="os">الشاشات الحقيقية للبرنامج · شركة وبيانات تجريبية</div></div></div>
+  <div id="rail">
+    <div class="kick"><span id="kn"></span><span class="ln" id="kl"></span><span class="of" id="kof"></span></div>
+    <div class="ttl" id="ttl"></div>
+    <div class="card"><h4>المشوار اللي بنتابعه</h4><div class="no" id="ano"></div><div class="meta" id="ameta"></div></div>
+    <ul id="steps"></ul>
+    <div id="stamp"><div class="sheen" id="sheen"></div><div class="v" id="sv"></div><div class="l" id="sl"></div></div>
+  </div>
+  <div id="cap"><i></i><span id="capt"></span></div>
+  <div id="end"><div><div class="a" id="ea"></div><div class="b" id="eb"></div><div class="c" id="ec"><i>✓</i><span id="ect"></span></div></div></div>
+  <div id="vig"></div><canvas id="grain" width="1048" height="1208"></canvas>
+  <div id="black"></div>
 </div>
 <script src="cuts/film1.cut.js"></script>
 <script src="composer.js"></script>

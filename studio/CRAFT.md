@@ -1,5 +1,10 @@
 # Craft notes
-- One real shoot per device (office 1280x800, phone 393x851); never share a browser, background tabs give no frames.
+- One real shoot per device, each in its own Chromium started with `--force-device-scale-factor` (office 1.5, phone 2).
+  Without that flag the screencast sends CSS-size frames; `cut.mjs` now refuses such a take.
+- The page cursor is hidden while shooting; the stage logs the hand's path and the composer draws cursor, click ripple and finger taps.
 - Everything on screen is proven by an API read-back; the composer only lays out, never invents numbers.
+- Camera: `cut.mjs` bakes one track per device (fx, fy, zoom): follow shots push in (office <= 1.4x, phone <= 1.16x) and glide between actions,
+  looks frame a box, everything else is the wide shot; gaussian smoothing (0.55 s) gives ease-in/out and a little anticipation.
+- Speed ramps: idle stretches (no event, no new frame) play up to 2.6x; readings after a proven result stay at 1x.
+- Render: 60 fps, lossless PNG frames, three parallel slices joined without re-encoding; master CRF 14; a two-pass copy (~27 MB) for chat.
 - One command: `node make.mjs` (add `--skip-shoot` to re-cut and re-render from the last take).
-- Still camera, <=3% push, one fade; stamps live in their own zone so they never cover the screen.

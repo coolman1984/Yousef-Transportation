@@ -7,7 +7,7 @@ const CURSOR = `(() => {
   const c = document.createElement('div');
   c.id = '__studio_cursor';
   c.innerHTML = '<svg width="26" height="30" viewBox="0 0 26 30"><path d="M2 2 L2 24 L8 18.5 L12.5 28 L16.5 26.2 L12 17 L20 17 Z" fill="#fff" stroke="#111" stroke-width="1.6" stroke-linejoin="round"/></svg><i></i>';
-  c.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;transform:translate(-100px,-100px);filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))';
+  c.style.cssText = 'position:fixed;left:0;top:0;z-index:2147483647;pointer-events:none;transform:translate(-100px,-100px);filter:drop-shadow(0 2px 3px rgba(0,0,0,.35))' + (window.__studioShowCursor ? '' : ';opacity:0');
   const ring = c.querySelector('i');
   ring.style.cssText = 'position:absolute;left:-14px;top:-14px;width:30px;height:30px;border-radius:50%;border:3px solid #f2a900;opacity:0;transform:scale(.4)';
   document.documentElement.appendChild(c);
@@ -56,8 +56,8 @@ const FIND = function (target, opts) {
 const ease = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
 
 export class Stage {
-  constructor(page, { name = 'page', speed = 1 } = {}) {
-    this.page = page; this.name = name; this.speed = speed;
+  constructor(page, { name = 'page', speed = 1, showCursor = false } = {}) {
+    this.page = page; this.name = name; this.speed = speed; this.showCursor = showCursor;
     this.pos = { x: page.width * 0.5, y: page.height * 0.62 };
     this.events = [];
   }
@@ -75,6 +75,22 @@ export class Stage {
   async ensureCursor() {
     await this.page.evaluate(CURSOR);
     await this.page.evaluate((x, y) => window.__studioCursor(x, y), this.pos.x, this.pos.y);
+    this.emit('cur', { x: this.pos.x, y: this.pos.y });
+  }
+
+  /** look(css, { pad, hold }) - tells the editor where the viewer should look (union of the matching boxes, CSS px); never scrolls */
+  async look(css, { pad = 16, zoom } = {}) {
+    const box = await this.page.evaluate((sel) => {
+      const els = [...document.querySelectorAll(sel)].filter((e) => { const r = e.getBoundingClientRect(); return r.width > 1 && r.height > 1; });
+      if (!els.length) return null;
+      let l = 1e9, t = 1e9, r = -1e9, b = -1e9;
+      for (const e of els) { const q = e.getBoundingClientRect(); l = Math.min(l, q.left); t = Math.min(t, q.top); r = Math.max(r, q.right); b = Math.max(b, q.bottom); }
+      l = Math.max(0, l); t = Math.max(0, t); r = Math.min(innerWidth, r); b = Math.min(innerHeight, b);
+      return { x: (l + r) / 2, y: (t + b) / 2, w: r - l, h: b - t };
+    }, css);
+    if (!box) return null;
+    this.emit('look', { target: css, x: box.x, y: box.y, w: box.w + 2 * pad, h: box.h + 2 * pad, zoom });
+    return box;
   }
 
   async find(target, opts = {}, timeout = 15000) {
@@ -84,18 +100,21 @@ export class Stage {
   async moveTo(x, y) {
     await this.ensureCursor();
     const from = { ...this.pos }, dist = Math.hypot(x - from.x, y - from.y);
-    const ms = Math.min(900, 260 + dist * 0.9) / this.speed, steps = Math.max(8, Math.round(ms / 16));
+    const ms = Math.min(900, 260 + dist * 0.9) / this.speed;
     // a gentle curve, not a straight robotic line
     const bend = Math.min(60, dist * 0.12), nx = -(y - from.y) / (dist || 1), ny = (x - from.x) / (dist || 1);
+    // time-based: a busy page drops steps instead of slowing the hand down
     const t0 = Date.now();
-    for (let i = 1; i <= steps; i++) {
-      const u = ease(i / steps), arc = Math.sin(Math.PI * (i / steps)) * bend;
+    for (;;) {
+      const lin = Math.min(1, (Date.now() - t0) / ms), u = ease(lin), arc = Math.sin(Math.PI * lin) * bend;
       const px = from.x + (x - from.x) * u + nx * arc, py = from.y + (y - from.y) * u + ny * arc;
-      await this.page.evaluate((a, b) => window.__studioCursor(a, b), px, py);
-      await this.page.mouse('mouseMoved', px, py);
-      const due = t0 + (ms * i) / steps - Date.now();
-      if (due > 0) await sleep(due);
+      if (this.showCursor) await this.page.evaluate((a, b) => window.__studioCursor(a, b), px, py);   // the film draws its own cursor from these samples
+      this.emit('cur', { x: Math.round(px * 10) / 10, y: Math.round(py * 10) / 10 });
+      if (lin >= 1) break;
+      await sleep(16);
     }
+    await this.page.evaluate((a, b) => window.__studioCursor(a, b), x, y);
+    await this.page.mouse('mouseMoved', x, y);
     this.pos = { x, y };
   }
 
@@ -128,9 +147,10 @@ export class Stage {
     this.emit('click', { target: field, x: box.x, y: box.y, w: box.w, h: box.h });
     await this.page.evaluate((c) => { const el = window.__studioTarget; el.focus(); if (c) { el.value = ''; el.dispatchEvent(new Event('input', { bubbles: true })); } }, clear);
     for (const ch of String(value)) {
+      const t0 = Date.now();
       await this.page.type(ch);
       this.emit('type', { ch });
-      await sleep((perChar * (0.7 + Math.random() * 0.6)) / this.speed);
+      await sleep(Math.max(0, (perChar * (0.7 + Math.random() * 0.6)) / this.speed - (Date.now() - t0)));
     }
     await this.page.evaluate(() => { const el = window.__studioTarget; el.dispatchEvent(new Event('change', { bubbles: true })); });
     const got = await this.page.evaluate(() => window.__studioTarget.value);

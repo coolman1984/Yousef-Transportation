@@ -10,7 +10,9 @@ import { mkdirSync } from 'node:fs';
 const out = new URL('./takes/_dryrun/', import.meta.url).pathname;
 mkdirSync(out, { recursive: true });
 const set = await buildSet({ root: new URL('./takes/_dryrun/set', import.meta.url).pathname });
-const browser = await Browser.launch({ args: ['--use-fake-ui-for-media-stream'] });
+// one browser per device: a background tab gets no animation frames, so the office and the phone each get their own window
+const browser = await Browser.launch({});
+const phoneBrowser = await Browser.launch({ args: ['--use-fake-ui-for-media-stream'] });
 const prefs = `try { localStorage.setItem('to.prefs', JSON.stringify({ lang: 'ar', welcomed: true, theme: 'daylight' })) } catch (e) {}`;
 let n = 0;
 const T0 = Date.now();
@@ -26,7 +28,7 @@ try {
   const link = await office.sendLink(os_, set, trip); await shot(op, 'link');
   console.log('trip', trip.no, 'link ok');
 
-  const pp = await browser.newPage({ width: 393, height: 851, scale: 2, mobile: true, initScripts: [set.clock.initScript(), fakeCameraScript(), `try { localStorage.setItem('to.lang','ar') } catch (e) {}`] });
+  const pp = await phoneBrowser.newPage({ width: 393, height: 851, scale: 2, mobile: true, initScripts: [set.clock.initScript(), fakeCameraScript(), `try { localStorage.setItem('to.lang','ar') } catch (e) {}`] });
   await pp.send('Emulation.setTimezoneOverride', { timezoneId: set.tz });
   set.clock.attach(pp);
   const ps = new Stage(pp, { name: 'phone' });
@@ -46,5 +48,6 @@ try {
   console.log('events', os_.events.length, ps.events.length);
 } finally {
   await browser.close();
+  await phoneBrowser.close();
   await set.stop();
 }

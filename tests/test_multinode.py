@@ -372,6 +372,10 @@ class T03_Cluster(Base):
         self.converged()
         ac.post('/api/devices/revoke', {'id': self.servers[2].node_id})
         wait_until(lambda: any(a['kind'] == 'revoked' for a in self.clients[2].get('/api/devices')['alerts']), 30, what='revocation seen')
+        # every other PC must know about the removal too, otherwise a peer that has not heard yet may still relay the change (timing on slow machines)
+        for i, c in enumerate(self.clients):
+            if i != 2:
+                wait_until(lambda c=c: any(n['name'] == 'pc2' and n['status'] == 'revoked' for n in c.get('/api/devices')['nodes']), 60, what=f'pc{i} knows pc2 was removed')
         self.clients[2].post('/api/commit', {'label': 'after revoke', 'ops': [area_op('RV2', 'After revoke')]})
         time.sleep(4)
         self.assertIsNone(get_area(self.ac, 'RV2'))

@@ -25,6 +25,8 @@ function waitLine(proc, re, what) {
     proc.on('exit', (c) => { clearTimeout(t); bad(new Error(what + ' exited ' + c + ': ' + buf.slice(-600))); });
   });
 }
+/** what a phone in Cairo sends: local time with its offset */
+const cairoIso = (d) => new Date(d.getTime() + 3 * 3600e3).toISOString().slice(0, 19) + '+03:00';
 const freePort = () => 20000 + Math.floor(Math.random() * 30000);
 
 /** a tiny real JPEG (grey square) for the off-camera drivers' photos */
@@ -94,7 +96,7 @@ export async function buildSet({ root }) {
   ];
   const at = async (hhmm) => { const target = Date.parse(`${STUDIO_DAY}T${hhmm}:00+03:00`); const delta = (target - clock.now().getTime()) / 1000; if (delta > 0) await clock.jump(delta); };
   const phone = async (token, type, data, dev) => {
-    const ev = { uuid: uuid(), v: 1, type, deviceId: dev, seq: 1, phoneAt: clock.now().toISOString(), queued: false, data };
+    const ev = { uuid: uuid(), v: 1, type, deviceId: dev, seq: 1, phoneAt: cairoIso(clock.now()), queued: false, data };
     const r = await fetch(`${gateway}/api/event/${token}`, { method: 'POST', body: JSON.stringify(ev), headers: { 'Content-Type': 'application/json' } });
     if (!r.ok) throw new Error('phone event ' + r.status);
     return ev;

@@ -13,7 +13,8 @@ const set = await buildSet({ root: new URL('./takes/_dryrun/set', import.meta.ur
 const browser = await Browser.launch({ args: ['--use-fake-ui-for-media-stream'] });
 const prefs = `try { localStorage.setItem('to.prefs', JSON.stringify({ lang: 'ar', welcomed: true, theme: 'daylight' })) } catch (e) {}`;
 let n = 0;
-const shot = async (p, name) => p.screenshot(`${out}/${String(++n).padStart(2, '0')}-${name}.png`);
+const T0 = Date.now();
+const shot = async (p, name) => { console.log(((Date.now() - T0) / 1000).toFixed(0) + 's', name); return p.screenshot(`${out}/${String(++n).padStart(2, '0')}-${name}.png`); };
 try {
   const op = await browser.newPage({ width: 1280, height: 800, scale: 1.5, initScripts: [set.clock.initScript(), prefs] });
   await op.send('Emulation.setTimezoneOverride', { timezoneId: set.tz });

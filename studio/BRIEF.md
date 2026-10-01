@@ -1,6 +1,6 @@
 # Film 1 – "أمر تشغيل واحد، من الطلب للتقرير" (One trip order, from request to report)
 
-> Status: **Phase 0 – waiting for the owner's OK** before shooting.
+> Status: Phase 0 done, Phase 1 (the stage) done and dry-run end to end in ~50 s with every proof passing. **Waiting for the owner's OK before shooting (Phase 2).**
 > The five input fields of the studio prompt were left empty, so these defaults are used (change any of them and the storyboard follows):
 
 | Input | Default used |
@@ -39,7 +39,8 @@
 - the exported workbook's sheet names and the trip's row (read back from the downloaded file)
 
 **Staged, and the film says so:**
-- *Studio clock:* the day and hour are fixed by the studio (Tuesday 6 Oct 2026, 09:30). The two-hour drive is skipped by moving the studio clock forward; a caption says "بعد ساعتين (الوقت مضغوط في الفيلم)".
+- *Studio clock:* the day and hour are fixed by the studio (Tuesday 6 Oct 2026, 09:30, Cairo). The office program, the mailbox and both browsers share it.
+- *The office checks the mailbox when the studio asks* (in real use it checks by itself every minute). The two-hour drive is skipped by moving the studio clock forward; a caption says "بعد ساعتين (الوقت مضغوط في الفيلم)".
 - *The odometer pictures* are drawn test images fed to the phone's camera, not a real dashboard (caption on the first photo).
 - *WhatsApp* is not filmed: the dispatcher copies the link; a caption says it is sent on WhatsApp.
 - *The company, people, cars and the September history* are invented sample data, loaded through the program's own Excel import before the film starts.
@@ -51,7 +52,8 @@
 
 One trip order follows the whole film: **requested by منى سامي (المشتريات), car ن ج ع 4821, driver كريم فؤاد, المصنع ← المطار ← المصنع**.
 Its card stays on screen in a corner; its chips fill in as each step is *proven*:
-`طلب` → `موافقة` → `لينك` → `بداية 48,210` → `نهاية 48,328` → `الورقة` → `أخضر · 118 كم` → `في تقرير الشهر`.
+`طلب` → `موافقة` → `لينك` → `بداية <قراءة>` → `نهاية <قراءة>` → `الورقة` → `أخضر · 118 كم` → `في تقرير الشهر`.
+The readings come from the sample history (the car's last September/October odometer + 4 km to the office), and are read back before the cut is written – never typed into the cut by hand.
 
 ## 4. Storyboard (≈ 120 s)
 
@@ -61,15 +63,15 @@ Its card stays on screen in a corner; its chips fill in as each step is *proven*
 | 0:06–0:22 | Trip orders list → New trip → fields filled by the visible cursor → Save. **Stamp:** the new trip number | The request is typed once, never again | chip `طلب ✓` + number |
 | 0:22–0:31 | Trip panel opens → Approve → badge "موافق" with name and time | Approval is recorded, not a signature hunt | chip `موافقة ✓` |
 | 0:31–0:41 | Copy link dialog → caption "بيتبعت للسائق على واتساب" (the token part of the link is blurred) | One link per trip, for that trip only | chip `لينك ✓`; the window leaves as the phone enters |
-| 0:41–1:02 | **Phone frame** (driver page, Arabic): trip card → Start → camera shows the drawn odometer → capture → reading 48210 → Start → ✓ then ✓✓. Caption on the photo: "صورة عداد تجريبية". **Stamp:** `48,210 · 09:41` | Proof at the source: photo + reading + time from the car | chip `بداية 48,210` |
+| 0:41–1:02 | **Phone frame** (driver page, Arabic): trip card → Start → camera shows the drawn odometer → capture → reading → Start → ✓ then ✓✓. Caption on the photo: "صورة عداد تجريبية". **Stamp:** `<start reading> · 09:30` | Proof at the source: photo + reading + time from the car | chip `بداية <start>` |
 | 1:02–1:10 | Office **Today board**: the trip card moves to "في الطريق" (live elapsed time) | The office knows without calling | — |
-| 1:10–1:28 | Caption "بعد ساعتين (الوقت مضغوط)" → phone: End → photo → 48328 → route → End → Paper photo → Done ✓✓ | The end and the signed paper, proven | chips `نهاية 48,328`, `الورقة ✓` |
+| 1:10–1:28 | Caption "بعد ساعتين (الوقت مضغوط)" → phone: End → photo → end reading → route → End → Paper photo → Done ✓✓ | The end and the signed paper, proven | chips `نهاية <end>`, `الورقة ✓` |
 | 1:28–1:42 | Office trip panel: green trust, km **118**, 2 h 05, three photos. **Stamp:** `118 كم · أخضر` (placed beside, not over, the details) | A trip that needs no checking | chip `أخضر · 118 كم` |
 | 1:42–1:55 | Reports page for October: totals fill in; then Excel → Export → "زي اللي عندك دلوقتي" → file saved; **badge:** "نفس الشيت ونفس المعادلات" with the row read back | Month end is a click, in the layout finance already uses | chip `في تقرير الشهر ✓` |
 | 1:55–2:02 | End card: **"جرّبه على أسبوع واحد من مشاويرك"** + "الفيلم بشركة وبيانات تجريبية" (one fade to end) | The one action | — |
 
 ### Self-check of the storyboard
 - Chronology = the real process order (table §1), nothing out of order; the off-camera pull from the mailbox happens between phone beats and is shown by the board moving.
-- Numbers: 48,328 − 48,210 = 118 km ✔; 09:41 → 11:46 = 2 h 05 ✔ (only after read-back do these go into the cut).
+- Numbers: end − start = 118 km ✔ (dry run: 49,731 → 49,849); 09:30 → 11:35 = 2 h 05 ✔ (dry run read-back: 2.09 h). Only read-back values go into the cut.
 - Compositions vary: office window (wide) · dialog close-up hold · phone frame centred · board (moving columns) · panel with stamp at the side · report counters · end card.
 - No beat claims a saving; every stamp is a read-back figure.

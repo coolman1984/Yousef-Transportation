@@ -21,16 +21,24 @@ for day in range(0, 35):                       # 1 September .. 5 October (the s
     d = dt.date(2026, 9, 1) + dt.timedelta(days=day)
     if d.weekday() in (4,):          # Friday off
         continue
+    day_trips = []
     for _ in range(rnd.randint(2, 4)):
         car = rnd.choice(CARS[:3])
         route, km = rnd.choice(ROUTES)
         km += rnd.randint(-6, 6)
         req, dep = rnd.choice(PEOPLE)
         st = dt.time(rnd.randint(7, 12), rnd.choice([0, 10, 20, 30, 40, 50]))
-        en = (dt.datetime.combine(d, st) + dt.timedelta(minutes=int(km * 1.4) + rnd.randint(20, 90))).time()
+        day_trips.append((st, car, route, km, req, dep))
+    busy = {}
+    for st, car, route, km, req, dep in sorted(day_trips):     # odometers follow the order of the day, like a real car
+        start = dt.datetime.combine(d, st)
+        if busy.get(car) and start < busy[car]:
+            start = busy[car] + dt.timedelta(minutes=20)
+        en_dt = start + dt.timedelta(minutes=int(km * 1.4) + rnd.randint(20, 90))
+        busy[car] = en_dt
         s, e = odo[car], odo[car] + km
         odo[car] = e + rnd.randint(0, 3)
-        rows.append([d, rnd.choice(DRIVERS), car, req, req, 'سيارات الإدارة', dep, route, None, s, e, w.Formula('+K{r}-J{r}'), None, st, en, None])
+        rows.append([d, rnd.choice(DRIVERS), car, req, req, 'سيارات الإدارة', dep, route, None, s, e, None, None, start.time(), en_dt.time(), None])
 data = [excel_io.TODAY_HEADERS]
 for i, r in enumerate(rows, 2):
     r[11] = w.Formula(f'+K{i}-J{i}', r[10] - r[9])

@@ -38,3 +38,10 @@ export async function render(o) {
   await done;
   await browser.close();
 }
+
+/** puts a soundtrack under a finished picture (no re-encode of the picture): loudness chain limiter -> loudnorm -> limiter, AAC 256k */
+export function mux(video, wav, out) {
+  const r = spawnSync(FFMPEG, ['-y', '-hide_banner', '-loglevel', 'error', '-i', video, '-i', wav, '-map', '0:v', '-map', '1:a', '-c:v', 'copy',
+    '-af', 'alimiter=limit=0.89:level=false,loudnorm=I=-16:TP=-1.5:LRA=11:linear=false,alimiter=limit=0.84:level=false', '-ar', '48000', '-c:a', 'aac', '-b:a', '256k', '-shortest', '-movflags', '+faststart', out], { encoding: 'utf8' });
+  if (r.status !== 0) throw new Error('mux failed: ' + r.stderr);
+}

@@ -26,11 +26,11 @@ body { font-family: 'Plex Arabic', sans-serif; color: var(--ink); }
 .win .view { position: relative; width: 1340px; height: 837.5px; overflow: hidden; background: #e8edf4; }
 .win .view img { position: absolute; inset: 0; width: 100%; height: 100%; transform-origin: 50% 50%; }
 /* the phone */
-.phone { position: absolute; top: 120px; left: 520px; width: 430px; height: 905px; border-radius: 58px; background: #05070b; padding: 15px;
+.phone { position: absolute; top: 120px; left: 520px; width: 430px; height: 905px; border-radius: 58px; background: #05070b; padding: 30px 15px 15px;
   box-shadow: 0 40px 90px rgba(0,0,0,.6), 0 0 0 2px #2a3140, inset 0 0 0 2px #11151d; will-change: transform, opacity; }
 .phone .screen { position: relative; width: 100%; height: 100%; border-radius: 44px; overflow: hidden; background: #f4f6fb; }
 .phone .screen img { position: absolute; inset: 0; width: 100%; height: 100%; }
-.phone .notch { position: absolute; top: 14px; left: 50%; width: 110px; height: 28px; margin-left: -55px; border-radius: 20px; background: #05070b; z-index: 3; }
+.phone .notch { position: absolute; top: -20px; left: 50%; width: 96px; height: 12px; margin-left: -48px; border-radius: 10px; background: #1a1f29; z-index: 3; }
 .side { position: absolute; top: 330px; width: 380px; font-size: 30px; line-height: 1.55; color: var(--ink); will-change: transform, opacity; }
 .side b { color: var(--amber); display: block; font-size: 20px; letter-spacing: .02em; margin-bottom: 8px; }
 /* titles */
@@ -50,6 +50,7 @@ body { font-family: 'Plex Arabic', sans-serif; color: var(--ink); }
 .actor li { display: flex; align-items: center; gap: 12px; font-size: 21px; color: rgba(243,246,251,.42); }
 .actor li i { width: 28px; height: 28px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); display: grid; place-items: center; font-style: normal; font-size: 16px; flex: none; }
 .actor li.on { color: var(--ink); }
+.actor li:not(.on) em { visibility: hidden; }
 .actor li.on i { background: var(--ok); border-color: var(--ok); color: #062b1a; font-weight: 700; }
 .actor li em { font-style: normal; margin-inline-start: auto; color: var(--amber); font-weight: 700; direction: ltr; }
 /* stamps: below the card, never over the program */

@@ -111,7 +111,7 @@ export async function buildSet({ root }) {
       requesterId: id('people', 'name', m.req), departmentId: id('departments', 'name', m.dep), destination: m.dest });
     await api.post('/api/trips/approve', { id: t.id, yes: true });
     const link = await api.post('/api/trips/link', { id: t.id, sent: true });
-    m.trip = t; m.token = link.url.split('/t/')[1]; m.dev = 'dev-' + randomBytes(8).toString('hex'); m.startKm = lastOdo[m.plate] + 3;
+    m.trip = t; m.token = link.url.split('/t/')[1]; m.dev = 'dev-' + randomBytes(8).toString('hex'); m.startKm = lastOdo[m.plate];
     timeline.push({ t: m.start, m, act: 'start' });
     if (m.end) timeline.push({ t: m.end, m, act: 'end' });
   }

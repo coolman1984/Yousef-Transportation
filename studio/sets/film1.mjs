@@ -76,6 +76,10 @@ export async function buildSet({ root }) {
   const veh = st.vehicles.find((v) => v.plate === ACTOR.plate);
   await api.post('/api/commit', { label: 'studio: car types', ops: st.vehicles.map((v) => ({ e: 'vehicles', id: v.id, op: 'put', ver: v.ver, row: { ...v, ver: undefined, type: 'سيدان', categoryId: id('tripCategories', 'name', ACTOR.category) } })) });
 
+  if (!st.vehicles.some((v) => v.plate === 'ه د ب 7045')) {
+    await api.post('/api/commit', { label: 'studio: fourth car', ops: [put('vehicles', 'veh_4', { plate: 'ه د ب 7045', type: 'سيدان', active: true, ownership: 'own', categoryId: id('tripCategories', 'name', ACTOR.category) })] });
+  }
+
   // ---- the mailbox connected (the same setup code an administrator pastes)
   const code = Buffer.from(JSON.stringify({ v: 1, u: gateway, o: secret, l: linkSecret })).toString('base64url');
   await api.post('/api/gateway/code', { code });

@@ -13,7 +13,14 @@ export async function login(page, set) {
   await page.waitFor(() => document.querySelector('#app-shell') && window.TO && TO.data && TO.data.state, { what: 'the office to open' });
 }
 
+export async function closePanels(stage) {
+  while (await stage.page.evaluate(() => !!document.querySelector('.drawer [data-pclose]'))) {
+    await stage.click('css:.drawer:last-of-type [data-pclose]', { expect: () => !document.querySelector('.drawer.on') || document.querySelectorAll('.drawer').length === 0, settle: 350 });
+  }
+}
+
 export async function goPage(stage, page) {
+  await closePanels(stage);
   await stage.click(nav(page), { expect: `location.hash.startsWith('#/${page}') && !document.querySelector('#view .skeleton')` });
 }
 

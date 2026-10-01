@@ -14,3 +14,8 @@ dist/
 build/
 .DS_Store
 server/_assets.py
+
+# film studio: takes, frames and videos are never committed
+studio/takes/
+studio/out/
+*.mp4

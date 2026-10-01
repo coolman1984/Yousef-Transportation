@@ -14,8 +14,9 @@ export async function login(page, set) {
 }
 
 export async function closePanels(stage) {
-  while (await stage.page.evaluate(() => !!document.querySelector('.drawer [data-pclose]'))) {
-    await stage.click('css:.drawer:last-of-type [data-pclose]', { expect: () => !document.querySelector('.drawer.on') || document.querySelectorAll('.drawer').length === 0, settle: 350 });
+  for (let i = 0; i < 4 && await stage.page.evaluate(() => !!document.querySelector('.drawer.on')); i++) {
+    const n = await stage.page.evaluate(() => document.querySelectorAll('.drawer.on').length);
+    await stage.click('css:.drawer.on [data-pclose]', { expect: `document.querySelectorAll('.drawer.on').length < ${n}`, settle: 350 });
   }
 }
 

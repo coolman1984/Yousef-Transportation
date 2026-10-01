@@ -7,6 +7,7 @@ import datetime as dt
 import re
 
 import docx_read
+import formats
 import docx_write as dw
 import domain
 import excel_io
@@ -139,11 +140,11 @@ def parse_km(s):
     return int(m.group(0).replace(',', '')) if m else None
 
 
-def parse_forms(data):
+def parse_forms(data, name=''):
     """docx bytes -> [{field: text}] one record per form found (a file may hold many forms, one after the other)."""
     try:
-        d = docx_read.read(data)
-    except docx_read.DocxError as e:
+        d = formats.read_document(data, name)
+    except formats.FormatError as e:
         raise WordError(str(e))
     records, cur = [], {}
     for table in d['tables']:
@@ -194,7 +195,7 @@ def preview(user, data, state, category, filename=''):
     category = domain.norm_text(category)
     if not category:
         raise WordError('Choose the trip category these forms belong to.')
-    rows = rows_from_forms(parse_forms(data), category)
+    rows = rows_from_forms(parse_forms(data, filename), category)
     p = excel_io.plan(rows, state, filename)
     p['source'] = 'word'
     p['sheets'] = [{'sheet': category, 'used': True, 'rows': len(rows)}]

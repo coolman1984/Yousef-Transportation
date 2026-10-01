@@ -18,6 +18,7 @@ import uuid
 import domain
 import xlsx_read
 import xlsx_write as w
+import formats
 
 # --------------------------------------------------------------------------- layout of the workbook (measured from the real file)
 TODAY_HEADERS = ['Date', 'Driver Name', 'Car Plate', 'Requester', 'Employee Name', 'Trip Category', 'Depatment', 'Destination', 'Column1',
@@ -144,11 +145,11 @@ def _check_row(row):
         wa.append(('night', 'The trip ends after midnight; the end time is taken as the next day.'))
 
 
-def read_workbook(data):
-    """bytes -> (rows, sheet report). Raises ImportError_ with a person-readable message."""
+def read_workbook(data, name=''):
+    """bytes -> (rows, sheet report). Raises ImportError_ with a person-readable message. Any common spreadsheet type (see formats.py)."""
     try:
-        wb = xlsx_read.read(data)
-    except xlsx_read.XlsxError as e:
+        wb = formats.read_workbook(data, name)
+    except formats.FormatError as e:
         raise ImportError_(str(e))
     rows, report = [], []
     for sh in wb.sheets:
@@ -342,7 +343,7 @@ def plan(rows, state, filename=''):
 
 
 def make_preview(user, data, state, filename=''):
-    rows, report = read_workbook(data)
+    rows, report = read_workbook(data, filename)
     p = plan(rows, state, filename)
     p['sheets'] = report
     return store_preview(user, p)

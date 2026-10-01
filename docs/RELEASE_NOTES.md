@@ -1,4 +1,13 @@
-# Trip Orders 1.0.0
+# Trip Orders 1.0.1
+
+## Fixed
+- **Welcome slides** were blank after the first slide in Arabic (they slid the wrong way). Fixed, with a test for both languages.
+- **Import now reads many more file types**, recognised by what is inside the file, not by its name:
+  Excel `.xlsx .xlsm .xltx .xltm`, old Excel `.xls`, `.ods`, `.csv/.tsv/.txt` (any common separator, UTF-8, UTF-16 or Arabic Windows code page), web-page style `.xls`, Excel 2003 XML;
+  Word `.docx .docm .dotx .dotm`, old Word `.doc`, `.odt`, `.rtf`, web-page style `.doc`.
+- Files locked by a **company document-security (DRM) system** or a **password**, PDFs and pictures now get a plain message that says what to do (the program never tries to get around such protection).
+
+## 1.0.0
 
 أول إصدار كامل / First complete release.
 

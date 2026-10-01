@@ -425,7 +425,7 @@
     'imp.pick': 'Choose the file to import',
     'imp.pick.sub': 'An Excel workbook of trips, or Word trip order forms that were filled in. Nothing is saved until you confirm.',
     'imp.drop': 'Click to choose a file, or drop it here',
-    'imp.drop.types': 'Excel (.xlsx) or Word (.docx)',
+    'imp.drop.types': 'Excel (.xlsx .xlsm .xls .ods .csv) or Word (.docx .doc .odt .rtf)',
     'imp.cat': 'Which trip category are these forms?',
     'imp.cat.help': 'Word forms do not say it. Pick or type one, for example "Extra", then press Enter.',
     'imp.k.rows': 'Rows in the file',
@@ -491,8 +491,8 @@
     'imp.al.no_times': '{n} rows have no start/end time, so overtime cannot be worked out for them.',
     'imp.al.no_km': '{n} rows have no odometer readings.',
     'imp.al.billable': '{n} trips have "Misr car KM" different from the odometer difference.',
-    'imp.e.notxlsx': 'This is not an Excel (.xlsx) or Word (.docx) file.',
-    'imp.e.notxlsx.fix': 'Open it in Excel, choose Save As, and pick "Excel Workbook (.xlsx)".',
+    'imp.e.notxlsx': 'This file type cannot be read.',
+    'imp.e.notxlsx.fix': 'Use an Excel (.xlsx .xlsm .xls .ods .csv) or Word (.docx .doc .odt .rtf) file.',
     'imp.e.notdocx': 'This is not a Word (.docx) file.',
     'imp.e.notdocx.fix': 'Old .doc files must be saved again as .docx from Word.',
     'imp.e.old': 'Old .xls / .doc files are not supported. Save the file again as .xlsx / .docx.',
@@ -536,7 +536,7 @@
     'imp.guide': 'Questions and answers',
     'imp.errors': 'If you see an error',
     'imp.g1.q': 'Which files can I import?',
-    'imp.g1.a': 'Excel workbooks (.xlsx) with the trip columns, and Word (.docx) files with filled trip order forms. Old .xls and .doc files must be saved again in the new format.',
+    'imp.g1.a': 'Excel: .xlsx .xlsm .xltx .xls (old) .ods .csv .tsv and web-page style .xls. Word: .docx .docm .dotx .doc (old) .odt .rtf and web-page style .doc. The program looks at what is inside the file, not its name. A file locked by your company\'s document-security system, or by a password, cannot be read by any program until you save an open copy.',
     'imp.g2.q': 'Must the columns be exactly like my sheet?',
     'imp.g2.a': 'The header row is found by its names (Date, Driver Name, Car Plate, Requester, Destination, Strat KM, End KM, Misr car KM, Start, End). Extra columns are ignored, and the order does not matter. Totals rows are skipped.',
     'imp.g3.q': 'Is anything saved when I choose the file?',
@@ -671,6 +671,18 @@
     'rp.all': 'All time',
     'rp.slide.month': 'Trips: {m}',
     'rp.slide.trust': 'How trustworthy is the month?',
-    'rp.anom.n': 'trips to look at'
+    'rp.anom.n': 'trips to look at',
+
+    /* More file types */
+    'imp.e.drm': 'This file is locked by your company\'s document-security system, so no other program can open it.',
+    'imp.e.drm.fix': 'Open it on a PC where that security program works, use Save As to make a new copy (.xlsx or .docx), or copy the cells into a new blank file, or export as .csv. Then choose that copy.',
+    'imp.e.pdf': 'This is a PDF, which cannot be read as a table.',
+    'imp.e.picture': 'This is a picture, not a file with data.',
+    'imp.e.unknown': 'This file type is not recognised.',
+    'imp.e.wordgiven': 'This is a Word document, not a spreadsheet.',
+    'imp.e.sheetgiven': 'This is a spreadsheet, not a Word document.',
+    'imp.e.xlsb': 'This is an Excel Binary Workbook (.xlsb). Open it in Excel and Save As .xlsx.',
+    'imp.e.oldoffice': 'This is a very old Office file. Open it in Excel/Word and Save As .xlsx / .docx.',
+    'imp.e.notable': 'No table with data was found in this file.'
   };
 })();

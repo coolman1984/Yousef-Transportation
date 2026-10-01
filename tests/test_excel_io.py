@@ -69,7 +69,7 @@ class ReadAndPlanTest(unittest.TestCase):
 
 class RefusalTest(unittest.TestCase):
     def test_messages(self):
-        for data, part in ((b'hello', 'empty'), (b'x' * 500, 'not an excel'), (w.build([w.Sheet('A', [['a', 'b'], [1, 2]])]), 'no sheet with trip columns'),
+        for data, part in ((b'', 'empty'), (b'\x00\x01\x02' * 300, 'not recognised'), (w.build([w.Sheet('A', [['a', 'b'], [1, 2]])]), 'no sheet with trip columns'),
                            (w.build([w.Sheet('A', [['Date', 'Driver Name', 'Car Plate']])]), 'no trips')):
             with self.assertRaises(X.ImportError_) as e:
                 X.read_workbook(data)

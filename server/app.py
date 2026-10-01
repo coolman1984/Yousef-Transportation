@@ -31,6 +31,7 @@ import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 import excel_io  # noqa: E402
+import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
@@ -762,6 +763,21 @@ class Handler(BaseHTTPRequestHandler):
             res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops')), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
+        if p == '/api/import/preview':
+            self.need('excel.import')
+            self.need_all_scopes()
+            data, name = self.body(30 * 1048576), qs.get('name', '')[:120]
+            try:
+                kind = formats.sniff(data, name)
+                if kind in formats.WORD_KINDS:
+                    if not qs.get('category', '').strip():
+                        return self.send(200, {'needCategory': True, 'kind': kind})
+                    pid, plan = word_io.preview(self.user, data, STORE.state(), qs.get('category', ''), name)
+                else:
+                    pid, plan = excel_io.make_preview(self.user, data, STORE.state(), name)
+                return self.send(200, {'id': pid, **plan})
+            except (word_io.WordError, excel_io.ImportError_) as e:
+                raise BadRequest(str(e))
         if p == '/api/word/preview':
             self.need('excel.import')
             self.need_all_scopes()

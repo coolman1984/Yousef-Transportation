@@ -19,9 +19,9 @@
   function alertText(a) { var k = 'imp.al.' + a.code; return TO.has(k) ? TO.t(k, { n: a.n }) : TO.esc(a.text); }
   function errText(e) {
     var m = (e && e.message) || '';
-    var map = [['not a Word', 'imp.e.notdocx'], ['not an Excel', 'imp.e.notxlsx'], ['empty', 'imp.e.empty'], ['damaged', 'imp.e.damaged'], ['too large', 'imp.e.big'],
+    var map = [['empty', 'imp.e.empty'], ['damaged', 'imp.e.damaged'], ['too large', 'imp.e.big'],
       ['No sheet with trip columns', 'imp.e.nocols'], ['no trips in them', 'imp.e.notrips'], ['expired', 'imp.e.expired'], ['nothing to import', 'imp.e.nothing'],
-      ['No trip order form', 'imp.e.noform'], ['Choose the trip category', 'imp.e.cat'], ['password', 'imp.e.locked']];
+      ['No trip order form', 'imp.e.noform'], ['document-security', 'imp.e.drm'], ['is a PDF', 'imp.e.pdf'], ['is a picture', 'imp.e.picture'], ['not recognised', 'imp.e.unknown'], ['Word document, not a spreadsheet', 'imp.e.wordgiven'], ['spreadsheet, not a Word', 'imp.e.sheetgiven'], ['Binary Workbook', 'imp.e.xlsb'], ['very old Office', 'imp.e.oldoffice'], ['No table with data', 'imp.e.notable'], ['Choose the trip category', 'imp.e.cat'], ['password', 'imp.e.locked']];
     for (var i = 0; i < map.length; i++) if (m.indexOf(map[i][0]) >= 0) return TO.t(map[i][1]);
     return m ? TO.esc(m) : TO.esc(TO.t('common.error'));
   }
@@ -46,7 +46,7 @@
     return '<section class="card"><header><h3>' + TO.icon('upload') + ' ' + TO.esc(TO.t('imp.pick')) + '</h3></header>' +
       '<p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('imp.pick.sub')) + '</p>' +
       '<label class="dropzone" id="dz" for="imp-file" tabindex="0"><span class="art">' + TO.icon('sheet', 'lg') + '</span><b>' + TO.esc(TO.t('imp.drop')) + '</b><span class="muted">' + TO.esc(TO.t('imp.drop.types')) + '</span></label>' +
-      '<input type="file" id="imp-file" accept=".xlsx,.docx" hidden>' +
+      '<input type="file" id="imp-file" hidden>' +
       '<div class="field" id="cat-field" hidden style="margin-top:1rem"><label for="imp-cat">' + TO.esc(TO.t('imp.cat')) + '</label><input class="input" id="imp-cat" list="dl-cat" autocomplete="off" value="' + TO.esc(S.category) + '"><datalist id="dl-cat">' + cats + '</datalist><span class="help">' + TO.esc(TO.t('imp.cat.help')) + '</span></div>' +
       (S.busy ? '<div class="skeleton" style="height:3rem;margin-top:1rem"></div>' : '') +
       (S.err ? '<div class="tip bad" role="alert" style="margin-top:1rem">' + TO.icon('alert') + '<span>' + S.err + '</span></div>' : '') + '</section>';
@@ -167,7 +167,7 @@
   function guideTab() {
     var items = [];
     for (var i = 1; i <= G; i++) items.push('<details><summary>' + TO.esc(TO.t(GK + i + '.q')) + '</summary><p>' + TO.esc(TO.t(GK + i + '.a')) + '</p></details>');
-    var errs = ['notxlsx', 'notdocx', 'nocols', 'expired', 'nothing', 'big'].map(function (k) {
+    var errs = ['drm', 'notxlsx', 'nocols', 'expired', 'nothing', 'big'].map(function (k) {
       return '<div class="errline"><b>' + TO.esc(TO.t('imp.e.' + k)) + '</b><span class="muted">' + TO.esc(TO.t('imp.e.' + k + '.fix')) + '</span></div>'; }).join('');
     return '<div class="stack"><section class="card"><header><h3>' + TO.icon('help') + ' ' + TO.esc(TO.t('imp.guide')) + '</h3></header><div class="faq">' + items.join('') + '</div></section>' +
       '<section class="card"><header><h3>' + TO.icon('alert') + ' ' + TO.esc(TO.t('imp.errors')) + '</h3></header><div class="stack" style="gap:.8rem">' + errs + '</div></section></div>';
@@ -184,34 +184,37 @@
   }
 
   function upload(file, root) {
-    var isDoc = /\.docx$/i.test(file.name), isXl = /\.xlsx$/i.test(file.name);
-    if (!isDoc && !isXl) { S.err = TO.t(/\.(doc|xls)$/i.test(file.name) ? 'imp.e.old' : 'imp.e.notxlsx'); paint(root); return; }
-    if (isDoc) {
-      S.category = (root.querySelector('#imp-cat') || {}).value || S.category;
-      if (!S.category.trim()) { S.err = TO.t('imp.e.cat'); paint(root); var cf = root.querySelector('#cat-field'); if (cf) { cf.hidden = false; cf.querySelector('input').focus(); } S.pendingFile = file; return; }
-    }
-    S.busy = true; S.err = null; paint(root);
+    var cat = (root.querySelector('#imp-cat') || {}).value;
+    if (cat) S.category = cat.trim();
+    S.busy = true; S.err = null; S.pendingFile = null; paint(root);
     file.arrayBuffer().then(function (buf) {
-      var url = isDoc ? '/api/word/preview?category=' + encodeURIComponent(S.category) + '&name=' + encodeURIComponent(file.name) : '/api/excel/preview?name=' + encodeURIComponent(file.name);
+      var url = '/api/import/preview?name=' + encodeURIComponent(file.name) + (S.category ? '&category=' + encodeURIComponent(S.category) : '');
       return TO.api('POST', url, buf, { raw: true });
-    }).then(function (pv) { S.pv = pv; S.busy = false; S.skip = {}; S.merge = {}; S.filter = 'all'; S.shown = 150; paint(root); window.scrollTo(0, 0); },
-      function (e) { S.busy = false; S.err = errText(e); paint(root); });
+    }).then(function (pv) {
+      S.busy = false;
+      if (pv.needCategory) {          // a Word file: the forms do not say which kind of trips they are
+        S.pendingFile = file; paint(root);
+        var cf = root.querySelector('#cat-field'); if (cf) { cf.hidden = false; cf.querySelector('input').focus(); }
+        return;
+      }
+      S.pv = pv; S.skip = {}; S.merge = {}; S.filter = 'all'; S.shown = 150; paint(root); window.scrollTo(0, 0);
+    }, function (e) { S.busy = false; S.err = errText(e); paint(root); });
   }
 
   function wire(root) {
     var body = root.querySelector('#xl-body');
     var inp = body.querySelector('#imp-file'), dz = body.querySelector('#dz');
-    if (inp) {
-      inp.addEventListener('change', function () { if (inp.files[0]) { var f = inp.files[0]; inp.value = ''; S.pendingFile = null; if (/\.docx$/i.test(f.name)) { var cf = body.querySelector('#cat-field'); cf.hidden = false; S.pendingFile = f; if (S.category) upload(f, root); else cf.querySelector('input').focus(); } else upload(f, root); } });
-      ['dragover', 'dragenter'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('over'); }); });
-      ['dragleave', 'drop'].forEach(function (ev) { dz.addEventListener(ev, function () { dz.classList.remove('over'); }); });
-      dz.addEventListener('drop', function (e) { e.preventDefault(); var f = e.dataTransfer.files[0]; if (f) { if (/\.docx$/i.test(f.name)) { body.querySelector('#cat-field').hidden = false; S.pendingFile = f; if (S.category) upload(f, root); } else upload(f, root); } });
-      dz.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
-      var cat = body.querySelector('#imp-cat');
-      cat.addEventListener('keydown', function (e) { if (e.key === 'Enter' && S.pendingFile && cat.value.trim()) { S.category = cat.value.trim(); upload(S.pendingFile, root); } });
-      cat.addEventListener('change', function () { S.category = cat.value.trim(); if (S.pendingFile && S.category) upload(S.pendingFile, root); });
-      if (S.pendingFile) body.querySelector('#cat-field').hidden = false;
-    }
+    if (!inp) return;
+    inp.addEventListener('change', function () { var f = inp.files[0]; inp.value = ''; if (f) upload(f, root); });
+    ['dragover', 'dragenter'].forEach(function (ev) { dz.addEventListener(ev, function (e) { e.preventDefault(); dz.classList.add('over'); }); });
+    ['dragleave', 'drop'].forEach(function (ev) { dz.addEventListener(ev, function () { dz.classList.remove('over'); }); });
+    dz.addEventListener('drop', function (e) { e.preventDefault(); var f = e.dataTransfer.files[0]; if (f) upload(f, root); });
+    dz.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); inp.click(); } });
+    var cat = body.querySelector('#imp-cat');
+    var again = function () { S.category = cat.value.trim(); if (S.pendingFile && S.category) upload(S.pendingFile, root); };
+    cat.addEventListener('keydown', function (e) { if (e.key === 'Enter') { e.preventDefault(); again(); } });
+    cat.addEventListener('change', again);
+    if (S.pendingFile) body.querySelector('#cat-field').hidden = false;
   }
 
   TO.views.excel = {

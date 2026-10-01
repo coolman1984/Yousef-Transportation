@@ -668,6 +668,7 @@
     'rp.ovt': 'Overtime per driver',
     'rp.anom': 'Worth a look',
     'rp.why': 'Why',
+    'rp.present': 'Presentation mode',
     'rp.all': 'All time',
     'rp.slide.month': 'Trips: {m}',
     'rp.slide.trust': 'How trustworthy is the month?',

@@ -101,7 +101,7 @@
       if (!S) S = { ym: U.today().slice(0, 7), group: 'byVehicle', data: null };
       return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('nav.reports')) + '</h1><p>' + TO.esc(TO.t('page.reports.d')) + '</p></div>' +
         '<div class="row wrap" style="gap:.6rem"><input class="input" type="month" id="rp-ym" value="' + TO.esc(S.ym) + '" aria-label="' + TO.esc(TO.t('exp2.month')) + '" style="width:auto">' +
-        '<button class="btn" data-all>' + TO.esc(TO.t('rp.all')) + '</button><button class="btn primary" data-present>' + TO.icon('present', 'sm') + TO.esc(TO.t('act.slides')) + '</button></div></div><div id="rp-body"></div>';
+        '<button class="btn" data-all>' + TO.esc(TO.t('rp.all')) + '</button><button class="btn primary" data-present>' + TO.icon('present', 'sm') + TO.esc(TO.t('rp.present')) + '</button></div></div><div id="rp-body"></div>';
     },
     mount: function (root) {
       fetchData(root);

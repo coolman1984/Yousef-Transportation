@@ -77,7 +77,9 @@ export async function board(stage, set, trip, col) {
 
 export async function openTrip(stage, set, trip) {
   await goPage(stage, 'trips');
-  await stage.click(trip.no, { expect: () => document.querySelector('.drawer [data-trip]') });
+  // the office screen refreshes itself every few seconds; the person opens the trip once it shows the driver's result
+  await stage.page.waitFor((id) => TO.data.trust(id).trust === 'green' && !document.querySelector('.drawer.on'), { what: 'the office screen to show the result', timeout: 30000 }, trip.id);
+  await stage.click(trip.no, { expect: (id) => document.querySelector('.drawer [data-trip] .trust.green') });
   const st = await set.api.get('/api/state'), ins = (await set.api.get('/api/insights'))[trip.id];
   const t = st.trips.find((x) => x.id === trip.id);
   const photos = st.tripPhotos.filter((p) => p.tripId === trip.id).map((p) => p.kind).sort();

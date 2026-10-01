@@ -17,8 +17,8 @@ ROUTES = [('المصنع - المطار - المصنع', 118), ('المصنع - 
           ('المصنع - المكتب الرئيسي - المصنع', 72)]
 odo = {c: 47200 + i * 9100 for i, c in enumerate(CARS)}
 rows = []
-for day in range(1, 31):
-    d = dt.date(2026, 9, day)
+for day in range(0, 35):                       # 1 September .. 5 October (the studio day is 6 October)
+    d = dt.date(2026, 9, 1) + dt.timedelta(days=day)
     if d.weekday() in (4,):          # Friday off
         continue
     for _ in range(rnd.randint(2, 4)):

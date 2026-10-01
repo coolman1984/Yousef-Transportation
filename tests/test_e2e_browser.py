@@ -275,9 +275,14 @@ class ExcelPageTest(BrowserBase):
         self.assertTrue(pg.locator('[data-commit]').is_disabled())
         # wrong file type gives a plain message
         pg.click('[data-cancel]')
-        pg.set_input_files('#imp-file', files=[{'name': 'x.txt', 'mimeType': 'text/plain', 'buffer': b'hello'}])
+        pg.set_input_files('#imp-file', files=[{'name': 'trips.xlsx', 'mimeType': 'application/octet-stream', 'buffer': b'<## NASCA DRM FILE - VER1.00 ##>' + bytes(range(256)) * 8}])
         pg.wait_for_selector('#xl-body .tip.bad')
-        self.assertIn('not an Excel', pg.inner_text('#xl-body'))
+        self.assertIn('document-security', pg.inner_text('#xl-body'))
+        # a csv with Arabic text is read too (and shows the review)
+        csv = ('Date,Driver Name,Car Plate,Strat KM,End KM\n2026-10-01,علي حسن,س ع د 555,100,180\n').encode('utf-8-sig')
+        pg.set_input_files('#imp-file', files=[{'name': 'x.csv', 'mimeType': 'text/csv', 'buffer': csv}])
+        pg.wait_for_selector('[data-commit]')
+        pg.click('[data-cancel]')
         # export tab, Arabic, guide
         pg.click('[data-tab="export"]')
         pg.wait_for_selector('#ex-ym')
@@ -288,7 +293,20 @@ class ExcelPageTest(BrowserBase):
         pg.click('[data-tab="import"]')
         pg.wait_for_selector('#dz')
         self.assertIn('اختار', pg.inner_text('#xl-body'))
-        self.assertEqual(self.errors, [])
+        self.assertEqual([e for e in self.errors if 'Failed to load resource' not in e], [])   # the refused file is an expected 400
+
+
+@SKIP
+class SlidesTest(BrowserBase):
+    def test_every_welcome_slide_shows_in_both_directions(self):
+        for lang in ('ar', 'en'):
+            pg = self.open({'lang': lang}, width=1800)
+            pg.evaluate("() => TO.slides.open()")
+            for k in range(6):
+                pg.evaluate("(k) => TO.slides._go(k)", k)
+                pg.wait_for_timeout(650)
+                box = pg.evaluate("(k) => { const r = document.querySelectorAll('#slides section')[k].getBoundingClientRect(); return [r.left, r.right]; }", k)
+                self.assertTrue(abs(box[0]) < 2 and abs(box[1] - 1800) < 2, (lang, k, box))
 
 
 @SKIP

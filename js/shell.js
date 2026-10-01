@@ -390,8 +390,7 @@
       var track = host.querySelector('.track'), dots = host.querySelectorAll('.dots i'), next = host.querySelector('[data-snext]');
       function go(k) {
         TO.slides.i = Math.max(0, Math.min(n - 1, k));
-        var dir = document.documentElement.dir === 'rtl' ? 1 : -1;
-        track.style.transform = 'translateX(' + (dir * TO.slides.i * 100) + '%)';
+        track.style.transform = 'translateX(' + (-TO.slides.i * 100) + '%)';   // the track is always laid out left to right
         dots.forEach(function (d, j) { d.className = j === TO.slides.i ? 'on' : ''; });
         next.textContent = TO.slides.i === n - 1 ? TO.t('slide.start') : TO.t('common.next');
       }

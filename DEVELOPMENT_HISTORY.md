@@ -4,6 +4,21 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## 1.0.1 - many file types, DRM files, slide bug (2026-10-01)
+
+**Found by the owner's first real files:** both files he attached start with `<## NASCA DRM FILE - VER1.00 ##>`: his company's document-security
+system encrypts them, so they are not xlsx/docx at all. No program can read them; the program now says so in plain words (AR/EN) and what to do
+(open on a PC with the security agent, Save As a new copy, or export .csv). We do not try to defeat the protection.
+**What:** `server/formats.py` recognises files by content and reads xlsx/xlsm/xltx, **xls (BIFF8)**, ods, csv/tsv/txt, HTML-as-xls, SpreadsheetML 2003,
+docx/docm/dotx, **doc (Word 97)**, odt, rtf, HTML-as-doc. One door `/api/import/preview` (Word files ask for the trip category).
+**Tests:** `test_formats` (15). The `.xls` test file is made by an independent library (xlwt), which caught nothing wrong. The `.doc` and RTF tests use
+files made by the test itself, so they prove the reader follows the format as we understand it - **not yet tried on real Word-made `.doc`/`.rtf`**.
+Not supported (message only): xlsb, Excel/Word 95, password-protected files.
+**Bug:** welcome slides were blank after slide 1 in Arabic: the track is forced left-to-right in CSS but the script moved it the RTL way.
+**Lesson:** never gate a file by its extension; look inside it.
+
+---
+
 ## Phases 6-7 – reports, release (2026-09-30)
 
 **What:** Reports page and presentation mode; version 1.0.0; the installer script no longer asks about "old version data" (BAMS leftover)

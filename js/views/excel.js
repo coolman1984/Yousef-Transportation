@@ -6,7 +6,7 @@
   var GK = 'imp.g', G = 12;                       // questions in the guide
   var S = null;                     // state of the page
 
-  function fresh() { return { tab: 'import', pv: null, busy: false, err: null, done: null, filter: 'all', skip: {}, merge: {}, problems: false, category: '', shown: 150, ym: U.today().slice(0, 7), layout: 'today' }; }
+  function fresh() { return { tab: 'import', pv: null, busy: false, err: null, done: null, filter: 'all', skip: {}, merge: {}, problems: false, category: '', office: false, shown: 150, ym: U.today().slice(0, 7), layout: 'today' }; }
 
   /* ---------- texts for messages the server sends in English with a code ---------- */
   function nums(s) { return (String(s || '').match(/\d+/g) || []); }
@@ -21,7 +21,7 @@
     var m = (e && e.message) || '';
     var map = [['empty', 'imp.e.empty'], ['damaged', 'imp.e.damaged'], ['too large', 'imp.e.big'],
       ['No sheet with trip columns', 'imp.e.nocols'], ['no trips in them', 'imp.e.notrips'], ['expired', 'imp.e.expired'], ['nothing to import', 'imp.e.nothing'],
-      ['No trip order form', 'imp.e.noform'], ['document-security', 'imp.e.drm'], ['is a PDF', 'imp.e.pdf'], ['is a picture', 'imp.e.picture'], ['not recognised', 'imp.e.unknown'], ['Word document, not a spreadsheet', 'imp.e.wordgiven'], ['spreadsheet, not a Word', 'imp.e.sheetgiven'], ['Binary Workbook', 'imp.e.xlsb'], ['very old Office', 'imp.e.oldoffice'], ['No table with data', 'imp.e.notable'], ['Choose the trip category', 'imp.e.cat'], ['password', 'imp.e.locked']];
+      ['No trip order form', 'imp.e.noform'], ['document-security', 'imp.e.drm'], ['took too long', 'imp.e.otimeout'], ['not available on this PC', 'imp.e.nooffice'], ['security program', 'imp.e.officefail'], ['did not give an answer', 'imp.e.officefail'], ['is not installed', 'imp.e.nooffice'], ['is a PDF', 'imp.e.pdf'], ['is a picture', 'imp.e.picture'], ['not recognised', 'imp.e.unknown'], ['Word document, not a spreadsheet', 'imp.e.wordgiven'], ['spreadsheet, not a Word', 'imp.e.sheetgiven'], ['Binary Workbook', 'imp.e.xlsb'], ['very old Office', 'imp.e.oldoffice'], ['No table with data', 'imp.e.notable'], ['Choose the trip category', 'imp.e.cat'], ['password', 'imp.e.locked']];
     for (var i = 0; i < map.length; i++) if (m.indexOf(map[i][0]) >= 0) return TO.t(map[i][1]);
     return m ? TO.esc(m) : TO.esc(TO.t('common.error'));
   }
@@ -47,9 +47,16 @@
       '<p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('imp.pick.sub')) + '</p>' +
       '<label class="dropzone" id="dz" for="imp-file" tabindex="0"><span class="art">' + TO.icon('sheet', 'lg') + '</span><b>' + TO.esc(TO.t('imp.drop')) + '</b><span class="muted">' + TO.esc(TO.t('imp.drop.types')) + '</span></label>' +
       '<input type="file" id="imp-file" hidden>' +
+      officeNote() +
       '<div class="field" id="cat-field" hidden style="margin-top:1rem"><label for="imp-cat">' + TO.esc(TO.t('imp.cat')) + '</label><input class="input" id="imp-cat" list="dl-cat" autocomplete="off" value="' + TO.esc(S.category) + '"><datalist id="dl-cat">' + cats + '</datalist><span class="help">' + TO.esc(TO.t('imp.cat.help')) + '</span></div>' +
       (S.busy ? '<div class="skeleton" style="height:3rem;margin-top:1rem"></div>' : '') +
       (S.err ? '<div class="tip bad" role="alert" style="margin-top:1rem">' + TO.icon('alert') + '<span>' + S.err + '</span></div>' : '') + '</section>';
+  }
+
+  function officeNote() {
+    var o = (TO.data.state && TO.data.state.office) || {}, on = o.excel || o.word;
+    return '<div class="tip" style="margin-top:1rem">' + TO.icon(on ? 'check' : 'info') + '<span>' + TO.esc(TO.t(on ? 'imp.office.on' : 'imp.office.off')) + '</span></div>' +
+      (on ? '<label class="row" style="margin-top:.7rem"><span class="switch"><input type="checkbox" id="imp-office"' + (S.office ? ' checked' : '') + '><span></span></span><span>' + TO.esc(TO.t('imp.office.force')) + '</span></label>' : '');
   }
 
   function kpi(icon, label, value, hint, tone) {
@@ -188,7 +195,7 @@
     if (cat) S.category = cat.trim();
     S.busy = true; S.err = null; S.pendingFile = null; paint(root);
     file.arrayBuffer().then(function (buf) {
-      var url = '/api/import/preview?name=' + encodeURIComponent(file.name) + (S.category ? '&category=' + encodeURIComponent(S.category) : '');
+      var url = '/api/import/preview?name=' + encodeURIComponent(file.name) + (S.category ? '&category=' + encodeURIComponent(S.category) : '') + (S.office ? '&engine=office' : '');
       return TO.api('POST', url, buf, { raw: true });
     }).then(function (pv) {
       S.busy = false;
@@ -249,6 +256,7 @@
         var el = e.target;
         if (el.id === 'ex-ym' || el.id === 'wd-ym') { if (el.value) { S.ym = el.value; if (el.id === 'ex-ym') paint(root); } return; }
         if (el.name === 'layout') { S.layout = el.value; return; }
+        if (el.id === 'imp-office') { S.office = el.checked; return; }
         if (el.id === 'imp-problems') { S.problems = el.checked; paint(root); return; }
         if (el.dataset.use) { if (el.checked) delete S.skip[el.dataset.use]; else S.skip[el.dataset.use] = 1; paint(root); return; }
         if (el.dataset.merge !== undefined) { S.merge[el.dataset.merge] = el.checked; }

@@ -18,10 +18,12 @@ import zipfile
 from html.parser import HTMLParser
 from xml.etree import ElementTree as ET
 
+import com_office
 import docx_read
 import xlsx_read
 from xlsx_read import Cell, Sheet, Workbook
 
+OFFICE_TMP = None          # folder for the short-lived work files of the Office route (set by the program)
 MAX_BYTES = 60 * 1024 * 1024
 MAX_CELLS = 400_000
 
@@ -31,8 +33,8 @@ class FormatError(Exception):
 
 
 MSG = {
-    'drm': 'This file is locked by your company\'s document-security system (it starts with "NASCA DRM"). No other program can open it. '
-           'Open it on a PC where that security program works, then use Save As to make a new copy as .xlsx (or .docx), or copy the cells into a new blank file; a plain .csv export also works.',
+    'drm': 'This file is locked by your company\'s document-security system (it starts with "NASCA DRM"). Trip Orders can read it only through Microsoft Excel/Word on a Windows PC where that security program works. '
+           'Otherwise open it on such a PC, use Save As to make a new copy as .xlsx (or .docx), or copy the cells into a new blank file; a plain .csv export also works.',
     'encrypted': 'This file is protected with a password. Open it in Excel/Word, remove the password (File, Info, Protect), save a copy, and choose that copy.',
     'pdf': 'This is a PDF. A PDF cannot be read as a table. Use the original Excel or Word file, or export it from the program that made the PDF.',
     'image': 'This is a picture, not a file with data. Choose the Excel or Word file.',
@@ -854,8 +856,51 @@ def read_xml2003(data):
 
 
 # --------------------------------------------------------------------------- the two doors
-def read_workbook(data, name=''):
+COM_KINDS = {'drm', 'xlsb', 'old', 'encrypted'}      # files no built-in reader can open; Microsoft Office may, on a PC that is allowed to
+
+
+def door(data, name='', engine='auto'):
+    """'sheet' or 'word': which reader a file goes to."""
     kind = sniff(data, name)
+    if kind in WORD_KINDS:
+        return 'word'
+    if kind in SHEET_KINDS:
+        return 'sheet'
+    return 'word' if com_office.kind_of_name(name) == 'word' else 'sheet'
+
+
+def office_state():
+    return {'excel': com_office.available('excel'), 'word': com_office.available('word')}
+
+
+def _use_office(kind, name, engine, want):
+    """Should this file be read through Microsoft Office? want: 'sheet' or 'word'."""
+    if engine == 'native':
+        return False
+    pref = com_office.kind_of_name(name)
+    if engine == 'office':
+        return True
+    return kind in COM_KINDS or (kind == 'unknown' and pref == want)
+
+
+def _via_office(app, data, name, engine='auto'):
+    if not com_office.available(app):
+        if engine == 'office':
+            raise FormatError('Microsoft ' + ('Excel' if app == 'excel' else 'Word') + ' is not available on this PC (it needs Windows with Office installed).')
+        raise FormatError(MSG.get(sniff(data, name)) or MSG['unknown'])
+    try:
+        return (com_office.read_workbook if app == 'excel' else com_office.read_document)(data, name, OFFICE_TMP)
+    except com_office.OfficeError as e:
+        raise FormatError(str(e))
+
+
+def read_workbook(data, name='', engine='auto'):
+    """engine: 'auto' (built-in readers; Microsoft Office for files they cannot open), 'office' (always Microsoft Excel), 'native' (never Office)."""
+    kind = sniff(data, name)
+    if kind in WORD_KINDS or (kind not in SHEET_KINDS and com_office.kind_of_name(name) == 'word'):
+        raise FormatError('This is a Word document, not a spreadsheet.')
+    if _use_office(kind, name, engine, 'sheet'):
+        return _via_office('excel', data, name, engine)
     need_sheet(kind)
     try:
         if kind == 'xlsx':
@@ -873,8 +918,12 @@ def read_workbook(data, name=''):
         raise FormatError(str(e))
 
 
-def read_document(data, name=''):
+def read_document(data, name='', engine='auto'):
     kind = sniff(data, name)
+    if kind in SHEET_KINDS or (kind not in WORD_KINDS and com_office.kind_of_name(name) == 'sheet'):
+        raise FormatError('This is a spreadsheet, not a Word document.')
+    if _use_office(kind, name, engine, 'word'):
+        return _via_office('word', data, name, engine)
     need_document(kind)
     try:
         if kind == 'docx':

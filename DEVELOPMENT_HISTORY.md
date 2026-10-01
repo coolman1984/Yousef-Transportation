@@ -4,6 +4,22 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## 1.0.2 - Microsoft Office (COM) route for protected files (2026-10-01)
+
+**Why:** the owner's company files are DRM-protected; the company's agent lets Excel/Word open them on a company PC.
+**What:** `server/com_office.py` runs a PowerShell script (stdlib only, no pywin32) that opens the file with Excel/Word COM (hidden, read-only, macros off,
+no alerts, never saves) and writes the values / text as JSON to a private temp folder that is removed afterwards. Dates travel as OLE serials.
+`formats.read_workbook/read_document(engine=auto|office|native)`: auto uses Office only for files no built-in reader can open (DRM, xlsb, Office 95, password);
+`engine=office` forces it. `/api/state.office` says whether Excel/Word are present (checked once at start). Protected files go to the Excel or Word door by file extension.
+**Tests:** `test_formats.OfficeRoute` (7) with a pretend PowerShell: JSON -> rows end to end, the protected bytes reach Office untouched, temp folder removed, timeout / password /
+not-installed / no-answer messages, engine choices, script sanity (ASCII, balanced brackets, read-only, macros off, never saves).
+**NOT verified:** the PowerShell scripts have never run against real Excel/Word - this sandbox has neither PowerShell nor Office and the CI Windows runner has no Office.
+First real run is on the owner's PC; if it fails the message includes Office's own error text. Known limits: needs a logged-in desktop session (not a Windows service),
+big sheets are slow (cell values are copied through COM), `.Value` vs `.Value2` behaviour for date detection should be watched.
+**Security note:** the work files hold the protected file as received (still encrypted) and are deleted in `finally`; the JSON holds decrypted values for the seconds of the call.
+
+---
+
 ## 1.0.1 - many file types, DRM files, slide bug (2026-10-01)
 
 **Found by the owner's first real files:** both files he attached start with `<## NASCA DRM FILE - VER1.00 ##>`: his company's document-security

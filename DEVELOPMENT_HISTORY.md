@@ -4,6 +4,15 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## CI failure on main for 1.0.1 (2026-10-01)
+
+The release of 1.0.1 was never published: the test job failed on main (`ReportsPageTest`: "No trips in this month"). Real bug, not only a test problem:
+the Reports page asked for the current month first and for the chosen month second, and the older answer arrived last and replaced the newer one.
+Fix: every request has a number and only the newest may paint. Also `xlwt` is installed in CI so the old `.xls` test runs there too (4 tests were skipped).
+Lesson: I told the owner the release "will appear" before looking at the build; check the run, then say it. I also merged PR #4 on his explicit order before CI finished.
+
+---
+
 ## 1.0.2 - Microsoft Office (COM) route for protected files (2026-10-01)
 
 **Why:** the owner's company files are DRM-protected; the company's agent lets Excel/Word open them on a company PC.

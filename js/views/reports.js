@@ -58,9 +58,11 @@
     var body = root.querySelector('#rp-body');
     body.innerHTML = S.data ? (S.data.summary.total.trips ? view() : U.empty('route', TO.t('exp2.none'))) : '<div class="skeleton" style="height:12rem"></div>';
   }
+  var seq = 0;
   function fetchData(root) {
+    var mine = ++seq;      // an older answer that arrives late must never replace the newer one
     S.data = null; paint(root);
-    TO.get('/api/reports?ym=' + encodeURIComponent(S.ym)).then(function (d) { S.data = d; paint(root); }, function (e) { root.querySelector('#rp-body').innerHTML = U.empty('alert', U.errorText(e)); });
+    TO.get('/api/reports?ym=' + encodeURIComponent(S.ym)).then(function (d) { if (mine === seq) { S.data = d; paint(root); } }, function (e) { if (mine === seq) root.querySelector('#rp-body').innerHTML = U.empty('alert', U.errorText(e)); });
   }
 
   /* ---------- presentation mode: slides from the live numbers ---------- */

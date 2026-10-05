@@ -337,6 +337,41 @@ class ReportsPageTest(BrowserBase):
         self.assertEqual(pg.locator('.present').count(), 0)
         self.assertEqual(self.errors, [])
 
+    def test_reviewer_without_money_permission_sees_no_rates_cards(self):
+        here = os.path.dirname(os.path.abspath(__file__))
+        from harness import ADMIN
+        ac = self.S.client()
+        ac.login(ADMIN[0], ADMIN[1])
+        if not ac.get('/api/reports?ym=2026-09')['summary']['total']['trips']:
+            with open(os.path.join(here, 'fixtures', 'sample_sep26_synthetic.xlsx'), 'rb') as f:
+                pv = ac.call('POST', '/api/excel/preview?name=s.xlsx', raw=f.read(), headers={'Content-Type': 'application/octet-stream'})
+            ac.post('/api/excel/commit', {'id': pv['id'], 'includeProblems': True})
+        rv = next(p for p in ac.get('/api/users')['profiles'] if p['id'] == 'reviewer')
+        ac.post('/api/users/save', {'username': 'rita.r', 'full_name': 'Rita Reviewer', 'password': 'Review-pass-77', 'must_change': False,
+                                    'role': rv['name'], 'perms': rv['perms'], 'scopes': None})
+        ctx = self.browser.new_context(viewport={'width': 1360, 'height': 860})
+        ctx.add_init_script("localStorage.setItem('to.prefs', JSON.stringify({welcomed: true, lang: 'en'}))")
+        errors = []
+        p2 = ctx.new_page()
+        p2.on('pageerror', lambda e: errors.append(str(e)))
+        p2.goto(self.S.base)
+        p2.wait_for_selector('#auth-form')
+        p2.fill('#username', 'rita.r')
+        p2.fill('#password', 'Review-pass-77')
+        p2.click('button[type=submit]')
+        p2.wait_for_selector('#app-shell')
+        p2.goto(self.S.base + '/#/reports')
+        p2.fill('#rp-ym', '2026-09')
+        p2.wait_for_selector('.bar-row')
+        body = p2.inner_text('#rp-body')
+        self.assertIn('247', body)  # the km / trips report is still there
+        self.assertNotIn('Vendor reconciliation', body)
+        self.assertNotIn('Cost per department', body)
+        p2.click('[data-present]')
+        p2.wait_for_selector('.present .ps')
+        self.assertTrue(p2.inner_text('.present .pn').endswith('/ 5'), p2.inner_text('.present .pn'))
+        self.assertEqual(errors, [])
+
 
 if __name__ == '__main__':
     unittest.main()

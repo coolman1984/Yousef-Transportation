@@ -105,8 +105,8 @@ class TripsApiTest(unittest.TestCase):
 
     def test_g_insights(self):
         t = self.trip(cat='cat1')
-        self.ac.post('/api/commit', {'label': 'fill', 'ops': [{'e': 'trips', 'id': t['id'], 'op': 'put', 'ver': self.get_trip(t['id'])['ver'], 'row': {
-            **{k: v for k, v in self.get_trip(t['id']).items() if k != 'ver'}, 'status': 'finished', 'startKm': 500, 'endKm': 400}}]})
+        for field, value in (('startKm', 500), ('endKm', 400), ('status', 'finished')):  # status only changes through the amend route
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'test reading'})
         ins = self.ac.get('/api/insights')[t['id']]
         self.assertEqual(ins['trust'], 'red')
         self.assertIn('R_END_LE_START', ins['reasons'])

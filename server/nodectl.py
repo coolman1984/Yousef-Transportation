@@ -98,19 +98,31 @@ def cmd_verify():
 def cmd_rebuild():
     """The history (journal.db) is the source of truth: fold it again into a fresh trips.db."""
     import sqlite3
+    from contextlib import closing
     cfg, data, uploads, backups, extra = load_cfg()
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     old = os.path.join(data, 'trips.db')
     legacy = []
     if os.path.exists(old):
         try:  # keep labels of recycle-bin groups made before the upgrade
-            with sqlite3.connect(old) as db:
+            # sqlite3's own context manager only ends a transaction; the handle must be closed before the rename (Windows).
+            with closing(sqlite3.connect(old)) as db:
                 legacy = db.execute('SELECT * FROM transactions').fetchall()
         except sqlite3.Error:
             pass
-        for suffix in ('', '-wal', '-shm'):
-            if os.path.exists(old + suffix):
-                os.replace(old + suffix, os.path.join(data, f'triporders.broken-{stamp}.db{suffix}'))
+        moved = []
+        try:
+            for suffix in ('', '-wal', '-shm'):
+                if os.path.exists(old + suffix):
+                    dest = os.path.join(data, f'triporders.broken-{stamp}.db{suffix}')
+                    os.replace(old + suffix, dest)
+                    moved.append((old + suffix, dest))
+        except OSError as e:  # the app (or another tool) still has the file open: put everything back, change nothing
+            for src, dest in reversed(moved):
+                os.replace(dest, src)
+            print('Cannot rebuild while Trip Orders is running. Close the app on this PC, then run the rebuild again.')
+            print('Nothing was changed. (' + str(e) + ')')
+            return 1
     s = open_system()
     with s.store.lock:
         s.store.conn.executemany('INSERT OR IGNORE INTO transactions VALUES (?,?,?,?,?,?)', legacy)

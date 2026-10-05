@@ -28,7 +28,7 @@
     ], rows.slice(0, 40));
   }
   function view() {
-    var d = S.data, t = d.summary.total;
+    var d = S.data, t = d.summary.total, money = d.money !== false;   // vendor reconciliation and cost carry the rates: finance only
     var tabs = GROUPS.map(function (g) { return '<button data-g="' + g + '" aria-pressed="' + (S.group === g) + '">' + TO.esc(TO.t('rp.' + g)) + '</button>'; }).join('');
     var rec = d.reconciliation.length ? U.table([
       { h: 'f.category', cell: function (r) { return TO.esc(r.category); } }, { h: 'f.vendor', cell: function (r) { return TO.esc(r.vendor || ''); } },
@@ -49,8 +49,8 @@
       '<div class="grid cols-2" style="margin-top:var(--gap)"><section class="card"><header><h3>' + TO.esc(TO.t('rp.top.vehicles')) + '</h3></header>' + bars(d.summary.byVehicle, 'km') + '</section>' +
       '<section class="card"><header><h3>' + TO.esc(TO.t('rp.top.departments')) + '</h3></header>' + bars(d.summary.byDepartment, 'km') + '</section></div>' +
       '<section class="card" style="margin-top:var(--gap)"><header><h3>' + TO.esc(TO.t('rp.breakdown')) + '</h3><div class="seg" role="group">' + tabs + '</div></header>' + groupTable(d.summary[S.group]) + '</section>' +
-      '<section class="card" style="margin-top:var(--gap)"><header><h3>' + TO.icon('shield') + ' ' + TO.esc(TO.t('rp.rec')) + '</h3></header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('rp.rec.sub')) + '</p>' + rec + '</section>' +
-      '<div class="grid cols-2" style="margin-top:var(--gap)"><section class="card"><header><h3>' + TO.esc(TO.t('rp.alloc')) + '</h3></header>' + alloc + '</section>' +
+      (money ? '<section class="card" style="margin-top:var(--gap)"><header><h3>' + TO.icon('shield') + ' ' + TO.esc(TO.t('rp.rec')) + '</h3></header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('rp.rec.sub')) + '</p>' + rec + '</section>' : '') +
+      '<div class="grid cols-2" style="margin-top:var(--gap)">' + (money ? '<section class="card"><header><h3>' + TO.esc(TO.t('rp.alloc')) + '</h3></header>' + alloc + '</section>' : '') +
       '<section class="card"><header><h3>' + TO.esc(TO.t('rp.ovt')) + '</h3></header>' + ot + '</section></div>' +
       '<section class="card" style="margin-top:var(--gap)"><header><h3>' + TO.icon('alert') + ' ' + TO.esc(TO.t('rp.anom')) + '</h3></header>' + an + '</section>';
   }
@@ -74,9 +74,9 @@
       '<h2>' + TO.esc(TO.t('rp.slide.trust')) + '</h2><div class="big-row">' + ['green', 'yellow', 'red'].map(function (k) { return '<div><b class="num">' + TO.fmt.num(t[k]) + '</b><span><i class="trust ' + k + '"></i> ' + TO.esc(TO.t('trust.' + k)) + '</span></div>'; }).join('') + '</div>',
       '<h2>' + TO.esc(TO.t('rp.top.vehicles')) + '</h2>' + bars(top(d.summary.byVehicle), 'km'),
       '<h2>' + TO.esc(TO.t('rp.top.departments')) + '</h2>' + bars(top(d.summary.byDepartment), 'km'),
-      '<h2>' + TO.esc(TO.t('rp.rec')) + '</h2>' + (d.reconciliation.length ? '<div class="big-row">' + d.reconciliation.slice(0, 3).map(function (r) { return '<div><b class="num">' + TO.fmt.num(r.diffKm) + '</b><span>' + TO.esc(r.category + ' · ' + TO.t('rp.diff')) + '</span></div>'; }).join('') + '</div>' : '<p>' + TO.esc(TO.t('rp.rec.none')) + '</p>'),
+      d.money === false ? '' : '<h2>' + TO.esc(TO.t('rp.rec')) + '</h2>' + (d.reconciliation.length ? '<div class="big-row">' + d.reconciliation.slice(0, 3).map(function (r) { return '<div><b class="num">' + TO.fmt.num(r.diffKm) + '</b><span>' + TO.esc(r.category + ' · ' + TO.t('rp.diff')) + '</span></div>'; }).join('') + '</div>' : '<p>' + TO.esc(TO.t('rp.rec.none')) + '</p>'),
       '<h2>' + TO.esc(TO.t('rp.anom')) + '</h2><div class="big-row"><div><b class="num">' + TO.fmt.num(d.anomalies.length) + '</b><span>' + TO.esc(TO.t('rp.anom.n')) + '</span></div></div>'
-    ];
+    ].filter(Boolean);   // the reconciliation slide is empty for users without the money permission
     var el = document.createElement('div'); el.className = 'present'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-modal', 'true');
     var i = 0;
     function draw() {

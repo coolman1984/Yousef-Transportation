@@ -206,6 +206,27 @@ LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'status', 'boundDevice'}
 SYSTEM_ONLY = ('data.import',)  # driver submissions and amendments are written by the server itself, never by hand
 
 
+RATE_FIELDS = ('ratePerKm', 'ratePerOtHour')
+RATE_VIEWERS = ('finance.view', 'rates.manage', 'categories.manage')  # whoever sees or edits rates
+DRIVER_CONTACT_VIEWERS = ('fleet.view', 'drivers.manage', 'trips.send')  # the Drivers page, its editor and the WhatsApp button
+PEOPLE_CONTACT_VIEWERS = ('people.view', 'people.manage')
+TRIP_SERVER_FIELDS = GA_FIELDS | LINK_FIELDS | {'locked', 'no', 'source', 'importKey'}  # written by the server through the dedicated trip routes only
+
+
+def project_state(st, perms):
+    """What this user may read: rates need a money permission, contact numbers need the page that shows them.
+    Hiding a button is not protection - the response itself is filtered."""
+    perms = set(perms)
+    out = dict(st)
+    if not perms.intersection(RATE_VIEWERS):
+        out['tripCategories'] = [{k: v for k, v in c.items() if k not in RATE_FIELDS} for c in st.get('tripCategories', [])]
+    if not perms.intersection(DRIVER_CONTACT_VIEWERS):
+        out['drivers'] = [{k: v for k, v in d.items() if k != 'mobile'} for d in st.get('drivers', [])]
+    if not perms.intersection(PEOPLE_CONTACT_VIEWERS):
+        out['people'] = [{k: v for k, v in p.items() if k != 'mobile'} for p in st.get('people', [])]
+    return out
+
+
 def required(entity, op, changed):
     """The permissions (any one of them is enough) needed for one saved change."""
     if entity == 'trips':
@@ -229,14 +250,17 @@ def required(entity, op, changed):
         'routes': {'insert': ('places.manage',), 'update': ('places.manage',), 'delete': ('places.manage',)},
         'tripPassengers': {'insert': ('trips.create', 'trips.edit', 'excel.import'), 'update': ('trips.edit',), 'delete': ('trips.edit', 'trips.delete')},
         'tripPhotos': {'insert': ('trips.edit', 'trips.review', 'trips.amend'), 'update': ('trips.edit', 'trips.review', 'trips.amend'), 'delete': ('files.delete',)},
-        'tripAmendments': {'insert': ('trips.amend', 'trips.review'), 'update': SYSTEM_ONLY, 'delete': SYSTEM_ONLY},
+        'tripAmendments': {'insert': SYSTEM_ONLY, 'update': SYSTEM_ONLY, 'delete': SYSTEM_ONLY},
         'tripEvents': {'insert': SYSTEM_ONLY, 'update': SYSTEM_ONLY, 'delete': SYSTEM_ONLY},
         'settings': {'insert': ('settings.edit',), 'update': ('settings.edit',), 'delete': ('settings.edit',)},
     }[entity][op]
 
 
-def commit_guard(u):
-    """Checks every change of a save against the user's permissions and trip categories."""
+def commit_guard(u, internal=False):
+    """Checks every change of a save against the user's permissions and trip categories.
+    internal=True is for the dedicated trip routes (new, amend, cancel, link, approve ...): the route has already checked its own
+    permission and writes the protected fields itself, so only the category limits apply here. A plain save (/api/commit) can never
+    touch approval, link, status, lock or numbering fields, edit a locked trip, or write an amendment record by hand."""
     perms, scope = set(u['perms']), (None if u['scopes'] is None else set(u['scopes']))
 
     def guard(changes, force):
@@ -249,9 +273,17 @@ def commit_guard(u):
             if scope is not None and e not in SHARED_LISTS and not {sc, c.get('scope_before', sc)} <= scope:
                 raise Forbidden('You are limited to certain trip categories and cannot add new ones.' if e == 'tripCategories' and op == 'insert'
                                 else 'You can only change the trip categories assigned to you.')
-            if e == 'trips' and op == 'update' and (c.get('before') or {}).get('locked') and not perms.intersection(('trips.amend', 'trips.review')):
-                raise Forbidden('This trip is locked. A change needs the permission "' + PERM_LABEL['trips.amend'] + '" and a written reason.')
+            if internal:
+                continue
+            if e == 'trips' and op == 'update' and (c.get('before') or {}).get('locked'):
+                raise Forbidden('This trip is locked. Use "Change this trip" with a written reason, so the old value is kept.')
+            if e == 'trips' and op == 'update' and set(c['changes']) & TRIP_SERVER_FIELDS:
+                raise Forbidden('Approval, status, driver link and numbering are changed with their own buttons, not by editing the trip.')
+            if e == 'trips' and op == 'insert' and any((c.get('after') or {}).get(f) for f in GA_FIELDS | (LINK_FIELDS - {'status'}) | {'locked'}):
+                raise Forbidden('A new trip cannot start with an approval, a driver link or a lock.')
             need = required(e, op, c['changes'])
+            if need is SYSTEM_ONLY and e in ('tripAmendments', 'tripEvents'):
+                raise Forbidden('Amendments and driver submissions are written by the system itself. To correct a locked trip use "Change this trip".')
             if not perms.intersection(need):
                 raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".')
     return guard
@@ -526,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, {**STORE.state(self.u['scopes']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
+            return self.send(200, {**project_state(STORE.state(self.u['scopes']), self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -537,7 +569,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
                     raise BadRequest('Choose the month to export.')
                 st = STORE.state(self.u['scopes'])
-                data = excel_io.export_today(st, ym) if qs.get('layout', 'today') == 'today' else excel_io.export_clean(st, ym, qs.get('lang', 'en'))
+                data = excel_io.export_today(st, ym) if qs.get('layout', 'today') == 'today' else excel_io.export_clean(st, ym, qs.get('lang', 'en'), money=self.can('finance.view'))
                 name = f'Trips_{ym}_{"clean" if qs.get("layout") == "clean" else "same-as-today"}.xlsx'
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Excel export', 'target': name}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="{name}"'})
@@ -552,7 +584,7 @@ class Handler(BaseHTTPRequestHandler):
                 ym = qs.get('ym', '')
                 if ym and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
                     raise BadRequest('Choose the month.')
-                data, name = word_io.report(st, ym, lang, brand), f'Trips_report_{ym or "all"}.docx'
+                data, name = word_io.report(st, ym, lang, brand, money=self.can('finance.view')), f'Trips_report_{ym or "all"}.docx'
             else:
                 self.need('trips.view')
                 ctx, name = {}, 'Trip_order_blank.docx'
@@ -581,8 +613,10 @@ class Handler(BaseHTTPRequestHandler):
             if ym and not re.fullmatch(r'\d{4}-(0[1-9]|1[0-2])', ym):
                 raise BadRequest('Choose the month.')
             st = STORE.state(self.u['scopes'])
-            return self.send(200, {'summary': reports.summaries(st, ym), 'overtime': reports.overtime(st, ym), 'reconciliation': reports.reconciliation(st, ym),
-                                   'allocation': reports.allocation(st, ym), 'anomalies': reports.anomalies(st, ym)[:300]})
+            money = self.can('finance.view')  # reconciliation and cost allocation carry the rates
+            return self.send(200, {'summary': reports.summaries(st, ym), 'overtime': reports.overtime(st, ym), 'money': money,
+                                   'reconciliation': reports.reconciliation(st, ym) if money else [], 'allocation': reports.allocation(st, ym) if money else [],
+                                   'anomalies': reports.anomalies(st, ym)[:300]})
         if p == '/api/insights':
             self.need('trips.view')
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
@@ -653,9 +687,14 @@ class Handler(BaseHTTPRequestHandler):
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Full Excel export', 'target': 'All data'}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="TO_Full_Export_{datetime.now():%Y-%m-%d_%H%M}.xlsx"'})
         if p.startswith('/files/'):
-            if os.path.splitext(p)[1].lower() not in IMAGE_EXT:
+            cats = STORE.photo_categories(unquote(p))
+            if cats:  # a trip photo follows its trip: download permission and the user's categories
                 self.need('files.download')
-            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True, src=p)
+                if self.u['scopes'] is not None and not set(cats) & set(self.u['scopes']):
+                    return self.send(404, {'error': 'File not found'})  # same answer as for a file that does not exist
+            elif os.path.splitext(p)[1].lower() not in IMAGE_EXT:
+                self.need('files.download')
+            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True, src=p, private=bool(cats))
         self.send(404, {'error': 'Not found'})
 
     def _post(self):
@@ -844,7 +883,7 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith('/api/trips/'):
             d = self.json_body()
             action = p[len('/api/trips/'):]
-            g = commit_guard(self.u)
+            g = commit_guard(self.u, internal=True)  # each action below checks its own permission first
             args = (STORE, self.user, self.ip, self.u['id'])
             if action == 'new':
                 self.need('trips.create')
@@ -854,6 +893,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, tripsvc.amend(*args, str(d.get('id')), d.get('field'), d.get('value'), d.get('reason'), guard=g))
             if action == 'cancel':
                 self.need('trips.cancel')
+                row = tripsvc._row(STORE, 'trips', str(d.get('id')))
+                if row and row.get('locked'):  # a closed trip is a reviewed record: cancelling it is a correction
+                    self.need('trips.amend', 'trips.review')
                 return self.send(200, tripsvc.cancel(*args, str(d.get('id')), d.get('reason'), guard=g))
             if action == 'link':
                 self.need('trips.send')
@@ -1074,7 +1116,7 @@ class Handler(BaseHTTPRequestHandler):
         ctype = TYPES.get(ext) or mimetypes.guess_type(rel)[0] or 'application/octet-stream'
         return self.send(200, data, ctype, {'Cache-Control': 'no-cache'})
 
-    def serve_file(self, base, rel, upload=False, src=None):
+    def serve_file(self, base, rel, upload=False, src=None, private=False):
         base = os.path.realpath(base)
         path = os.path.realpath(os.path.join(base, unquote(rel)))
         if not path.startswith(base + os.sep) or not os.path.isfile(path):
@@ -1088,7 +1130,8 @@ class Handler(BaseHTTPRequestHandler):
         if upload and ext not in UPLOAD_EXT:
             return self.send(404, {'error': 'File not found'})
         ctype = TYPES.get(ext) or mimetypes.guess_type(path)[0] or 'application/octet-stream'
-        headers = {'Cache-Control': 'public, max-age=31536000, immutable'} if upload else {'Cache-Control': 'no-cache'}
+        # trip photos are re-checked on every request, so another account on a shared browser cannot reuse a cached copy
+        headers = {'Cache-Control': 'private, no-cache'} if private else {'Cache-Control': 'public, max-age=31536000, immutable'} if upload else {'Cache-Control': 'no-cache'}
         if upload and ext not in INLINE_EXT:
             headers['Content-Disposition'] = 'attachment'
         with open(path, 'rb') as f:

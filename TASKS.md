@@ -68,5 +68,17 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P7.2 Installer + release workflow (old-version page removed). Portable `runtime/python` for start.bat is NOT added (the installer is the delivery path)
 - [x] P7.3 Guides (dispatcher, admin, driver) + release notes
 
+## Commercial readiness (`COMMERCIAL_READINESS_EXECUTION_PLAN.md`) – ledger
+Status words: not started / in progress / implemented—verification pending / verified / blocked. Only `verified` closes a finding.
+- [x] F06 Windows rebuild handle + refusal while running – verified (`test_unit.ToolsTest`, 3 tests, Windows, Python 3.12)
+- [x] F01 state/report/export projection – verified (`test_permissions` a–d). Open: delta endpoints (none yet), `tripEvents` payloads, link hashes in state
+- [x] F02 plain save cannot touch approval/status/link/lock/locked trips/amendments – verified (`test_permissions` e–h, `test_trips_api`)
+- [x] F12 dispatcher cancel works; closed-trip cancel needs amend/review – verified (`test_permissions` i–j). Open: finance-only rate update path (`rates.manage` vs `categories.manage`, T14)
+- [x] F03 trip photo authorization + private cache – verified (`test_permissions` k). Open: browser account-switch check, thumbnails if added
+- [ ] T01 Windows test harness: `test_multinode` cannot run on Windows (harness `Server.stop` sends `SIGINT`, unsupported -> `setUpClass` errors, 10 of 12 tests; identical on the untouched commit 9f5ef29) and leaks the server processes it started (kill them by hand). `T35_SecondReview.test_d_many_wrong_logins_are_cut_short` is flaky on Windows (`WinError 10053`, 2 of 4 runs on the untouched commit). So the multi-PC suite gave NO evidence for slice 1 - run it on Linux CI or fix the harness first
+- [ ] F16 two Office-COM refusal tests still fail on a PC with Office (`test_formats` SpreadsheetTypes/WordTypes) – next: T18
+- [ ] F04, F05, F07–F11, F13–F15, F17–F20 – not started (see the plan, §4 and T04–T34)
+- Test map: `test_permissions` (read/write/photo permissions through the real server), `test_e2e_browser.ReportsPageTest.test_reviewer_without_money_permission_sees_no_rates_cards` (needs `TO_CHROMIUM`, e.g. the Chrome path on Windows)
+
 ## Phase 8 – Backlog
 - [ ] Sealing · WhatsApp API · OCR · location · standing driver link · SMS

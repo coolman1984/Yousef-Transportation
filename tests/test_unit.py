@@ -414,6 +414,36 @@ class ToolsTest(unittest.TestCase):
         finally:
             shutil.rmtree(d)
 
+    @unittest.skipUnless(os.name == 'nt', 'an open SQLite file can only block a rename on Windows')
+    def test_rebuild_refuses_while_database_is_open(self):
+        """F06: rebuild must not half-move files when the running app still holds trips.db."""
+        import sqlite3
+        import subprocess
+        import sys
+        from system import System
+        d = tempfile.mkdtemp()
+        try:
+            data = os.path.join(d, 'data')
+            sy = System(data, {}, os.path.join(d, 'uploads'), os.path.join(d, 'bk'), log=lambda m: None)
+            sy.auth.setup('boss', 'The Boss', 'Strong-pass1', '127.0.0.1')
+            sy.close()
+            cfg = os.path.join(d, 'config.json')
+            with open(cfg, 'w') as f:
+                json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, f)
+            tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
+            dbs = lambda: sorted(n for n in os.listdir(data) if n.endswith('.db') or '.broken-' in n)  # program.lock is created by the tool itself
+            before = dbs()
+            holder = sqlite3.connect(os.path.join(data, 'trips.db'))  # stands in for the running app
+            try:
+                out = subprocess.run([sys.executable, tool, 'rebuild'], env=dict(os.environ, TO_CONFIG=cfg), capture_output=True, text=True)
+            finally:
+                holder.close()
+            self.assertEqual(out.returncode, 1, out.stderr)
+            self.assertIn('Nothing was changed', out.stdout)
+            self.assertEqual(dbs(), before)
+        finally:
+            shutil.rmtree(d)
+
     def test_key_export_protection(self):
         import nodectl
         secret = os.urandom(32)

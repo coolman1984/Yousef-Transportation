@@ -608,6 +608,12 @@ class Store:
             r = self.conn.execute('SELECT sha256, size_bytes FROM attachments WHERE id=?', (path,)).fetchone()
         return {'sha256': r[0], 'size': r[1]} if r else None
 
+    def photo_categories(self, src):
+        """Category ids of the trips that use this uploaded file as a photo (empty = not a trip photo, e.g. the logo)."""
+        with self.lock:
+            return [r[0] for r in self.conn.execute(
+                'SELECT DISTINCT t.category_id FROM trip_photos p JOIN trips t ON t.id=p.trip_id WHERE p.src=? AND p.deleted=0 AND t.deleted=0', (src,))]
+
     def referenced_files(self):
         """Every uploaded file the current data (and the recycle bin) refers to."""
         out = set()

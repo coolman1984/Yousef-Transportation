@@ -636,7 +636,7 @@ class T31_FourPCs(Base):
         edit(c[0], 'F', destination='from pc0')
         edit(c[1], 'F', purpose='from pc1')
         edit(c[2], 'F', notes='from pc2')
-        edit(c[3], 'F', seq=4, name='Four renamed')
+        edit(c[3], 'F', seq=4, billableKm=44)  # the trip number itself is not editable by a plain save
         self.converged([0, 1])
         self.plug(2)
         self.converged([0, 1, 2])
@@ -650,7 +650,7 @@ class T31_FourPCs(Base):
             a = get_area(x, 'F')
             self.assertEqual((a['destination'], a['purpose'], a['notes'], a['seq'], a['routeText']),
                              ('from pc0', 'from pc1', 'from pc2', 4, 'later on pc1'))
-            self.assertEqual(a['name'], 'Four renamed')
+            self.assertEqual((a['name'], a['billableKm']), ('Four', 44))
         for x in c:
             self.assertTrue(x.post('/api/devices/verify', {'all': True})['ok'])
         # the administrator sees history from every PC

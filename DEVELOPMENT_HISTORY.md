@@ -4,6 +4,28 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 1 - real permissions on read and write, Windows rebuild (2026-10-05)
+
+**Plan:** `COMMERCIAL_READINESS_EXECUTION_PLAN.md`, findings F01, F02, F03, F06, F12 (tasks T03-T06 first slices).
+**What:** (1) `nodectl rebuild` closes its SQLite handle before renaming (Windows `WinError 32`) and, if the app still holds the file, puts every
+file back and says so in plain words. (2) `/api/state` is filtered by `app.project_state`: rates need a money permission, driver/people mobile numbers
+need the page that shows them. `/api/reports` and the clean Excel/Word exports leave out vendor reconciliation and cost allocation without
+`finance.view` (the Reports page hides those cards). (3) A plain save (`/api/commit`) can no longer set approval, status, link, lock or number fields,
+edit a locked trip, create an approved/linked trip or write an amendment by hand; the dedicated trip routes use `commit_guard(internal=True)` (they check
+their own permission and keep the category limits). Dispatcher cancel now works (it needed `trips.amend` before); cancelling a closed trip needs
+`trips.amend` or `trips.review`. (4) Trip photos follow their trip: `files.download` plus the user's categories (404 for other categories), served
+`private, no-cache` instead of one year `immutable`.
+**Tests:** `tests/test_permissions.py` (11, direct API calls); `test_unit` rebuild + refusal; `test_trips_api` insights now uses the amend route;
+`test_e2e_browser.ReportsPageTest` gained a reviewer without the Money permission (real Chrome, `TO_CHROMIUM` set). Run on Windows, Python 3.12.10:
+152 tests, 147 pass, 3 skipped, 2 fail (the known Office-COM refusals, F16). `test_multinode` could not be used as evidence on Windows (harness sends
+`SIGINT`; same 10 `setUpClass` errors on the untouched commit); I only edited the one multi-PC test that renumbered a trip through a plain save.
+**Mistakes:** my first refusal test compared whole folder listings - the tool itself creates `program.lock`; compare the database files only.
+`test_g_insights` had been setting `status` through a plain save, i.e. it relied on the very bypass that is now closed.
+**Not done yet (still open in the plan):** F04 LAN/HTTP exposure, F05/F08-F11 gateway protocol and time, F07 historical rates, F13 backups, F16 the two
+Office-COM Windows test failures (`test_formats` refusals), everything from T19 on (administration/support/installer).
+
+---
+
 ## Product film, version 2 - cinematic camera and full resolution (2026-10-01)
 
 **Why:** the owner found version 1 poor: small, soft picture, a still wide shot, little motion.

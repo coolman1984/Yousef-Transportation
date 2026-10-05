@@ -600,7 +600,8 @@ def _sheet(name, head, rows, rtl, kinds=None, widths=None):
     return w.Sheet(name, table, widths=ws, freeze=(0, 1), rtl=rtl, autofilter=f'A1:{w.col_letters(len(head))}{max(2, len(table))}', landscape=True)
 
 
-def export_clean(state, ym, lang='en'):
+def export_clean(state, ym, lang='en', money=True):
+    """money=False leaves out the vendor reconciliation and cost allocation sheets (rates are only for finance.view)."""
     import reports
     L, why, trust, rtl = LBL.get(lang, LBL['en']), WHY.get(lang, WHY['en']), TRUST.get(lang, TRUST['en']), lang == 'ar'
     rows = reports.enrich(state, ym)
@@ -629,11 +630,12 @@ def export_clean(state, ym, lang='en'):
                              kinds=[None, 'int', 'int', 'dec', 'dec', 'dec', 'int', 'int', 'int']))
     ot_rows = [[d['driver'], x['date'], x['no'], x['plate'], x['hours']] for d in reports.overtime(state, ym) for x in d['days']]
     sheets.append(_sheet(L['overtime'], [L['driver'], L['date'], L['no'], L['plate'], L['ot']], ot_rows, rtl, kinds=[None, None, None, None, 'dec']))
-    rec = reports.reconciliation(state, ym)
-    sheets.append(_sheet(L['recon'], [L['category'], L['vendor'], L['trips_n'], L['actual'], L['billed'], L['diff'], L['rate'], L['money']],
-                         [[a['category'], a['vendor'], a['trips'], a['actualKm'], a['billedKm'], a['diffKm'], a['rate'], a['diffMoney']] for a in rec], rtl, kinds=[None, None, 'int', 'int', 'int', 'int', 'dec', 'dec']))
-    sheets.append(_sheet(L['alloc'], [L['department'], L['trips_n'], L['km'], L['ot'], L['km_cost'], L['ot_cost'], L['total']],
-                         [[a['department'], a['trips'], a['km'], a['ot'], a['kmCost'], a['otCost'], a['total']] for a in reports.allocation(state, ym)], rtl, kinds=[None, 'int', 'int', 'dec', 'dec', 'dec', 'dec']))
+    if money:
+        rec = reports.reconciliation(state, ym)
+        sheets.append(_sheet(L['recon'], [L['category'], L['vendor'], L['trips_n'], L['actual'], L['billed'], L['diff'], L['rate'], L['money']],
+                             [[a['category'], a['vendor'], a['trips'], a['actualKm'], a['billedKm'], a['diffKm'], a['rate'], a['diffMoney']] for a in rec], rtl, kinds=[None, None, 'int', 'int', 'int', 'int', 'dec', 'dec']))
+        sheets.append(_sheet(L['alloc'], [L['department'], L['trips_n'], L['km'], L['ot'], L['km_cost'], L['ot_cost'], L['total']],
+                             [[a['department'], a['trips'], a['km'], a['ot'], a['kmCost'], a['otCost'], a['total']] for a in reports.allocation(state, ym)], rtl, kinds=[None, 'int', 'int', 'dec', 'dec', 'dec', 'dec']))
     sheets.append(_sheet(L['anom'], [L['level'], L['code'], L['no'], L['date'], L['plate'], L['driver'], L['destination'], L['km']],
                          [[a['level'], why.get(a['code'], a['code']), a['no'], a['date'], a['plate'], a['driver'], a['destination'], a['km']] for a in reports.anomalies(state, ym)], rtl, kinds=[None, None, None, None, None, None, None, 'int']))
     return w.build(sheets)

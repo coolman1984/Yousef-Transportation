@@ -233,8 +233,9 @@ def _num(x):
     return f'{x:,.0f}' if isinstance(x, (int, float)) and float(x).is_integer() else (f'{x:,.2f}' if isinstance(x, (int, float)) else str(x))
 
 
-def report(state, ym, lang='en', brand=None):
-    """Monthly report as .docx: totals, per vehicle/driver/department/category, overtime, reconciliation, cost, things to look at."""
+def report(state, ym, lang='en', brand=None, money=True):
+    """Monthly report as .docx: totals, per vehicle/driver/department/category, overtime, reconciliation, cost, things to look at.
+    money=False leaves out reconciliation and cost (rates are only for finance.view)."""
     brand = brand or {}
     ar = lang == 'ar'
     doc = dw.Doc(rtl=ar, footer=brand.get('footer', ''))
@@ -274,13 +275,13 @@ def report(state, ym, lang='en', brand=None):
         doc.table([[_tr('driver', lang), _tr('ot', lang)]] + [[o['driver'], _num(o['total'])] for o in ot[:25]], widths=[10, 4], header=True, size=10)
     else:
         doc.para(_tr('none', lang))
-    rec = reports.reconciliation(state, ym)
+    rec = reports.reconciliation(state, ym) if money else []
     if rec:
         doc.heading(_tr('rec', lang), 2)
         doc.table([[_tr('cat', lang), _tr('vendor', lang), _tr('trips', lang), _tr('actual', lang), _tr('billed', lang), _tr('diff', lang), _tr('money', lang)]] +
                   [[r['category'], r['vendor'], _num(r['trips']), _num(r['actualKm']), _num(r['billedKm']), _num(r['diffKm']), _num(r['diffMoney'])] for r in rec],
                   header=True, size=9)
-    al = reports.allocation(state, ym)
+    al = reports.allocation(state, ym) if money else []
     if al and any(a['total'] for a in al):
         doc.heading(_tr('alloc', lang), 2)
         doc.table([[_tr('name', lang), _tr('trips', lang), _tr('km', lang), _tr('kmCost', lang), _tr('otCost', lang), _tr('total', lang)]] +

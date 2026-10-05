@@ -1,3 +1,12 @@
+# Unreleased (next version)
+
+## Fixed
+- **Rates and contact numbers are only sent to people who may see them.** A user with only "Trip orders list" no longer receives the rates per km / per overtime hour or the drivers' and people's mobile numbers. The clean Excel report, the Word report and the Reports page leave out vendor reconciliation and cost allocation unless the user has the "Money" permission.
+- **Approval, status, driver link and lock can only be changed with their own buttons**, never by a plain edit of the trip. A locked (closed) trip can only be corrected with "Change this trip" and a written reason, so the old value is always kept.
+- **Dispatchers can cancel a trip again** (it needed a reviewer permission by mistake). Cancelling a closed trip needs the reviewer or "change a locked trip" permission.
+- **Trip photos follow their trip:** a user sees a photo only with the photo permission and for categories assigned to them, and the browser no longer keeps a copy for the next person on a shared PC.
+- Rebuilding the data file from the history now works on Windows, and refuses safely (nothing changed) while the app is still running.
+
 # Trip Orders 1.0.2
 
 ## New

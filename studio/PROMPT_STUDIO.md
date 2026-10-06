@@ -1,3 +1,6 @@
+<!-- first-sale-contract: 2026-10-06 -->
+> **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
+
 # MASTER PROMPT — "Build me a complete video, animation & editing studio (code-driven), then use it"
 
 > Paste everything below the line into a fresh session of the strongest model, in an empty repository (or a `studio/` folder).

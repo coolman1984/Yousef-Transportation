@@ -1,3 +1,10 @@
+<!-- first-sale-contract: 2026-10-06 -->
+> **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
+
+## Owner-approved first-sale scope (2026-10-06)
+
+Added LAUNCH_SCOPE.md and linked every tracked Markdown guide, plan and agent skill to it. Prioritize the limited paid pilot; defer optional features without deleting code or changing historical completion status. Documentation only: no UI, runtime, pricing or application version changes. Validation: documentation links, identical contract across branch targets, skill metadata, and git diff checks. Windows/customer acceptance remains pending; follow the launch ledger.
+
 # Development History and Lessons Learned
 
 Newest first. Every change adds an entry: what changed, why, mistakes, lessons.

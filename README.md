@@ -1,3 +1,6 @@
+<!-- first-sale-contract: 2026-10-06 -->
+> **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
+
 # Trip Orders — أوامر التشغيل
 
 Vehicle trip orders without the paper chase: the dispatcher prepares a trip, the driver gets a WhatsApp link and fills it on the phone (odometer photos, times, signed-paper photo), the office sees it live, and Excel/Word work in and out in your existing layout. Arabic and English, light and dark. Nothing is ever lost.

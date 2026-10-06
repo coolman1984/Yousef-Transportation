@@ -3,10 +3,10 @@
 
 # Trip Orders — أوامر التشغيل
 
-Vehicle trip orders without the paper chase: the dispatcher prepares a trip, the driver gets a WhatsApp link and fills it on the phone (odometer photos, times, signed-paper photo), the office sees it live, and Excel/Word work in and out in your existing layout. Arabic and English, light and dark. Nothing is ever lost.
+First paid pilot: one transport office records trips, drivers, vehicles, start/end times and kilometres, reviews corrections, and exports its monthly report. Arabic and English, light and dark. Backups and a tested restore procedure support recovery within the agreed deployment limits; no unconditional no-data-loss guarantee is offered. Driver phone links, photos and internet exchange are separately accepted later-release services, not part of the basic office-only offer.
 
 - Start here: `docs/GUIDE_ADMIN.md`, `docs/GUIDE_DISPATCHER.md`, `docs/GUIDE_DRIVER.md`, `docs/GATEWAY_SETUP.md`.
-- Install: download `TripOrders-Setup-<version>.exe` from **Releases**.
+- Pilot installation: obtain the exact reviewed candidate from the operator after the launch gates in `LAUNCH_SCOPE.md` pass. Historical Releases (including 1.0.2) predate recent fixes and must not be used as the current pilot installer. No general customer download is approved by this documentation change.
 - For developers/agents: `CLAUDE.md`, `docs/EXECUTION_PLAN.md`, `TASKS.md`, `DEVELOPMENT_HISTORY.md`.
 - Run from source: `python server/app.py` (Python 3.11, no packages). Tests: `cd tests && python -m unittest discover`; gateway: `cd gateway && node --test test/gateway.test.js`.
 

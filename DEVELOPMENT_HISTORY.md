@@ -4,6 +4,25 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 4 - backups (F13) (2026-10-06)
+
+**Reproduced first (`tests/test_backup.py`, engine only):** 8 simultaneous `create()` calls -> `FileNotFoundError` / `disk I/O error` (one shared `.tmp` per name); two backups in the same second -> the second
+`os.replace` overwrote the first; a photo copy cut short by a power failure was trusted because its name existed; nothing proved that data, accounts and history belong together; an account-only change never made
+a backup due (the scheduler watched `store.version()` only).
+**What changed (`server/backup.py`, small edits in `auth.py`, `app.py`, `datatab.js`):** a lock (one run at a time); a free name (a taken second moves to the next); every part is snapshotted into a uniquely tagged temporary
+file, checked (SQLite integrity, size, SHA-256) and renamed - auth, history, manifest, and the data file LAST, because the data file is what makes a set visible/restorable; any failure removes the temporary files and the
+parts already placed, keeps the last good set and sets `last_error` (shown in Settings > Data as a red note; "overdue" as an amber one, counted from the last good backup or from program start so a new installation never warns);
+disk space is checked first (plain message); the manifest `to_<time>_<kind>.json` lists sizes, checksums, history watermark (`journal.vv()`), data version and app version; `verify()` is used by `restore()` (a legacy set without a manifest
+still restores, checked by SQLite only); the scheduler uses the watermark (data version + history), which also covers accounts because account changes are history entries; the second folder gets the same set file by file, data last;
+photos are mirrored one file at a time under a temporary name and re-copied when the size differs (a failed photo is counted and reported, it does not stop the database backup). Backup copies are plain single files now
+(`journal_mode=DELETE` on the copy; before, `-wal`/`-shm` files stayed next to every renamed copy).
+**Drill result (important for the owner's guide):** a clean PC given ONLY a set (data, accounts, history, photos) comes back with all business data, working logins and photos, but the program starts as a new device and keeps the old history
+as `journal.incomplete-*.db`: the PC's secret keys (`data/node`) and the mailbox secrets (`gateway.json`) are deliberately not in a set. Putting them in plain files on USB drives would be a key leak, and encrypting them needs a
+cipher the standard library does not have, so identity recovery stays open (T17 remainder).
+**Mistakes:** my first UI strings used double quotes inside double quotes - `JsSyntaxTest` (added last slice) caught it at once; the first "overdue" rule warned on a new installation (found by the browser test).
+
+---
+
 ## Commercial readiness slice 3 - rates by trip date (F07), web address check (F04) (2026-10-06)
 
 **F07 (reproduced in the plan, rebuilt as tests):** reports read the category's CURRENT rate, so raising the rate re-priced every old month. New `server/pricing.py`:

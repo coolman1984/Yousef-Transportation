@@ -667,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups/folder':
             self.need('backups.manage')
             return self.send(200, {'dirs': BACKUPS.extra, 'error': BACKUPS.last_error, 'local': self.ip in LOCAL_IPS,
-                                   'admin': is_admin(self.u)})
+                                   'admin': is_admin(self.u), 'status': BACKUPS.status()})
         if p == '/api/trash':
             self.need('trash.restore')
             self.need_all_scopes()

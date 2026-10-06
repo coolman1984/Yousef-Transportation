@@ -409,6 +409,8 @@
     'bk.sub': 'Made automatically every few hours and before risky actions, and always checked. Restoring is a new change - the history is never rolled back.',
     'bk.make': 'Back up now',
     'bk.made': 'Backup made',
+    'bk.failed': 'The last backup did not work. Your data is safe and the previous backup is untouched. Try “Back up now”; if it fails again, free some disk space or tell the person who supports the program.',
+    'bk.stale': 'No backup was made for a long time although the data changed. Press “Back up now”.',
     'bk.size': 'Size',
     'bk.restore': 'Restore',
     'bk.restore.body': 'The data goes back to this backup. Work done since then on other PCs is kept. A safety backup is made first.',

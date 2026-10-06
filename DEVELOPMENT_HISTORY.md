@@ -15,6 +15,18 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 6 - import error contract (F16) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): core import path ("native Excel/CSV import with preview"); protected/Office formats are an allowed exclusion, so this slice only makes their refusal predictable.** Branch ccr-a760379a-lzybk5 from 20c0f1e.
+**Checks:** `test_import_errors` 6 (all layers, Office codes with a pretend PowerShell, the API answer, no data change, no content repeated), `test_formats`, `test_excel_io`, `test_word_io`; Linux, Python 3.13. **Not run:** Windows with Office (the two known failures should now pass there; to confirm).
+**Root cause (reproduced here by pretending Office is present and automation fails):** the two tests expected the built-in readers' plain refusal, but on a PC where Office is *registered* a DRM-looking file is sent to Office and the answer is Office's/the environment's (`officeFailed` here). It was a test/product-path mismatch, not a defect in either route.
+**Contract:** each failure has a stable code - `FormatError(msg, code)` (default derived from the standard message), carried by `ImportError_`, `WordError`, `OfficeError` and `BadRequest` into the API as `{error, code}`; `js/views/excel.js` picks the dictionary text by code (`CODE_KEY`), the English-substring map stays only as the fallback for old messages.
+Codes: drm encrypted pdf image xlsb old empty unknown big damaged wordGiven sheetGiven noTable | officeMissing officeTimeout officePassword officeFailed | noColumns noTrips previewExpired nothingToImport noForm needCategory.
+**Tests no longer depend on the host:** the refusal tests switch Office off (`_no_office`), Office has its own tests; harness `ApiError` now keeps the JSON answer. **Not done:** formula-injection check of exports, a real Office run.
+**Next:** F09 (receipts and photo durability of the driver lane), then the Windows field drills (L1/L3/L4) which need real hardware.
+
+---
+
 ## Commercial readiness slice 5 - one time contract (F11) (2026-10-06)
 
 **Gate (LAUNCH_SCOPE.md): L2 core journey / money - "time/duration" precondition of any monetary report.** Branch ccr-a760379a-lzybk5 from 4f57d6d. **Checks:** `test_time` 10 (+1 in `test_gateway_client`), neighbours

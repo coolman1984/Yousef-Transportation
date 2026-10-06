@@ -103,6 +103,7 @@ class SpreadsheetTypes(unittest.TestCase):
         self.assertEqual((rows[0]['date'], rows[0]['startTime']), (dt.date(2026, 9, 1), dt.time(9, 0)))
 
     def test_refusals_are_plain(self):
+        self._no_office()
         cases = [(b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(2000), 'document-security'),
                  (b'%PDF-1.7 ' + b'x' * 200, 'pdf'), (b'\xff\xd8\xff\xe0' + b'x' * 200, 'picture'), (b'', 'empty'),
                  (b'PK\x03\x04' + b'x' * 300, 'damaged'), (b'\x00\x01\x02\x03' * 300, 'not recognised')]
@@ -180,6 +181,7 @@ class WordTypes(unittest.TestCase):
         check_form(self, data, 'f.doc')
 
     def test_refusals(self):
+        self._no_office()
         for data, part in ((b'<## NASCA DRM FILE - VER1.00 ##>' + os.urandom(900), 'document-security'), (b'%PDF-1.4' + b'x' * 300, 'pdf')):
             with self.assertRaises(W.WordError) as e:
                 W.parse_forms(data, 'f.docx')
@@ -193,6 +195,16 @@ class WordTypes(unittest.TestCase):
 import json  # noqa: E402
 import subprocess  # noqa: E402
 import com_office as C  # noqa: E402
+
+def _no_office(self):
+    """Refusal wording is the contract of the built-in readers: on a PC with Office installed the protected sample would go to Office
+    and get Office's own answer (F16). Office is tested separately in OfficeRoute and in test_import_errors."""
+    avail = C.available
+    C.available = lambda app: False
+    self.addCleanup(setattr, C, 'available', avail)
+
+
+SpreadsheetTypes._no_office = WordTypes._no_office = _no_office
 
 
 class FakePowerShell:

@@ -104,7 +104,11 @@ class Conflict(Exception):
 
 
 class BadRequest(Exception):
-    pass
+    """A request that cannot be done; `code` (optional) is the stable name of the problem that the screens translate."""
+
+    def __init__(self, msg='', code=''):
+        super().__init__(msg)
+        self.code = code
 
 
 def now():

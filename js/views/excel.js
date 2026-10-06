@@ -17,7 +17,14 @@
     return TO.t(key, { a: n[0] || '', b: n[1] || '', x: (q[0] || '').replace(/"/g, ''), y: (q[1] || '').replace(/"/g, '') });
   }
   function alertText(a) { var k = 'imp.al.' + a.code; return TO.has(k) ? TO.t(k, { n: a.n }) : TO.esc(a.text); }
+  /* the server names every import problem with a stable code; the words come from the dictionaries, in the person's language */
+  var CODE_KEY = { drm: 'imp.e.drm', encrypted: 'imp.e.locked', pdf: 'imp.e.pdf', image: 'imp.e.picture', xlsb: 'imp.e.xlsb', old: 'imp.e.oldoffice', empty: 'imp.e.empty',
+    unknown: 'imp.e.unknown', big: 'imp.e.big', damaged: 'imp.e.damaged', wordGiven: 'imp.e.wordgiven', sheetGiven: 'imp.e.sheetgiven', noTable: 'imp.e.notable',
+    officeMissing: 'imp.e.nooffice', officeTimeout: 'imp.e.otimeout', officePassword: 'imp.e.locked', officeFailed: 'imp.e.officefail', noColumns: 'imp.e.nocols',
+    noTrips: 'imp.e.notrips', previewExpired: 'imp.e.expired', nothingToImport: 'imp.e.nothing', noForm: 'imp.e.noform', needCategory: 'imp.e.cat' };
   function errText(e) {
+    var code = e && e.data && e.data.code;
+    if (code && CODE_KEY[code] && TO.has(CODE_KEY[code])) return TO.t(CODE_KEY[code]);
     var m = (e && e.message) || '';
     var map = [['empty', 'imp.e.empty'], ['damaged', 'imp.e.damaged'], ['too large', 'imp.e.big'],
       ['No sheet with trip columns', 'imp.e.nocols'], ['no trips in them', 'imp.e.notrips'], ['expired', 'imp.e.expired'], ['nothing to import', 'imp.e.nothing'],
@@ -30,7 +37,7 @@
   function download(url, fallbackName, btn) {
     if (btn) btn.disabled = true;
     fetch(url, { credentials: 'same-origin' }).then(function (r) {
-      if (!r.ok) return r.json().then(function (j) { throw new Error((j && j.error) || ('HTTP ' + r.status)); }, function () { throw new Error('HTTP ' + r.status); });
+      if (!r.ok) return r.json().then(function (j) { var er = new Error((j && j.error) || ('HTTP ' + r.status)); er.data = j; throw er; }, function () { throw new Error('HTTP ' + r.status); });
       var cd = r.headers.get('Content-Disposition') || '', m = /filename="([^"]+)"/.exec(cd);
       return r.blob().then(function (b) { return { b: b, name: m ? m[1] : fallbackName }; });
     }).then(function (f) {

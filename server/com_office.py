@@ -26,7 +26,11 @@ MAX_CELLS = 1_500_000
 
 
 class OfficeError(Exception):
-    """Office could not read the file; the message says why, in plain words."""
+    """Office could not read the file; the message says why, in plain words. `code`: officeTimeout, officePassword, officeMissing, officeFailed, big."""
+
+    def __init__(self, msg, code='officeFailed'):
+        super().__init__(msg)
+        self.code = code
 
 
 # --------------------------------------------------------------------------- is Office here?
@@ -232,7 +236,7 @@ def _run(app, data, name, tmp_root=None, runner=None):
         try:
             (runner or _subprocess_runner)(cmd, env, TIMEOUT)
         except subprocess.TimeoutExpired:
-            raise OfficeError(f'Microsoft {"Excel" if app == "excel" else "Word"} took too long to open this file. Close any open Office windows and try again.')
+            raise OfficeError(f'Microsoft {"Excel" if app == "excel" else "Word"} took too long to open this file. Close any open Office windows and try again.', 'officeTimeout')
         except OSError as e:
             raise OfficeError('Microsoft Office could not be started on this PC: ' + str(e))
         if not os.path.exists(out):
@@ -244,7 +248,7 @@ def _run(app, data, name, tmp_root=None, runner=None):
         except ValueError:
             raise OfficeError('Microsoft Office gave an answer that could not be understood.')
         if isinstance(res, dict) and res.get('error'):
-            raise OfficeError(_friendly(res['error'], app))
+            raise OfficeError(*_friendly(res['error'], app))
         return res
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -256,17 +260,18 @@ def _subprocess_runner(cmd, env, timeout):
 
 
 def _friendly(msg, app):
+    """(plain message, code) for what Office said."""
     low = msg.lower()
     nm = 'Excel' if app == 'excel' else 'Word'
     if 'password' in low:
-        return f'The file is protected with a password. Open it in {nm}, remove the password and save a copy.'
+        return f'The file is protected with a password. Open it in {nm}, remove the password and save a copy.', 'officePassword'
     if 'too large' in low:
-        return msg
+        return msg, 'big'
     if 'class not registered' in low or '80040154' in low:
-        return f'Microsoft {nm} is not installed on this PC.'
+        return f'Microsoft {nm} is not installed on this PC.', 'officeMissing'
     if 'cannot access' in low or 'could not find' in low or "couldn't find" in low:
-        return f'Microsoft {nm} could not open the file: {msg[:160]}'
-    return f'Microsoft {nm} could not open this file ({msg[:160]}). If your company protects its documents, make sure the security program is running on this PC and you are allowed to open the file.'
+        return f'Microsoft {nm} could not open the file: {msg[:160]}', 'officeFailed'
+    return f'Microsoft {nm} could not open this file ({msg[:160]}). If your company protects its documents, make sure the security program is running on this PC and you are allowed to open the file.', 'officeFailed'
 
 
 # --------------------------------------------------------------------------- JSON -> the shapes the rest of the program reads

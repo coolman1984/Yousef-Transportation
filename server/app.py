@@ -520,7 +520,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(409, {'error': str(e)})
         except (BadRequest, ValueError) as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            self.send(400, {'error': str(e)})
+            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {})})
         except (ConnectionError, BrokenPipeError):
             pass
         except Exception as e:
@@ -846,7 +846,7 @@ class Handler(BaseHTTPRequestHandler):
                     pid, plan = excel_io.make_preview(self.user, data, STORE.state(), name, engine)
                 return self.send(200, {'id': pid, **plan})
             except (word_io.WordError, excel_io.ImportError_) as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
         if p == '/api/word/preview':
             self.need('excel.import')
             self.need_all_scopes()
@@ -854,7 +854,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, plan = word_io.preview(self.user, self.body(30 * 1048576), STORE.state(), qs.get('category', ''), qs.get('name', '')[:120])
                 return self.send(200, {'id': pid, **plan})
             except (word_io.WordError, excel_io.ImportError_) as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
         if p.startswith('/api/excel/'):
             action = p[len('/api/excel/'):]
             self.need('excel.import')
@@ -875,7 +875,7 @@ class Handler(BaseHTTPRequestHandler):
                     STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': 'Excel import', 'target': plan.get('filename') or '', 'detail': f'{n} trips'}])
                     return self.send(200, {'trips': n, 'changes': res['changes']})
             except excel_io.ImportError_ as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
             return self.send(404, {'error': 'Not found'})
         if p.startswith('/api/gateway/'):
             self.need('gateway.manage')

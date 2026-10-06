@@ -29,7 +29,13 @@ MAX_CELLS = 400_000
 
 
 class FormatError(Exception):
-    """The file cannot be read; the message says what the person can do."""
+    """The file cannot be read. `message` says what the person can do (English); `code` is the stable name of the problem that the screens
+    translate (drm, encrypted, pdf, image, xlsb, old, empty, unknown, big, damaged, wordGiven, sheetGiven, noTable, officeMissing,
+    officeTimeout, officePassword, officeFailed). Without an explicit code it is taken from the standard message."""
+
+    def __init__(self, msg, code=None):
+        super().__init__(msg)
+        self.code = code or next((k for k, v in MSG.items() if v == msg), 'damaged')
 
 
 MSG = {
@@ -45,6 +51,12 @@ MSG = {
     'big': 'The file is too large to import safely.',
     'damaged': 'The file is damaged and cannot be opened.',
 }
+
+def _code_of(msg):
+    """The stable code for a message of the built-in readers (they only say: empty, too large, or damaged)."""
+    low = msg.lower()
+    return 'empty' if 'empty' in low else 'big' if ('too large' in low or 'too many' in low) else 'damaged'
+
 
 WORD_KINDS = {'docx', 'doc', 'odt', 'rtf', 'htmldoc'}
 SHEET_KINDS = {'xlsx', 'xls', 'ods', 'csv', 'htmlsheet', 'xml2003'}
@@ -142,16 +154,16 @@ def need_sheet(kind):
     if kind in SHEET_KINDS:
         return
     if kind in WORD_KINDS:
-        raise FormatError('This is a Word document, not a spreadsheet.')
-    raise FormatError(MSG.get(kind) or MSG['unknown'])
+        raise FormatError('This is a Word document, not a spreadsheet.', 'wordGiven')
+    raise FormatError(MSG.get(kind) or MSG['unknown'], kind if kind in MSG else 'unknown')
 
 
 def need_document(kind):
     if kind in WORD_KINDS:
         return
     if kind in SHEET_KINDS:
-        raise FormatError('This is a spreadsheet, not a Word document.')
-    raise FormatError(MSG.get(kind) or MSG['unknown'])
+        raise FormatError('This is a spreadsheet, not a Word document.', 'sheetGiven')
+    raise FormatError(MSG.get(kind) or MSG['unknown'], kind if kind in MSG else 'unknown')
 
 
 # --------------------------------------------------------------------------- OLE2 compound file (old .xls / .doc)
@@ -794,7 +806,7 @@ def _grid_workbook(tables_or_rows, names):
             sh.max_col = max(b for _, b in sh.cells)
         out.append(sh)
     if not any(s.cells for s in out):
-        raise FormatError('No table with data was found in this file.')
+        raise FormatError('No table with data was found in this file.', 'noTable')
     return Workbook(out, False)
 
 
@@ -886,19 +898,19 @@ def _use_office(kind, name, engine, want):
 def _via_office(app, data, name, engine='auto'):
     if not com_office.available(app):
         if engine == 'office':
-            raise FormatError('Microsoft ' + ('Excel' if app == 'excel' else 'Word') + ' is not available on this PC (it needs Windows with Office installed).')
-        raise FormatError(MSG.get(sniff(data, name)) or MSG['unknown'])
+            raise FormatError('Microsoft ' + ('Excel' if app == 'excel' else 'Word') + ' is not available on this PC (it needs Windows with Office installed).', 'officeMissing')
+        raise FormatError(MSG.get(sniff(data, name)) or MSG['unknown'], sniff(data, name) if sniff(data, name) in MSG else 'unknown')
     try:
         return (com_office.read_workbook if app == 'excel' else com_office.read_document)(data, name, OFFICE_TMP)
     except com_office.OfficeError as e:
-        raise FormatError(str(e))
+        raise FormatError(str(e), e.code)
 
 
 def read_workbook(data, name='', engine='auto'):
     """engine: 'auto' (built-in readers; Microsoft Office for files they cannot open), 'office' (always Microsoft Excel), 'native' (never Office)."""
     kind = sniff(data, name)
     if kind in WORD_KINDS or (kind not in SHEET_KINDS and com_office.kind_of_name(name) == 'word'):
-        raise FormatError('This is a Word document, not a spreadsheet.')
+        raise FormatError('This is a Word document, not a spreadsheet.', 'wordGiven')
     if _use_office(kind, name, engine, 'sheet'):
         return _via_office('excel', data, name, engine)
     need_sheet(kind)
@@ -915,13 +927,13 @@ def read_workbook(data, name='', engine='auto'):
             return read_html_sheets(data)
         return read_xml2003(data)
     except xlsx_read.XlsxError as e:
-        raise FormatError(str(e))
+        raise FormatError(str(e), _code_of(str(e)))
 
 
 def read_document(data, name='', engine='auto'):
     kind = sniff(data, name)
     if kind in SHEET_KINDS or (kind not in WORD_KINDS and com_office.kind_of_name(name) == 'sheet'):
-        raise FormatError('This is a spreadsheet, not a Word document.')
+        raise FormatError('This is a spreadsheet, not a Word document.', 'sheetGiven')
     if _use_office(kind, name, engine, 'word'):
         return _via_office('word', data, name, engine)
     need_document(kind)
@@ -936,4 +948,4 @@ def read_document(data, name='', engine='auto'):
             return read_rtf(data)
         return read_html(data)
     except docx_read.DocxError as e:
-        raise FormatError(str(e))
+        raise FormatError(str(e), _code_of(str(e)))

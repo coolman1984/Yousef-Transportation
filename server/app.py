@@ -7,7 +7,6 @@ do is set by the administrator (Users page) and checked here for every request.
 """
 import hashlib
 import html
-import ipaddress
 import re
 import json
 import logging
@@ -34,6 +33,7 @@ from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E4
 import excel_io  # noqa: E402
 import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
+import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
@@ -58,6 +58,7 @@ DEFAULT_CONFIG = {
     'backup_interval_hours': 6,
     'keep_auto_backups': 200,
     'max_upload_mb': 50,
+    'allowed_networks': [],         # empty = this PC and every private network (office LAN, company VPN/WAN); or a list such as ["192.168.1.0/24", "10.20.0.0/16"]
     'allowed_hosts': [],            # extra names this PC may be opened by (a company DNS name); its own names and IP addresses always work
     'max_connections': 128,         # open browser connections at the same time; more get a polite 503
     'idle_timeout_seconds': 60,     # a connection that stays silent is closed
@@ -293,48 +294,19 @@ def commit_guard(u, internal=False):
     return guard
 
 
-_OWN_NAMES = None
+_POLICY = {}
 
 
-def own_host_names():
-    """The names this PC is known by (computer name, full name with its domain, config 'allowed_hosts'), lower case. Made once."""
-    global _OWN_NAMES
-    if _OWN_NAMES is None:
-        names = {str(h).strip().lower().rstrip('.') for h in CFG.get('allowed_hosts') or [] if str(h).strip()}
-        for fn in (socket.gethostname, socket.getfqdn):
-            try:
-                names.add(fn().strip().lower().rstrip('.'))
-            except OSError:
-                pass
-        _OWN_NAMES = names
-    return _OWN_NAMES
-
-
-def host_allowed(header):
-    """Is this Host header one of this PC's own addresses? A web site on the internet can make a browser on this PC talk to
-    127.0.0.1 under ITS name (DNS rebinding); the request then looks local. Refusing every name that is not ours stops that.
-    Allowed: IP addresses, localhost, one-word computer names, *.local, this PC's own full name and the names in 'allowed_hosts'."""
-    h = (header or '').strip()
-    if not h or len(h) > 255 or not re.fullmatch(r'[A-Za-z0-9._\-:\[\]]+', h):
-        return False
-    if h.startswith('['):                       # [::1]:8090
-        end = h.find(']')
-        if end < 0 or not re.fullmatch(r'(:\d{1,5})?', h[end + 1:]):
-            return False
-        name = h[1:end]
-    else:
-        name, colon, port = h.partition(':')
-        if colon and not re.fullmatch(r'\d{1,5}', port):
-            return False
-    name = name.lower().rstrip('.')
-    if not name:
-        return False
-    try:
-        ipaddress.ip_address(name)
-        return True                             # a browser that connects to an IP address cannot be fooled by somebody else's name
-    except ValueError:
-        pass
-    return '.' not in name or name.endswith('.local') or name in own_host_names()
+def policy():
+    """The network rules of this PC from config.json, read once: own names, and the networks that may connect."""
+    if not _POLICY:
+        nets, bad = (netpolicy.parse_networks(CFG['allowed_networks']) if CFG.get('allowed_networks') else (None, []))
+        for b in bad:
+            log.warning('config.json allowed_networks: "%s" is not a network (example: 192.168.1.0/24) and is ignored', b)
+        if CFG.get('allowed_networks') and not nets:
+            nets = None                          # a list with nothing usable in it falls back to the private ranges instead of locking everybody out
+        _POLICY.update(names=netpolicy.own_names(CFG.get('allowed_hosts') or []), nets=nets)
+    return _POLICY
 
 
 def lan_urls(port):
@@ -525,7 +497,10 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def handle_safely(self, fn):
-        if not host_allowed(self.headers.get('Host')):
+        if not netpolicy.peer_allowed(self.ip, policy()['nets']):
+            log.info('REFUSED peer %s: not this PC and not inside the allowed networks', self.ip)
+            return self.send(403, {'error': 'This PC only accepts connections from the office network. Ask the administrator to allow your network.'})
+        if not netpolicy.host_allowed(self.headers.get('Host'), policy()['names']):
             host = (self.headers.get('Host') or '')[:80]
             log.info('REFUSED address %r from %s', host, self.ip)
             return self.send(400 if not host else 403, {'error': 'This is not one of this PC\'s addresses, so the request was refused. '

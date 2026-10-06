@@ -18,8 +18,12 @@ name or an `allowed_hosts` entry. Also: idle timeout 120 -> 60 s (`idle_timeout_
 (`send` called `int()` on it - found by the new test).
 **Mistakes:** (1) my first English help text had an apostrophe inside a single-quoted JS string - the whole language file broke and every label showed as a raw key; `test_design` (regex based) did not notice,
 the real-Chrome test did. Added `JsSyntaxTest` (node --check on every page script). (2) first `stamp` call site sat inside an `elif` chain and would have been a syntax error - caught by reading the diff before running.
-**Not done / owner decision:** the default `host` stays `0.0.0.0` (plain HTTP on the office network) and the installer firewall rule stays `profile=any`, because staff on other PCs may open the program through the
-address Settings shows, and a stricter rule could silently break sync between PCs on different subnets; I cannot test either on Windows here. The plan's choice (loopback only + HTTPS for LAN) needs the owner's yes.
+**Owner decision (asked after the slice, answered 2026-10-06):** staff open the program from other PCs on the same network and from other networks (branches). So the plan's "loopback by default" is NOT applied.
+Instead `server/netpolicy.py` (pure functions, unit-tested) makes the program answer only this PC and private networks (RFC 1918, link-local, 100.64/10 for VPNs, IPv6 ULA/link-local): the "never reachable from the
+internet" rule now holds inside the application even if a router or the firewall lets a public address through. `allowed_networks` in `config.json` replaces the default list (this PC is always allowed); a list with nothing usable
+falls back to the default instead of locking everybody out. Refusal is tested end to end with a client bound to 127.0.0.2 against a server whose list names other networks (a real public source address cannot be created in this sandbox).
+**Still open (needs Windows or a certificate decision):** plain HTTP crosses the company network, so credentials are readable by anyone on a hostile WAN segment unless the VPN encrypts it; HTTPS for the web port needs a certificate
+people can trust without a browser warning. The installer rule `profile=any` stays: a `remoteip=` rule with the private ranges would be the next step, but a silently failing `netsh` line would block the program on the customer's PC and I cannot run it here.
 
 ---
 

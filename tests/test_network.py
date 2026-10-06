@@ -2,16 +2,21 @@
 the number of open connections is bounded, and bad requests fail safely. Direct HTTP calls against a real server."""
 import http.client
 import json
+import os
 import socket
+import sys
 import time
 import unittest
 
 from harness import Server
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server'))
+import netpolicy  # noqa: E402
 
-def raw(server, method, path, host, body=None, headers=None):
-    """One request with a chosen Host header; returns (status, parsed json or text)."""
-    c = http.client.HTTPConnection('127.0.0.1', server.port, timeout=10)
+
+def raw(server, method, path, host, body=None, headers=None, source=None):
+    """One request with a chosen Host header (and optionally a chosen source address); returns (status, parsed json or text)."""
+    c = http.client.HTTPConnection('127.0.0.1', server.port, timeout=10, source_address=(source, 0) if source else None)
     try:
         c.putrequest(method, path, skip_host=True, skip_accept_encoding=True)
         if host is not None:
@@ -82,6 +87,54 @@ class HostCheckTest(unittest.TestCase):
         st, _ = raw(self.S, 'POST', '/api/auth/login', 'localhost', None, {'Content-Length': '-5'})
         self.assertEqual(st, 400)
         self.assertEqual(self.S.client().get('/api/auth/status')['hasUsers'], False, 'the server is still fine')
+
+
+class PeerRuleTest(unittest.TestCase):
+    def test_a_private_networks_and_this_pc_are_allowed_the_internet_is_not(self):
+        for ip in ('127.0.0.1', '::1', '::ffff:127.0.0.1', '192.168.1.20', '10.20.30.40', '172.16.5.5', '172.31.255.254', '169.254.10.1', '100.64.1.1',
+                   'fe80::1%eth0', 'fd12:3456::1', '::ffff:192.168.1.5'):
+            self.assertTrue(netpolicy.peer_allowed(ip), ip)
+        for ip in ('8.8.8.8', '41.33.10.5', '172.32.0.1', '172.15.255.255', '100.128.0.1', '2001:db8::1', '2606:4700::1111', '::ffff:8.8.8.8', 'not an ip', '', None):
+            self.assertFalse(netpolicy.peer_allowed(ip), ip)
+
+    def test_b_a_configured_list_replaces_the_private_ranges_but_not_this_pc(self):
+        nets, bad = netpolicy.parse_networks(['192.168.1.0/24', ' 10.20.0.0/16 ', 'nonsense', '192.168.7.9', 42])
+        self.assertEqual(bad, ['nonsense', '42'])
+        self.assertEqual(len(nets), 3, 'a single address is a network of one')
+        for ip in ('192.168.1.77', '10.20.5.5', '192.168.7.9', '127.0.0.1', '::1'):
+            self.assertTrue(netpolicy.peer_allowed(ip, nets), ip)
+        for ip in ('192.168.2.1', '10.21.0.1', '172.16.0.1', '8.8.8.8', 'fd00::1'):
+            self.assertFalse(netpolicy.peer_allowed(ip, nets), ip)
+        self.assertEqual(netpolicy.parse_networks('junk'), ([], []))
+
+
+class PeerServerTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # 127.0.0.2 is "another address" for the server: allowed by default (private), refused when the list names other networks
+        cls.default = Server('netdef').start()
+        cls.narrow = Server('netnarrow', extra_cfg={'allowed_networks': ['10.99.0.0/16', 'garbage']}).start()
+        cls.junk = Server('netjunk', extra_cfg={'allowed_networks': ['garbage']}).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        for s in (cls.default, cls.narrow, cls.junk):
+            s.cleanup()
+
+    def test_c_by_default_every_private_address_connects(self):
+        self.assertEqual(raw(self.default, 'GET', '/api/auth/status', 'localhost', source='127.0.0.2')[0], 200)
+
+    def test_d_a_listed_network_list_refuses_everybody_else_but_never_this_pc(self):
+        st, j = raw(self.narrow, 'GET', '/api/auth/status', 'localhost', source='127.0.0.2')
+        self.assertEqual(st, 403)
+        self.assertIn('office network', str(j))
+        st, j = raw(self.narrow, 'POST', '/api/auth/setup', 'localhost', {'username': 'x', 'full_name': 'X', 'password': 'Quarter-pass77'}, source='127.0.0.2')
+        self.assertEqual(st, 403, 'nothing can be changed from a refused address')
+        self.assertEqual(raw(self.narrow, 'GET', '/api/auth/status', 'localhost')[0], 200, 'this PC itself always gets in')
+        self.assertFalse(self.narrow.client().get('/api/auth/status')['hasUsers'])
+
+    def test_e_a_list_with_nothing_usable_does_not_lock_everybody_out(self):
+        self.assertEqual(raw(self.junk, 'GET', '/api/auth/status', 'localhost', source='127.0.0.2')[0], 200)
 
 
 class ConnectionLimitTest(unittest.TestCase):

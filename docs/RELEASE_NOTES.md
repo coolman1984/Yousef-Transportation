@@ -5,6 +5,8 @@
 - **Approval, status, driver link and lock can only be changed with their own buttons**, never by a plain edit of the trip. A locked (closed) trip can only be corrected with "Change this trip" and a written reason, so the old value is always kept.
 - **Dispatchers can cancel a trip again** (it needed a reviewer permission by mistake). Cancelling a closed trip needs the reviewer or "change a locked trip" permission.
 - **Trip photos follow their trip:** a user sees a photo only with the photo permission and for categories assigned to them, and the browser no longer keeps a copy for the next person on a shared PC.
+- **A driver's "end" that reaches the office before the "start" no longer loses the start.** The trip now ends up the same whatever order the phone's messages arrive in: the start odometer and time fill in when the start message arrives, a closed or cancelled trip is never touched, and one damaged message can no longer block the others.
+- **Replacing a driver link now really switches the old one off.** The old link stops opening on the phone and cannot send anything new as this trip, even if another office PC that was switched off still knew it. What the old phone had already sent is kept. (If the mailbox was set up with an earlier version, nothing needs to be done: it updates itself.)
 - Rebuilding the data file from the history now works on Windows, and refuses safely (nothing changed) while the app is still running.
 
 # Trip Orders 1.0.2

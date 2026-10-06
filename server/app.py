@@ -202,7 +202,7 @@ ENTITY_TITLE = {'tripCategories': 'trip categories', 'vehicles': 'vehicles', 'dr
 OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
 SHARED_LISTS = ('settings', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')  # not limited to a category
 GA_FIELDS = {'gaApproved', 'gaBy', 'gaAt'}
-LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'status', 'boundDevice'}
+LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'status', 'boundDevice'}
 SYSTEM_ONLY = ('data.import',)  # driver submissions and amendments are written by the server itself, never by hand
 
 

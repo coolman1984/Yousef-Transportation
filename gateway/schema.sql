@@ -35,6 +35,10 @@ CREATE TABLE IF NOT EXISTS photos (
   data       BLOB NOT NULL,
   recv_at    INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS revoked (        -- links the office replaced: a removed card cannot be published again by a PC with old data
+  token_hash TEXT PRIMARY KEY,
+  at         INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS rate (key TEXT NOT NULL, window INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (key, window));
 CREATE INDEX IF NOT EXISTS events_recv ON events (recv_at);

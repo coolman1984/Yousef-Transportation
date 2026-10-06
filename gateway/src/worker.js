@@ -140,6 +140,16 @@ async function officeAuth(request, env, url, bodyBytes) {
   if (!(r.meta ? r.meta.changes : r.changes)) throw new Fail(401, 'Replayed request');
 }
 
+// Links the office replaced. A removed card is remembered here so a PC that still has the old link in its data cannot publish it again.
+// schema.sql was run by hand once on existing mailboxes, so the table is also created here the first time it is needed.
+const REVOKED_DAYS = 60;
+const revokedReady = new WeakSet();
+async function ensureRevoked(env) {
+  if (revokedReady.has(env.DB)) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  revokedReady.add(env.DB);
+}
+
 async function office(request, env, url, parts) {
   const bodyBytes = request.method === 'GET' ? new Uint8Array(0) : await readBody(request, MAX_CARDS_BODY);
   await officeAuth(request, env, url, bodyBytes);
@@ -148,15 +158,21 @@ async function office(request, env, url, parts) {
 
   if (what === 'cards' && m === 'PUT') {
     const d = json(), stmts = [];
+    await ensureRevoked(env);
     for (const c of (d.cards || []).slice(0, 500)) {
       if (!/^[0-9a-f]{64}$/.test(c.tokenHash || '') || !c.tripId) throw new Fail(400, 'Bad card');
       const body = JSON.stringify(c.body || {});
       if (body.length > 8192) throw new Fail(400, 'Card too large');
-      stmts.push(env.DB.prepare('INSERT INTO cards(token_hash, trip_id, body, cancelled, expires_at, updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(token_hash) DO UPDATE SET body = excluded.body, cancelled = excluded.cancelled, expires_at = excluded.expires_at, updated_at = excluded.updated_at')
-        .bind(c.tokenHash, c.tripId, body, c.cancelled ? 1 : 0, c.expiresAt || null, now()));
+      // a revoked link is never published again (WHERE NOT EXISTS), whichever PC sends it
+      stmts.push(env.DB.prepare('INSERT INTO cards(token_hash, trip_id, body, cancelled, expires_at, updated_at) SELECT ?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM revoked WHERE token_hash = ?) ON CONFLICT(token_hash) DO UPDATE SET body = excluded.body, cancelled = excluded.cancelled, expires_at = excluded.expires_at, updated_at = excluded.updated_at')
+        .bind(c.tokenHash, c.tripId, body, c.cancelled ? 1 : 0, c.expiresAt || null, now(), c.tokenHash));
       if (c.releaseDevice) stmts.push(env.DB.prepare('UPDATE cards SET bound_device = NULL WHERE token_hash = ?').bind(c.tokenHash));
     }
-    for (const h of (d.remove || []).slice(0, 500)) stmts.push(env.DB.prepare('DELETE FROM cards WHERE token_hash = ?').bind(String(h)));
+    for (const h of (d.remove || []).slice(0, 500)) {
+      if (!/^[0-9a-f]{64}$/.test(String(h))) continue;
+      stmts.push(env.DB.prepare('INSERT OR REPLACE INTO revoked(token_hash, at) VALUES(?,?)').bind(String(h), now()));
+      stmts.push(env.DB.prepare('DELETE FROM cards WHERE token_hash = ?').bind(String(h)));
+    }
     if (stmts.length) await env.DB.batch(stmts);
     return reply(200, { ok: true, cards: (d.cards || []).length });
   }
@@ -234,7 +250,9 @@ export default {
 
   async scheduled(_event, env) {
     const days = Number(env.RETENTION_DAYS || 30), cut = now() - days * 86400;
+    await ensureRevoked(env);
     await env.DB.batch([
+      env.DB.prepare('DELETE FROM revoked WHERE at < ?').bind(now() - REVOKED_DAYS * 86400),
       env.DB.prepare('DELETE FROM events WHERE recv_at < ?').bind(cut),
       env.DB.prepare('DELETE FROM photos WHERE recv_at < ?').bind(cut),
       env.DB.prepare('DELETE FROM cards WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now() - 7 * 86400),

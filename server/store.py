@@ -64,6 +64,7 @@ ENTITIES = {
         ('endAt', 'end_at', T, 'End Time'), ('startAtRecv', 'start_at_recv', T, 'Start Received'), ('endAtRecv', 'end_at_recv', T, 'End Received'),
         ('routeText', 'route_text', T, 'Route Text'), ('billableKm', 'billable_km', I, 'Billable KM'),
         ('linkHash', 'link_hash', T, 'Link Hash'), ('linkNonce', 'link_nonce', T, 'Link Nonce'), ('linkExpiry', 'link_expiry', T, 'Link Expiry'),
+        ('oldLinks', 'old_links', J, 'Replaced Links'),
         ('boundDevice', 'bound_device', T, 'Bound Device'), ('source', 'source', T, 'Source'), ('importKey', 'import_key', T, 'Import Key'),
         ('notes', 'notes', T, 'Notes'), ('locked', 'locked', B, 'Locked')]),
     'tripPassengers': ('trip_passengers', 'Trip Passengers', [

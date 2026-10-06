@@ -100,6 +100,42 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(t['endKm'], 1120)
         self.assertFalse(G.apply_event({'status': 'cancelled'}, ev('start', startKm=1), ''))
 
+    def test_f_an_end_that_arrives_before_the_start_keeps_the_start_facts(self):
+        """F08: the order the messages reach the office must not decide what the trip knows."""
+        import itertools
+        ev = lambda typ, at, **d: {'type': typ, 'body': {'data': d}, 'phoneAt': at, 'recvAt': '2026-09-28T09:00:00Z'}  # noqa: E731
+        start = ev('start', '2026-09-28T09:00:00+03:00', startKm=1000)
+        end = ev('end', '2026-09-28T11:00:00+03:00', endKm=1120, routeText='A - B')
+        results = []
+        for order in itertools.permutations([start, end, start, end]):          # includes retries and every arrival order
+            t = {'status': 'sent'}
+            for e in order:
+                G.apply_event(t, e, 'dev-1')
+            results.append(json.dumps(t, sort_keys=True))
+        self.assertEqual(len(set(results)), 1, 'every arrival order gives the same trip')
+        t = json.loads(results[0])
+        self.assertEqual((t['status'], t['startKm'], t['startAt'], t['endKm'], t['endAt'], t['locked']), ('finished', 1000, '2026-09-28T09:00:00', 1120, '2026-09-28T11:00:00', True))
+
+    def test_g_a_late_message_never_rewrites_a_closed_cancelled_or_filled_trip(self):
+        ev = lambda typ, **d: {'type': typ, 'body': {'data': d}, 'phoneAt': '2026-09-28T09:00:00+03:00', 'recvAt': '2026-09-28T06:00:00Z'}  # noqa: E731
+        for status in ('closed', 'cancelled'):
+            t = {'status': status, 'startKm': None, 'startAt': ''}
+            self.assertFalse(G.apply_event(t, ev('start', startKm=5), ''))
+            self.assertFalse(G.apply_event(t, ev('end', endKm=9), ''))
+            self.assertEqual((t['status'], t['startKm'], t['startAt']), (status, None, ''))
+        done = {'status': 'finished', 'startKm': 200, 'startAt': '', 'endKm': 300, 'endAt': '2026-09-28T10:00:00', 'locked': True}
+        G.apply_event(done, ev('start', startKm=1), '')               # the office already typed a start odometer: keep it, only fill the empty time
+        self.assertEqual((done['startKm'], done['startAt'], done['status']), (200, '2026-09-28T09:00:00', 'finished'))
+
+    def test_h_malformed_events_do_not_break_the_reducer(self):
+        good = {'type': 'start', 'phoneAt': '2026-09-28T09:00:00+03:00', 'recvAt': '2026-09-28T06:00:00Z'}
+        for bad in ({'type': 'start', 'body': {'data': ['not', 'a', 'dict']}}, {'type': 'start', 'body': 'text'}, {'type': 'start', 'body': None},
+                    {'type': 'end', 'body': {'data': {'endKm': 'abc', 'routeText': 5}}}, {'type': 'weird', 'body': {}}, {'body': {}}, {**good, 'phoneAt': None}):
+            t = {'status': 'sent'}
+            G.apply_event(t, bad, '')                                 # must not raise
+        t = {'status': 'mystery'}
+        self.assertFalse(G.apply_event(t, {**good, 'body': {'data': {'startKm': 1}}}, ''), 'an unknown status is left alone')
+
     def test_signature_matches_the_gateway_rule(self):
         h = G.sign_headers('k', 'GET', '/office/status', b'', t=1000, nonce='ab' * 8)
         msg = '\n'.join(['GET', '/office/status', '1000', 'ab' * 8, hashlib.sha256(b'').hexdigest()])
@@ -220,14 +256,52 @@ class IntegrationTest(unittest.TestCase):
         self.assertEqual((st, j.get('cancelled')), (410, True))
 
     def test_d_replacing_the_link_kills_the_old_one_and_frees_the_phone(self):
+        """F05: the old card is removed from the mailbox, stays removed when a stale PC publishes it again, and what the old phone
+        already delivered is kept."""
         t = self.new_trip()
         old = self.ac.post('/api/trips/link', {'id': t['id']})['url']
+        old_token = self.token_of(old)
+        self.pull()
+        self.assertEqual(self.gw.driver('GET', '/api/card/' + old_token)[0], 200)
+        self.event(old_token, 'start', startKm=100)                # delivered before the replacement
         new = self.ac.post('/api/trips/link', {'id': t['id'], 'replace': True})['url']
         self.assertNotEqual(old, new)
+        old_hash = hashlib.sha256(old_token.encode()).hexdigest()
+        row = self.trip(t['id'])
+        self.assertEqual((row['linkHash'], row['oldLinks']), (hashlib.sha256(self.token_of(new).encode()).hexdigest(), [old_hash]))
+        self.assertNotIn(old_token, json.dumps(self.ac.get('/api/state')))
         self.pull()
         self.assertEqual(self.gw.driver('GET', '/api/card/' + self.token_of(new))[0], 200)
-        # the old token's card is still on the gateway until it expires, but the office no longer accepts it as this trip's link
-        self.assertEqual(self.trip(t['id'])['linkHash'], hashlib.sha256(self.token_of(new).encode()).hexdigest())
+        self.assertEqual(self.gw.driver('GET', '/api/card/' + old_token)[0], 404, 'the replaced link no longer opens')
+        e = {'uuid': str(uuid.uuid4()), 'v': 1, 'type': 'end', 'deviceId': 'device-AAAA-1', 'seq': 2, 'phoneAt': datetime.now(timezone.utc).isoformat(timespec='seconds'), 'data': {'endKm': 150}}
+        self.assertEqual(self.gw.driver('POST', f'/api/event/{old_token}', e)[0], 404, 'the old phone cannot send as the current link')
+        # a PC that was offline still has the old link in its data and publishes it again: it must not come back
+        G.Client(self.gw.url, SECRET).put_cards([{'tokenHash': old_hash, 'tripId': t['id'], 'body': {'no': t['no']}, 'cancelled': False, 'expiresAt': int(time.time()) + 3600}])
+        self.assertEqual(self.gw.driver('GET', '/api/card/' + old_token)[0], 404)
+        # what the old phone had already delivered is applied, and the second replacement keeps the history of hashes
+        self.pull()
+        self.assertEqual(self.trip(t['id'])['startKm'], 100)
+        third = self.ac.post('/api/trips/link', {'id': t['id'], 'replace': True})['url']
+        self.assertEqual(self.trip(t['id'])['oldLinks'], [hashlib.sha256(self.token_of(new).encode()).hexdigest(), old_hash])
+        self.pull()
+        self.assertEqual(self.gw.driver('GET', '/api/card/' + self.token_of(new))[0], 404)
+        self.assertEqual(self.gw.driver('GET', '/api/card/' + self.token_of(third))[0], 200)
+
+    def test_f_end_posted_before_start_still_fills_the_start(self):
+        """F08 through the real mailbox: the office pulls the end first, the start arrives in a later round."""
+        t = self.new_trip()
+        token = self.token_of(self.ac.post('/api/trips/link', {'id': t['id']})['url'])
+        self.pull()
+        self.event(token, 'end', endKm=45120)
+        self.assertIsNone(self.pull()['lastError'])
+        row = self.trip(t['id'])
+        self.assertEqual((row['status'], row['endKm'], row.get('startKm')), ('finished', 45120, None))
+        self.event(token, 'start', startKm=45000)
+        self.assertIsNone(self.pull()['lastError'])
+        row = self.trip(t['id'])
+        self.assertEqual((row['status'], row['startKm'], row['endKm']), ('finished', 45000, 45120))
+        self.assertTrue(row['startAt'] and row['endAt'])
+        self.assertEqual(self.ac.get('/api/insights')[t['id']]['km'], 120)
 
     def test_e_permissions_and_errors(self):
         with self.assertRaises(ApiError) as e:

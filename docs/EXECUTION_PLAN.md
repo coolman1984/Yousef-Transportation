@@ -197,7 +197,7 @@ attached to the PR; Arabic report to the owner with screenshots.
 | `places` | name:T, nameAr:T, key:T, aliases:J (list of keys), active:B |
 | `routes` | name:T, stops:J (place ids), standardKm:I, billableKm:I |
 | `tripCategories` | name:T, nameAr:T, exportSheet:T (`All Car`/`SUV Rent`/`Microbus Rent`/custom), hasSequence:B, openLimitHours:I, ratePerKm:R, ratePerOtHour:R, vendor:T, order:I |
-| `trips` | no:T, date:T, categoryId:T, vehicleId:T, driverId:T, requesterId:T, departmentId:T, destination:T (display route string), stops:J, purpose:T, gaApproved:T (`yes`/`no`/``), gaBy:T, gaAt:T, status:T, seq:I (Column1 override), startKm:I, endKm:I, startAt:T, endAt:T, startAtRecv:T, endAtRecv:T, routeText:T, billableKm:I, linkHash:T, linkNonce:T, linkExpiry:T, boundDevice:T, source:T (`app`/`excel`/`paper`), importKey:T, notes:T, locked:B |
+| `trips` | no:T, date:T, categoryId:T, vehicleId:T, driverId:T, requesterId:T, departmentId:T, destination:T (display route string), stops:J, purpose:T, gaApproved:T (`yes`/`no`/``), gaBy:T, gaAt:T, status:T, seq:I (Column1 override), startKm:I, endKm:I, startAt:T, endAt:T, startAtRecv:T, endAtRecv:T, routeText:T, billableKm:I, linkHash:T, linkNonce:T, linkExpiry:T, oldLinks:J (hashes of replaced links, newest first, max 5), boundDevice:T, source:T (`app`/`excel`/`paper`), importKey:T, notes:T, locked:B |
 | `tripPassengers` | tripId:T, personId:T, freeText:T |
 | `tripPhotos` | tripId:T, kind:T (`start_odo`/`end_odo`/`paper`), src:T (cas path), sha256:T, takenAt:T, fallback:B, eventId:T |
 | `tripAmendments` | tripId:T, field:T, old:J, new:J, reason:T, by:T, at:T |

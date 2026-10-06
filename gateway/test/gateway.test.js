@@ -182,6 +182,35 @@ test('card updates keep the bound phone unless the office releases it', async ()
   assert.equal((await call(env, 'GET', '/api/card/' + TOKEN)).status, 404);
 });
 
+test('a removed (replaced) link cannot be published again by a PC that still has it', async () => {
+  const env = newEnv();
+  const th = await putCard(env);
+  const old = await postEvent(env, ev());                               // evidence sent before the replacement stays in the mailbox
+  assert.equal(old.status, 200);
+  assert.equal((await office(env, 'PUT', '/office/cards', { remove: [th] })).status, 200);
+  assert.equal((await call(env, 'GET', '/api/card/' + TOKEN)).status, 404);
+  assert.equal((await postEvent(env, ev())).status, 404, 'the old phone can no longer send as this trip');
+  await putCard(env);                                                   // a stale PC publishes the old card again
+  assert.equal((await call(env, 'GET', '/api/card/' + TOKEN)).status, 404, 'it stays dead');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM cards').first()).n, 0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 1, 'what was already received is kept for the office');
+  // a new link for the same trip is a different token and works
+  const other = await sha256Hex('Tk_zzzzzzzzzzzzzzzzzzzzzz');
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: other, tripId: 'tr1', body: {} }] })).status, 200);
+  assert.equal((await call(env, 'GET', '/api/card/Tk_zzzzzzzzzzzzzzzzzzzzzz')).status, 200);
+});
+
+test('a mailbox set up before revocation existed keeps working (the table is made on first use) and old tombstones are cleaned', async () => {
+  const env = newEnv();
+  await env.DB.prepare('DROP TABLE revoked').run();
+  const th = await putCard(env);
+  assert.equal((await office(env, 'PUT', '/office/cards', { remove: [th, 'not-a-hash'] })).status, 200);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 1, 'a malformed hash is ignored');
+  await env.DB.prepare('UPDATE revoked SET at = at - ?').bind(61 * 86400).run();
+  await worker.scheduled({}, env);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 0);
+});
+
 test('the single-file bundle serves the driver page without any asset binding', async () => {
   const { execFileSync } = await import('node:child_process');
   const { pathToFileURL, fileURLToPath } = await import('node:url');

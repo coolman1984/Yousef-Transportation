@@ -4,6 +4,27 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 2 - driver events in any order, replaced links really die (2026-10-06)
+
+**Plan:** findings F08 and F05 (tasks T10/T11 first slices). Reproduced both before touching code.
+**F08 (reproduced):** `apply_event` gated on status rank only, so an `end` that arrived first set `finished` and a later valid `start` was dropped - the trip kept
+no start odometer/time. It is now an order-independent reducer: first start and first end win, a start after an end fills only what is still empty (an
+odometer the office already typed is kept), closed/cancelled/unknown status is never touched, malformed bodies (`data` not an object, non-text route) change nothing
+instead of raising. Also `pull()` now isolates each trip and photo: one that cannot be applied no longer stops the acknowledgement of the others (before, one
+poison message made every round fail and nothing was acknowledged); the office sees the reason in the mailbox status.
+**F05 (confirmed by the existing test comment "the old token's card is still on the gateway until it expires"):** replacing a link only changed the hash on the trip;
+the old card stayed live and its phone could still post events as the current trip. Now `make_link(replace)` stores the replaced hash in the new `trips.oldLinks`
+(hashes only, last five, replicated like any trip field so any PC can deliver it), `push_cards` sends `remove` for them before the new card, and the Worker keeps a
+`revoked` tombstone table (60 days) so a stale PC that still publishes the old card cannot bring it back (`INSERT ... WHERE NOT EXISTS`). The Worker creates the table
+on first use, so a mailbox deployed from the old `schema.sql` keeps working after a Worker-only update. Evidence the old phone had already delivered stays in the mailbox and is applied.
+**Tests:** Python unit f-h (all 24 arrival orders of start/end/retries give the same trip; closed/cancelled/filled; malformed), integration f (end pulled first, start next round)
+and d (old link 404, old phone's event 404, stale PC republish stays 404, three replacements), gateway.test.js +2 (tombstone, table made on first use and cleaned).
+**Mistake found on the way:** the CI command did not list `test_permissions`, so slice 1's tests would never have run in CI. Added.
+**Lesson:** the integration test must fail on the old code - the first F08 end-to-end assertion read a missing key, so it failed for the right reason but with an unhelpful message; assert with `.get`.
+**Not done (still open):** durable device-release intent (still an in-memory set), D1 statement budget per request (F10, removals use batches of 20 to stay modest), Worker-side event schema, durable office receipt (F09).
+
+---
+
 ## Commercial readiness slice 1 - real permissions on read and write, Windows rebuild (2026-10-05)
 
 **Plan:** `COMMERCIAL_READINESS_EXECUTION_PLAN.md`, findings F01, F02, F03, F06, F12 (tasks T03-T06 first slices).

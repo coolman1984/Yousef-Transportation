@@ -10,7 +10,7 @@ from store import BadRequest
 CREATE_FIELDS = ('date', 'categoryId', 'vehicleId', 'driverId', 'requesterId', 'departmentId', 'destination', 'stops', 'purpose', 'notes', 'seq',
                  'billableKm')
 # fields nobody may change by hand: identity, link secrets and things the driver's page or the server writes
-PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'source', 'importKey'}
+PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
 DONE = domain.DONE
 
 
@@ -134,6 +134,9 @@ def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False
     row = {**t, 'linkHash': h, 'linkNonce': nonce, 'linkExpiry': exp}
     if replace:
         row['boundDevice'] = ''
+        old = t.get('linkHash')
+        if old and old != h:        # the replaced link is remembered (its hash only) so every office PC can have it removed from the mailbox
+            row['oldLinks'] = ([old] + [x for x in (t.get('oldLinks') or []) if x not in (old, h)])[:5]
     if sent and (row.get('status') or 'draft') == 'draft':
         row['status'] = 'sent'
     if row != t:

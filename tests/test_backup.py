@@ -250,6 +250,69 @@ class RestoreTest(BackupBase):
         self.open()                                  # tearDown closes the original folder's System
 
 
+class RestoreToolTest(BackupBase):
+    """`TripOrders.exe tool restore-set F`: the L4 drill as one command."""
+
+    def run_tool(self, cfg_dir, *args):
+        import subprocess
+        cfg = os.path.join(cfg_dir, 'config.json')
+        with open(cfg, 'w') as f:
+            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk'), 'open_browser': False}, f)
+        env = dict(os.environ, TO_CONFIG=cfg, PYTHONUNBUFFERED='1')
+        r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py'), *args],
+                           env=env, capture_output=True, text=True, timeout=120)
+        return r.returncode, r.stdout + r.stderr
+
+    def test_m_the_newest_good_set_goes_to_a_clean_pc_and_a_damaged_newer_one_is_skipped(self):
+        os.makedirs(os.path.join(self.uploads, 'cas'), exist_ok=True)
+        with open(os.path.join(self.uploads, 'cas', 'p.jpg'), 'wb') as f:
+            f.write(b'\xff\xd8photo')
+        good = self.b.create('manual')
+        self.sy.store.commit('u', 'ip', 'more', [put('vehicles', 'v2', plate='MORE 2', plateKey='more2', active=True)])
+        newer = self.b.create('manual')
+        p = os.path.join(self.bk, 'db', newer)
+        with open(p, 'r+b') as f:                       # the newest set is damaged
+            f.seek(os.path.getsize(p) // 2)
+            f.write(b'\x00\x01\x02\x03')
+        self.sy.close()
+        clean = os.path.join(self.d, 'clean')
+        os.makedirs(clean)
+        code, out = self.run_tool(clean, 'restore-set', self.bk)
+        self.assertEqual(code, 0, out)
+        self.assertIn('Skipped ' + newer, out)
+        self.assertIn('Restored the backup ' + good, out)
+        sy2 = System(os.path.join(clean, 'data'), {}, os.path.join(clean, 'data', 'uploads'), os.path.join(clean, 'bk'), log=lambda m: None)
+        try:
+            self.assertEqual(sy2.store.counts().get('Vehicles'), 1, 'the good set (one vehicle), not the damaged newer one (two)')
+            self.assertEqual(sy2.auth.login('boss', 'Strong-pass1', '127.0.0.1', 't')[1]['username'], 'boss')
+            self.assertTrue(os.path.exists(os.path.join(clean, 'data', 'uploads', 'cas', 'p.jpg')))
+        finally:
+            sy2.close()
+        self.open()
+
+    def test_n_nothing_is_deleted_and_a_bad_folder_changes_nothing(self):
+        n = self.b.create('manual')
+        self.sy.close()
+        clean = os.path.join(self.d, 'clean2')
+        os.makedirs(os.path.join(clean, 'data'))
+        with open(os.path.join(clean, 'data', 'trips.db'), 'w') as f:
+            f.write('what was here before')
+        code, out = self.run_tool(clean, 'restore-set', os.path.join(self.d, 'nowhere'))
+        self.assertEqual(code, 1)
+        with open(os.path.join(clean, 'data', 'trips.db')) as f:
+            self.assertEqual(f.read(), 'what was here before', 'a wrong folder changes nothing')
+        code, out = self.run_tool(clean, 'restore-set', self.bk, n)
+        self.assertEqual(code, 0, out)
+        kept = [x for x in os.listdir(os.path.join(clean, 'data')) if x.startswith('replaced-')]
+        self.assertEqual(len(kept), 1)
+        with open(os.path.join(clean, 'data', kept[0], 'trips.db')) as f:
+            self.assertEqual(f.read(), 'what was here before', 'the previous file is kept aside')
+        code, out = self.run_tool(clean, 'restore-set', self.bk, 'to_20000101_000000_manual.db')
+        self.assertEqual(code, 1)
+        self.assertIn('Nothing was changed', out)
+        self.open()
+
+
 @unittest.skipIf(sync_playwright is None or not os.path.exists(CHROMIUM), 'Playwright or Chromium not available')
 class ScreenTest(unittest.TestCase):
     """Settings -> Data: a backup problem is shown to the administrator in plain words, in both languages."""

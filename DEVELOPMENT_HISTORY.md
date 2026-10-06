@@ -17,6 +17,8 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ## Commercial readiness slice 4 - backups (F13) (2026-10-06)
 
+**Gate (LAUNCH_SCOPE.md): L4 Recovery** - branch ccr-a760379a-lzybk5 from 312544a (+ the owner's docs commits cda804a merged). **Checks:** `test_backup` 15 (engine, tool through a subprocess, real Chrome banner) and the earlier suites; Linux, Python 3.13. **Not done:** the field drill on a real second Windows PC (L4 stays PENDING until it is run with the real installer); mixed-version restore. **Next step:** F11 (time/duration), then F09, F16.
+
 **Reproduced first (`tests/test_backup.py`, engine only):** 8 simultaneous `create()` calls -> `FileNotFoundError` / `disk I/O error` (one shared `.tmp` per name); two backups in the same second -> the second
 `os.replace` overwrote the first; a photo copy cut short by a power failure was trusted because its name existed; nothing proved that data, accounts and history belong together; an account-only change never made
 a backup due (the scheduler watched `store.version()` only).
@@ -29,7 +31,8 @@ photos are mirrored one file at a time under a temporary name and re-copied when
 (`journal_mode=DELETE` on the copy; before, `-wal`/`-shm` files stayed next to every renamed copy).
 **Drill result (important for the owner's guide):** a clean PC given ONLY a set (data, accounts, history, photos) comes back with all business data, working logins and photos, but the program starts as a new device and keeps the old history
 as `journal.incomplete-*.db`: the PC's secret keys (`data/node`) and the mailbox secrets (`gateway.json`) are deliberately not in a set. Putting them in plain files on USB drives would be a key leak, and encrypting them needs a
-cipher the standard library does not have, so identity recovery stays open (T17 remainder).
+cipher the standard library does not have, so a restore is data level. (Correction: `nodectl export-authority` already seals the administrator key with a passphrase - scrypt + HMAC stream, written earlier in the project - so the administrator identity can be kept separately by the operator; a general key package inside every backup is still not done.)
+**New tool:** `TripOrders.exe tool restore-set <backup folder> [set]` (`nodectl.cmd_restore_set`): picks the newest set that passes `verify_set`, skips damaged ones with the reason, moves what was in the data folder (and `node/`) to `data/replaced-<time>/`, places data/accounts/history, copies photos whole, refuses safely (everything put back) if the program still runs. Tested through a real subprocess: the L4 drill is one command instead of file copying.
 **Mistakes:** my first UI strings used double quotes inside double quotes - `JsSyntaxTest` (added last slice) caught it at once; the first "overdue" rule warned on a new installation (found by the browser test).
 
 ---

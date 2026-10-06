@@ -62,6 +62,63 @@ def network_folder(path, drive_type=None):
 NAME_RE = re.compile(r'^to_\d{8}_\d{6}_[a-z-]+\.db$')
 
 
+def _sha_file(path):
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1048576), b''):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _integrity_of(path):
+    c = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    try:
+        return c.execute('PRAGMA integrity_check').fetchone()[0]
+    finally:
+        c.close()
+
+
+def verify_set(folder, name):
+    """{'ok', 'legacy', 'problems'} for the set `name` in `folder` (the 'db' folder of a backup): it is complete and every file is the
+    one that was written (sizes and SHA-256 from the manifest). A set from before manifests (legacy) is checked by SQLite's integrity check only."""
+    if not NAME_RE.match(name or ''):
+        return {'ok': False, 'legacy': False, 'problems': ['unknown backup']}
+    mpath = os.path.join(folder, name[:-3] + '.json')
+    problems = []
+    if not os.path.exists(os.path.join(folder, name)):
+        return {'ok': False, 'legacy': False, 'problems': ['data: file not found']}
+    manifest = None
+    if os.path.exists(mpath):
+        try:
+            with open(mpath, encoding='utf-8') as f:
+                manifest = json.load(f)
+            manifest['files']['data']
+        except (OSError, ValueError, KeyError, TypeError):
+            problems.append('manifest: damaged')
+            manifest = None
+    if manifest:
+        for part, info in manifest['files'].items():
+            p = os.path.join(folder, str(info.get('name')))
+            if not os.path.exists(p):
+                problems.append(f'{part}: file not found')
+            elif os.path.getsize(p) != info.get('size'):
+                problems.append(f'{part}: size differs from the manifest')
+            elif _sha_file(p) != info.get('sha256'):
+                problems.append(f'{part}: checksum differs from the manifest')
+    try:
+        result = _integrity_of(os.path.join(folder, name))
+        if result != 'ok':
+            problems.append('data: ' + result)
+    except sqlite3.DatabaseError as e:
+        problems.append('data: ' + str(e))
+    return {'ok': not problems, 'legacy': not os.path.exists(mpath), 'problems': problems}
+
+
+def sets_in(folder):
+    """The set names in a backup 'db' folder, newest first."""
+    return sorted((n for n in os.listdir(folder) if NAME_RE.match(n)), reverse=True)
+
+
 class Backups:
     def __init__(self, store, uploads_dir, backup_dir, extra_dirs=(), keep_auto=200, interval_hours=6, log=print, auth=None):
         self.store = store
@@ -128,21 +185,8 @@ class Backups:
         finally:
             target.close()
 
-    @staticmethod
-    def _integrity(path):
-        c = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
-        try:
-            return c.execute('PRAGMA integrity_check').fetchone()[0]
-        finally:
-            c.close()
-
-    @staticmethod
-    def _sha(path):
-        h = hashlib.sha256()
-        with open(path, 'rb') as f:
-            for chunk in iter(lambda: f.read(1048576), b''):
-                h.update(chunk)
-        return h.hexdigest()
+    _integrity = staticmethod(_integrity_of)
+    _sha = staticmethod(_sha_file)
 
     def _create(self, kind):
         os.makedirs(self._folder(), exist_ok=True)
@@ -291,40 +335,8 @@ class Backups:
         return sorted(out, key=lambda b: b['name'], reverse=True)
 
     def verify(self, name):
-        """{'ok', 'legacy', 'problems'}: the set is complete and every file is the one that was written (sizes and SHA-256 from the manifest).
-        A set from before manifests (legacy) is checked by SQLite's integrity check only."""
-        if not NAME_RE.match(name or ''):
-            return {'ok': False, 'legacy': False, 'problems': ['unknown backup']}
-        folder = self._folder()
-        mpath = os.path.join(folder, name[:-3] + '.json')
-        problems = []
-        if not os.path.exists(os.path.join(folder, name)):
-            return {'ok': False, 'legacy': False, 'problems': ['data: file not found']}
-        manifest = None
-        if os.path.exists(mpath):
-            try:
-                with open(mpath, encoding='utf-8') as f:
-                    manifest = json.load(f)
-                manifest['files']['data']
-            except (OSError, ValueError, KeyError, TypeError):
-                problems.append('manifest: damaged')
-                manifest = None
-        if manifest:
-            for part, info in manifest['files'].items():
-                p = os.path.join(folder, str(info.get('name')))
-                if not os.path.exists(p):
-                    problems.append(f'{part}: file not found')
-                elif os.path.getsize(p) != info.get('size'):
-                    problems.append(f'{part}: size differs from the manifest')
-                elif self._sha(p) != info.get('sha256'):
-                    problems.append(f'{part}: checksum differs from the manifest')
-        try:
-            result = self._integrity(os.path.join(folder, name))
-            if result != 'ok':
-                problems.append('data: ' + result)
-        except sqlite3.DatabaseError as e:
-            problems.append('data: ' + str(e))
-        return {'ok': not problems, 'legacy': not os.path.exists(mpath), 'problems': problems}
+        """See verify_set: this PC's own backup folder."""
+        return verify_set(self._folder(), name)
 
     def restore(self, name, user='', ip='', user_id=''):
         """Brings the data back to the backup by saving the differences as a new change (see module doc).

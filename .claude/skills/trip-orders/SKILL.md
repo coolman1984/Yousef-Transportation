@@ -3,6 +3,9 @@ name: trip-orders
 description: Working memory for the Trip Orders project (vehicle trip orders, driver links on WhatsApp, odometer photos, Excel both ways, office brain + internet mailbox). Load it before any change in this repository; it tells you where to continue and how the owner wants the work done.
 ---
 
+<!-- first-sale-contract: 2026-10-06 -->
+> **Owner decision — 6 October 2026:** Read [the first-sale contract](../../../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
+
 # Trip Orders – how to continue exactly as before
 
 1. Read `CLAUDE.md`, then `docs/EXECUTION_PLAN.md` (the playbook: Part A = how to work, Part C = tasks),

@@ -55,7 +55,11 @@ for _k, _f in {'اسم الراكب': 'passenger', 'الراكب': 'passenger', 
 
 
 class WordError(Exception):
-    """A problem with a message the person can act on."""
+    """A problem with a message the person can act on, and a stable `code` (those of formats.FormatError, noForm, needCategory)."""
+
+    def __init__(self, msg='', code=''):
+        super().__init__(msg)
+        self.code = code
 
 
 # --------------------------------------------------------------------------- the form
@@ -145,7 +149,7 @@ def parse_forms(data, name='', engine='auto'):
     try:
         d = formats.read_document(data, name, engine)
     except formats.FormatError as e:
-        raise WordError(str(e))
+        raise WordError(str(e), e.code)
     records, cur = [], {}
     for table in d['tables']:
         for row in table:
@@ -168,7 +172,7 @@ def parse_forms(data, name='', engine='auto'):
         records.append(cur)
     records = [r for r in records if any(v for k, v in r.items() if k not in ('gaOk',))]
     if not records:
-        raise WordError('No trip order form was found in this document. The form must be the trip order table (labels such as "اسم السائق" / "Driver name" with their values next to them).')
+        raise WordError('No trip order form was found in this document. The form must be the trip order table (labels such as "اسم السائق" / "Driver name" with their values next to them).', 'noForm')
     return records
 
 
@@ -194,7 +198,7 @@ def preview(user, data, state, category, filename='', engine='auto'):
     """Word file -> review screen (same shape as the Excel review). category: the trip category the forms belong to."""
     category = domain.norm_text(category)
     if not category:
-        raise WordError('Choose the trip category these forms belong to.')
+        raise WordError('Choose the trip category these forms belong to.', 'needCategory')
     rows = rows_from_forms(parse_forms(data, filename, engine), category)
     p = excel_io.plan(rows, state, filename)
     p['source'] = 'word'

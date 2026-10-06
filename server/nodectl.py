@@ -3,6 +3,7 @@
   python server/nodectl.py status              this PC, its role, the other PCs, history size
   python server/nodectl.py verify              check the complete history (hashes, chain, all signatures)
   python server/nodectl.py rebuild             re-create data/trips.db from the history (damaged database)
+  python server/nodectl.py restore-set F [set]  put a verified backup set (folder F) on a CLEAN PC: business data, accounts, history aside, photos
   python server/nodectl.py reset-admin         new temporary password for an administrator (administrator PC only)
   python server/nodectl.py export-authority F  save the administrator key to file F, protected by a passphrase
   python server/nodectl.py import-authority F  make THIS PC the administrator PC with a key saved before
@@ -131,6 +132,105 @@ def cmd_rebuild():
     print('The previous file was kept as triporders.broken-' + stamp + '.db')
 
 
+def cmd_restore_set(folder, name=None):
+    """Recovery on a clean PC (or after a disaster): the newest VERIFIED set of a backup folder becomes this PC's data.
+    The data, the accounts and the photos come back; the PC starts as a new device (its secret keys are not in a backup), and
+    whatever was in the data folder before is moved aside into data/replaced-<time>/, never deleted. Run with the program closed."""
+    import shutil
+    import backup
+    cfg, data, uploads, backups, extra = load_cfg()
+    folder = os.path.abspath(folder)
+    db = os.path.join(folder, 'db') if os.path.isdir(os.path.join(folder, 'db')) else folder
+    if not os.path.isdir(db):
+        print(f'The folder {folder} was not found. Give the backup folder (the one that contains "db" and "uploads").')
+        return 1
+    names = [name] if name else backup.sets_in(db)
+    if not names:
+        print(f'No backups were found in {db}.')
+        return 1
+    chosen = None
+    for n in names:
+        rep = backup.verify_set(db, n)
+        if rep['ok']:
+            chosen = n
+            break
+        print(f'Skipped {n}: ' + '; '.join(rep['problems']))
+    if not chosen:
+        print('No complete, undamaged backup was found. Nothing was changed.')
+        return 1
+    try:
+        with open(os.path.join(db, chosen[:-3] + '.json'), encoding='utf-8') as f:
+            parts = {k: v['name'] for k, v in json.load(f)['files'].items()}
+    except (OSError, ValueError, KeyError):
+        parts = {'data': chosen, 'auth': 'auth' + chosen[2:], 'journal': 'journal' + chosen[2:]}   # a set from before manifests
+    target = {'data': 'trips.db', 'auth': 'auth.db', 'journal': 'journal.db'}
+    os.makedirs(data, exist_ok=True)
+    stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    tag = '.restoring-' + stamp
+    aside = os.path.join(data, 'replaced-' + stamp)
+    staged, moved, placed = {}, [], []
+
+    def undo():
+        """Back to exactly how it was: remove what was placed or staged, bring the moved files back, remove the aside folder if it is empty."""
+        for p in placed + list(staged.values()):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        for n in reversed(moved):
+            try:
+                os.replace(os.path.join(aside, n), os.path.join(data, n))
+            except OSError:
+                pass
+        try:
+            os.rmdir(aside)
+        except OSError:
+            pass
+    try:
+        for part, fname in parts.items():                 # 1. the complete set is staged next to the data FIRST (a full disk stops here, nothing is touched)
+            if part in target and os.path.exists(os.path.join(db, fname)):
+                staged[part] = os.path.join(data, target[part] + tag)
+                shutil.copy2(os.path.join(db, fname), staged[part])
+        mine = [n for n in os.listdir(data) if n == 'node' or any(n.startswith(t) for t in target.values()) and tag not in n]
+        for n in mine:                                    # 2. what is there now moves aside (never deleted)
+            os.makedirs(aside, exist_ok=True)
+            os.replace(os.path.join(data, n), os.path.join(aside, n))
+            moved.append(n)
+        for part, path in list(staged.items()):           # 3. the staged files take their place
+            dest = os.path.join(data, target[part])
+            os.replace(path, dest)
+            del staged[part]
+            placed.append(dest)
+    except OSError as e:
+        undo()
+        print('The restore could not be completed (' + str(e) + '). If Trip Orders is running, close it and run this again.')
+        print('Nothing was changed.')
+        return 1
+    photos = bad = 0
+    src_up = os.path.join(folder, 'uploads') if os.path.isdir(os.path.join(folder, 'uploads')) else os.path.join(os.path.dirname(db), 'uploads')
+    for root, _, files in os.walk(src_up):
+        out = os.path.join(uploads, os.path.relpath(root, src_up))
+        for f in files:
+            if '.part-' in f:
+                continue
+            d, s_ = os.path.join(out, f), os.path.join(root, f)
+            if backup.is_cas_name(f) and backup._sha_file(s_) != backup.cas_hash(f):
+                bad += 1                                  # a photo whose copy no longer matches its checksum is not brought back as if it were fine
+                continue
+            if not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)):
+                os.makedirs(out, exist_ok=True)
+                shutil.copy2(s_, d + '.part')
+                os.replace(d + '.part', d)
+                photos += 1
+    print(f'Restored the backup {chosen} into {data}: business data, accounts, history (kept for reading) and {photos} photo file(s).')
+    if bad:
+        print(f'WARNING: {bad} damaged photo(s) were NOT restored: their copy in the backup does not match its checksum.')
+    if moved:
+        print(f'What was in the data folder before is kept in {aside}.')
+    print('Now open Trip Orders. It starts as a new device of this PC; log in with the accounts of the backup and check the trips.')
+    return 0
+
+
 def cmd_reset_admin():
     s = open_system()
     from auth import ALL, account_pub, hash_password, now
@@ -219,6 +319,8 @@ def main(argv):
     cmds = {'status': cmd_status, 'verify': cmd_verify, 'rebuild': cmd_rebuild, 'reset-admin': cmd_reset_admin}
     if argv[:1] and argv[0] in cmds and len(argv) == 1:
         return cmds[argv[0]]() or 0
+    if argv[:1] == ['restore-set'] and len(argv) in (2, 3):
+        return cmd_restore_set(*argv[1:])
     if len(argv) == 2 and argv[0] == 'export-authority':
         return cmd_export(argv[1])
     if len(argv) == 2 and argv[0] == 'import-authority':

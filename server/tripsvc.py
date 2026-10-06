@@ -2,15 +2,15 @@
 and the read-side "insights" (trust colour, km, overtime, odometer chain) for every trip.
 Each operation is ONE store commit, so it is saved completely or not at all and appears as one change in the history."""
 import uuid
-from datetime import datetime, timedelta
 
 import domain
+import pricing
 from store import BadRequest
 
 CREATE_FIELDS = ('date', 'categoryId', 'vehicleId', 'driverId', 'requesterId', 'departmentId', 'destination', 'stops', 'purpose', 'notes', 'seq',
                  'billableKm')
 # fields nobody may change by hand: identity, link secrets and things the driver's page or the server writes
-PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'source', 'importKey'}
+PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
 DONE = domain.DONE
 
 
@@ -38,7 +38,7 @@ def store_entities():
 
 
 def _now():
-    return datetime.now().isoformat(timespec='seconds')
+    return domain.business_now().isoformat(timespec='seconds')
 
 
 def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
@@ -51,7 +51,7 @@ def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
     for f, ent in (('vehicleId', 'vehicles'), ('driverId', 'drivers'), ('requesterId', 'people'), ('departmentId', 'departments')):
         if row.get(f) and not _row(store, ent, row[f]):
             raise BadRequest(f'Unknown {f[:-2]}')
-    today = datetime.now()
+    today = domain.business_now()
     row.setdefault('date', today.date().isoformat())
     with store.lock:  # numbering and saving under one lock, so two clicks at once never get the same number
         nos = [r[0] for r in store.conn.execute('SELECT no FROM trips')]
@@ -129,11 +129,14 @@ def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False
     except gwc.GatewayError as e:
         raise BadRequest(str(e))
     h = gwc.token_hash(tok)
-    exp = max(datetime.now() + timedelta(days=7), (domain.parse_dt(t.get('date')) or datetime.now()) + timedelta(days=3)).isoformat(timespec='seconds')
+    exp = domain.link_expiry(t.get('date'))
     ver = t.pop('ver')
     row = {**t, 'linkHash': h, 'linkNonce': nonce, 'linkExpiry': exp}
     if replace:
         row['boundDevice'] = ''
+        old = t.get('linkHash')
+        if old and old != h:        # the replaced link is remembered (its hash only) so every office PC can have it removed from the mailbox
+            row['oldLinks'] = ([old] + [x for x in (t.get('oldLinks') or []) if x not in (old, h)])[:5]
     if sent and (row.get('status') or 'draft') == 'draft':
         row['status'] = 'sent'
     if row != t:
@@ -192,7 +195,7 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
     return out
 
 
-def normalize_ops(store, ops):
+def normalize_ops(store, ops, trusted=False):
     """Clean names, plates and mobiles on the server (so every client and the Excel import agree) and refuse duplicates
     of things that must be unique: a plate, a driver, a place, a department. People may share a name."""
     if not isinstance(ops, list):
@@ -219,6 +222,8 @@ def normalize_ops(store, ops):
             for f in ('destination', 'purpose', 'routeText'):
                 if row.get(f) is not None:
                     row[f] = domain.norm_text(row[f])
+        if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save
+            row['rateHistory'] = pricing.stamp(_row(store, 'tripCategories', op.get('id')), row, domain.business_now().date().isoformat())
         if e in unique and not op.get('resolve'):
             table, col, js, label = unique[e]
             if row.get(js):

@@ -125,7 +125,7 @@
         { key: 'exportSheet', label: 'f.exportSheet', type: 'select', options: SHEETS, help: 'help.exportSheet' },
         { key: 'hasSequence', label: 'f.hasSequence', type: 'bool', help: 'help.hasSequence' },
         { key: 'openLimitHours', label: 'f.openLimit', type: 'number', ltr: true, help: 'help.openLimit' },
-        { key: 'ratePerKm', label: 'f.ratePerKm', type: 'number', ltr: true },
+        { key: 'ratePerKm', label: 'f.ratePerKm', type: 'number', ltr: true, help: 'help.rateHistory' },
         { key: 'ratePerOtHour', label: 'f.ratePerOt', type: 'number', ltr: true },
         { key: 'vendor', label: 'f.vendor' }]; },
       text: function (r) { return [r.name, r.nameAr, r.exportSheet, r.vendor].join(' '); },

@@ -33,6 +33,7 @@ from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E4
 import excel_io  # noqa: E402
 import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
+import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
@@ -57,6 +58,10 @@ DEFAULT_CONFIG = {
     'backup_interval_hours': 6,
     'keep_auto_backups': 200,
     'max_upload_mb': 50,
+    'allowed_networks': [],         # empty = this PC and every private network (office LAN, company VPN/WAN); or a list such as ["192.168.1.0/24", "10.20.0.0/16"]
+    'allowed_hosts': [],            # extra names this PC may be opened by (a company DNS name); its own names and IP addresses always work
+    'max_connections': 128,         # open browser connections at the same time; more get a polite 503
+    'idle_timeout_seconds': 60,     # a connection that stays silent is closed
     'open_browser': True,
     'session_idle_minutes': 30,
     'session_max_hours': 12,
@@ -202,11 +207,11 @@ ENTITY_TITLE = {'tripCategories': 'trip categories', 'vehicles': 'vehicles', 'dr
 OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
 SHARED_LISTS = ('settings', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')  # not limited to a category
 GA_FIELDS = {'gaApproved', 'gaBy', 'gaAt'}
-LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'status', 'boundDevice'}
+LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'status', 'boundDevice'}
 SYSTEM_ONLY = ('data.import',)  # driver submissions and amendments are written by the server itself, never by hand
 
 
-RATE_FIELDS = ('ratePerKm', 'ratePerOtHour')
+RATE_FIELDS = ('ratePerKm', 'ratePerOtHour', 'rateHistory')
 RATE_VIEWERS = ('finance.view', 'rates.manage', 'categories.manage')  # whoever sees or edits rates
 DRIVER_CONTACT_VIEWERS = ('fleet.view', 'drivers.manage', 'trips.send')  # the Drivers page, its editor and the WhatsApp button
 PEOPLE_CONTACT_VIEWERS = ('people.view', 'people.manage')
@@ -289,6 +294,21 @@ def commit_guard(u, internal=False):
     return guard
 
 
+_POLICY = {}
+
+
+def policy():
+    """The network rules of this PC from config.json, read once: own names, and the networks that may connect."""
+    if not _POLICY:
+        nets, bad = (netpolicy.parse_networks(CFG['allowed_networks']) if CFG.get('allowed_networks') else (None, []))
+        for b in bad:
+            log.warning('config.json allowed_networks: "%s" is not a network (example: 192.168.1.0/24) and is ignored', b)
+        if CFG.get('allowed_networks') and not nets:
+            nets = None                          # a list with nothing usable in it falls back to the private ranges instead of locking everybody out
+        _POLICY.update(names=netpolicy.own_names(CFG.get('allowed_hosts') or []), nets=nets)
+    return _POLICY
+
+
 def lan_urls(port):
     urls = [f'http://{socket.gethostname()}:{port}/']
     try:
@@ -350,7 +370,7 @@ def too_many_failures(ip, add=False):
 class Handler(BaseHTTPRequestHandler):
     server_version = 'TripOrders/1.0'
     protocol_version = 'HTTP/1.1'
-    timeout = 120  # a connection that stays silent is closed
+    timeout = max(5, int(CFG.get('idle_timeout_seconds') or 60))  # a connection that stays silent is closed
     u = None  # the logged-in user of this request (set by login_required)
     _read = False  # True once the request body was read
 
@@ -398,7 +418,7 @@ class Handler(BaseHTTPRequestHandler):
         elif isinstance(body, str):
             body = body.encode('utf-8')
         self.send_response(code)
-        unread = self.command == 'POST' and not self._read and int(self.headers.get('Content-Length') or 0)
+        unread = self.command == 'POST' and not self._read and (self.headers.get('Content-Length') or '0').strip() != '0'  # also a damaged length
         if code >= 400 or unread:  # the request body may be unread - don't reuse this connection
             self.close_connection = True
             self.send_header('Connection', 'close')
@@ -477,6 +497,14 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
     def handle_safely(self, fn):
+        if not netpolicy.peer_allowed(self.ip, policy()['nets']):
+            log.info('REFUSED peer %s: not this PC and not inside the allowed networks', self.ip)
+            return self.send(403, {'error': 'This PC only accepts connections from the office network. Ask the administrator to allow your network.'})
+        if not netpolicy.host_allowed(self.headers.get('Host'), policy()['names']):
+            host = (self.headers.get('Host') or '')[:80]
+            log.info('REFUSED address %r from %s', host, self.ip)
+            return self.send(400 if not host else 403, {'error': 'This is not one of this PC\'s addresses, so the request was refused. '
+                                                        f'Open the program with http://localhost:{CFG["port"]}/ or the address shown in Settings.'})
         try:
             fn()
         except NotLoggedIn:
@@ -492,7 +520,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send(409, {'error': str(e)})
         except (BadRequest, ValueError) as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            self.send(400, {'error': str(e)})
+            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {})})
         except (ConnectionError, BrokenPipeError):
             pass
         except Exception as e:
@@ -639,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/backups/folder':
             self.need('backups.manage')
             return self.send(200, {'dirs': BACKUPS.extra, 'error': BACKUPS.last_error, 'local': self.ip in LOCAL_IPS,
-                                   'admin': is_admin(self.u)})
+                                   'admin': is_admin(self.u), 'status': BACKUPS.status()})
         if p == '/api/trash':
             self.need('trash.restore')
             self.need_all_scopes()
@@ -801,7 +829,7 @@ class Handler(BaseHTTPRequestHandler):
                     BACKUPS.create('pre-import')
             if any(isinstance(o, dict) and 'resolve' in o for o in (d.get('ops') or []) if isinstance(d.get('ops'), list)):
                 raise Forbidden('Conflicts are decided only in Devices & Sync by an administrator.')
-            res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops')), force, guard=commit_guard(self.u), user_id=self.u['id'])
+            res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops'), trusted=force), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
         if p == '/api/import/preview':
@@ -818,7 +846,7 @@ class Handler(BaseHTTPRequestHandler):
                     pid, plan = excel_io.make_preview(self.user, data, STORE.state(), name, engine)
                 return self.send(200, {'id': pid, **plan})
             except (word_io.WordError, excel_io.ImportError_) as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
         if p == '/api/word/preview':
             self.need('excel.import')
             self.need_all_scopes()
@@ -826,7 +854,7 @@ class Handler(BaseHTTPRequestHandler):
                 pid, plan = word_io.preview(self.user, self.body(30 * 1048576), STORE.state(), qs.get('category', ''), qs.get('name', '')[:120])
                 return self.send(200, {'id': pid, **plan})
             except (word_io.WordError, excel_io.ImportError_) as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
         if p.startswith('/api/excel/'):
             action = p[len('/api/excel/'):]
             self.need('excel.import')
@@ -847,7 +875,7 @@ class Handler(BaseHTTPRequestHandler):
                     STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': 'Excel import', 'target': plan.get('filename') or '', 'detail': f'{n} trips'}])
                     return self.send(200, {'trips': n, 'changes': res['changes']})
             except excel_io.ImportError_ as e:
-                raise BadRequest(str(e))
+                raise BadRequest(str(e), e.code)
             return self.send(404, {'error': 'Not found'})
         if p.startswith('/api/gateway/'):
             self.need('gateway.manage')
@@ -1141,6 +1169,26 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     allow_reuse_address = os.name != 'nt'  # Windows: reuse would let a second copy share the port silently; elsewhere it only skips TIME_WAIT
     daemon_threads = True
+
+    def __init__(self, *a, **kw):
+        super().__init__(*a, **kw)
+        self._slots = threading.BoundedSemaphore(max(2, int(CFG.get('max_connections') or 128)))
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):  # too many open connections: say so politely instead of piling up threads
+            try:
+                request.sendall(b'HTTP/1.1 503 Service Unavailable\r\nRetry-After: 5\r\nConnection: close\r\nContent-Length: 0\r\n\r\n')
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        super().process_request(request, client_address)
+
+    def process_request_thread(self, request, client_address):
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._slots.release()
 
 
 def main(background=False):

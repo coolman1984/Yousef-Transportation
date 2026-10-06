@@ -100,18 +100,20 @@
     var box = $('#sync'); if (!box) return;
     D.outbox.items(KEY).then(function (items) {
       var waiting = items.filter(function (i) { return !i.sentAt && !i.error; }).length, failed = items.filter(function (i) { return i.error; }).length, sent = items.filter(function (i) { return i.sentAt; }).length;
+      var atOffice = items.filter(function (i) { return i.officeAt; }).length;       // sent = in the mailbox; atOffice = the office has stored it
       var off = !navigator.onLine || D.outbox.online === false;
       var html;
       if (failed) html = '<button class="sync bad" data-a="retry">! ' + D.esc(D.t('failed')) + '</button>';
       else if (waiting) html = '<div class="sync wait">✓ ' + D.esc(D.t('saved_here')) + ' · ' + D.esc(D.t('n_waiting', { n: waiting })) + (off ? '<br><small>' + D.esc(D.t('offline')) + '</small>' : '') + '</div>';
-      else if (sent) html = '<div class="sync ok">✓✓ ' + D.esc(D.t('all_sent')) + '</div>';
+      else if (sent && atOffice === sent) html = '<div class="sync ok">✓✓✓ ' + D.esc(D.t('all_sent')) + '</div>';
+      else if (sent) html = '<div class="sync wait">✓✓ ' + D.esc(D.t('all_at_mailbox')) + '</div>';
       else html = '';
       box.innerHTML = html;
       var list = $('#items');
       if (list) list.innerHTML = items.map(function (i) {
-        var st = i.sentAt ? '✓✓ ' + D.t('received') : i.error ? '! ' + D.t('failed') : '✓ ' + D.t('saved_here');
+        var st = i.officeAt ? '✓✓✓ ' + D.t('received') : i.sentAt ? '✓✓ ' + D.t('at_mailbox') : i.error ? '! ' + D.t('failed') : '✓ ' + D.t('saved_here');
         var name = i.kind === 'photo' ? ({ start_odo: D.t('odo_start'), end_odo: D.t('odo_end'), paper: D.t('paper_t') }[i.photoKind] || i.photoKind) : ({ start: D.t('start'), end: D.t('end'), note: D.t('note'), route: D.t('route') }[JSON.parse(i.json).type] || '');
-        return '<div class="item ' + (i.sentAt ? 'ok' : i.error ? 'bad' : 'wait') + '"><span>' + D.esc(name) + '</span><b>' + D.esc(st) + '</b></div>';
+        return '<div class="item ' + (i.officeAt ? 'ok' : i.error ? 'bad' : 'wait') + '"><span>' + D.esc(name) + '</span><b>' + D.esc(st) + '</b></div>';
       }).join('');
     });
   }

@@ -15,6 +15,123 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Review follow-up on PR #7 - four findings of the Codex review, all verified and fixed (2026-10-06)
+
+Each finding was reproduced with a failing test first (`test_time` k, `gateway.test.js` x3, `test_backup` m-p), then fixed. **Gate:** the same gates as the slices they touch (L2 money/time, L4 recovery, driver lane).
+1. **P1 time (F11), real but narrow:** only the hour that happens twice (clocks go back, 29 Oct 2026 23:00-24:00) lost information: two phone events one real hour apart both became naive `23:30`, so the trip showed 0 h. (The spring case in the review is already right: `duration` localizes wall times.)
+   Fix: `domain.business_text` - a phone/receive time that falls in the repeated hour keeps its Cairo offset (`...23:30:00+03:00` vs `+02:00`); every other time stays plain wall-clock text so screens, Excel and old data are unchanged. `drift_minutes` now uses instants.
+2. **P1 revocation lifetime (F05), real:** the 60-day tombstone could be shorter than the life of a link (a trip planned months ahead), so a PC that was off long enough could bring a still-valid revoked link back. Now `revoked.until` = the card's expiry + 7 days (90 days when the card is unknown, for ever when the link never expires), never shortened by a second removal; the cleanup deletes by `until`; a table made by the first version is upgraded in place.
+3. **P2 restore-set (F13), real:** it moved the current files aside before copying, so a full disk mid-copy left an empty data folder. Now the whole set is staged next to the data first, then the swap, with an `undo()` that puts everything back; tested with a copy failure and a placement failure (the data folder is byte-for-byte as before, no leftovers).
+4. **P1 photo copies (F13), real:** a same-size corrupted copy was trusted for ever. Photos are named after their SHA-256, so every new copy is checked, every run re-checks the next 300 existing copies (a rolling cursor, so a large folder is covered over time without re-reading everything each run) and repairs a bad copy from the original - only when the original still matches its name; a damaged original is never copied over anything and is reported. `restore-set` now checks every photo against its name and refuses to bring back a damaged one (it says how many).
+**Lesson:** "size is the same" is not proof; where the data names its own checksum, use it. And a restore must be staged before it touches what exists.
+
+---
+
+## Commercial readiness slice 7 - receipts and photo durability (F09) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): driver-lane precondition "phone/mailbox/office receipts distinguish durability, photos survive agreed outages" (next-release lane, not a first-pilot dependency).** Branch ccr-a760379a-lzybk5 from 42d0e7b.
+**Checks:** `gateway.test.js` 21 (+4), `test_e2e_driver` 8 (+1, and test_a now proves the three ticks and that the photo blob stays until the office receipt), `test_gateway_client` +2; Linux, node 22, Chromium 1194. **Not run:** a real Cloudflare account, a phone with real storage limits.
+**Reproduced from the code (F09):** the phone deleted its photo and printed "Received by the office" as soon as the *mailbox* answered ok; the mailbox deletes unacknowledged items after 30 days (`scheduled`) - with the office off for a month the only copy of an odometer photo was silently gone and the phone had already said it was safe.
+**Design:** `receipts(uuid, at)` in the gateway, written by `/office/ack` (one multi-row INSERT per 40 ids, DELETEs per 90 ids - far fewer statements than one per item), kept 60 days, created lazily for mailboxes deployed with the old schema.
+`POST /api/receipts/<token>` {uuids<=100} -> {office, mailbox}; an id in neither list is *unknown* (never stored, or dropped by retention). The phone (`outbox.js`) keeps photo blobs until `officeAt`; unknown items are marked unsent and go out again with the same uuid (the gateway and the office both de-duplicate by uuid, the office also checks its own tables); items are tidied 7 days after the office receipt and after 120 days regardless.
+UI: ✓ saved on phone, ✓✓ in the mailbox, ✓✓✓ stored by the office; driver guide and strings in both languages. Office: `oldest_waiting_seconds()`, `late` after 3 days, a warning card in Settings > Mailbox. Service worker cache name bumped so phones fetch the new page (F14 still open: a page that is open keeps running the old script until reloaded).
+**Mistakes:** my first bulk-ack test hit the per-link rate limit (60/10 min) - the Worker was right, the test inserted the rows directly instead; `test_a` fetched a photo after acknowledging it (acknowledging deletes it) - order fixed.
+**Next:** the Windows/field gates (L1 candidate, L3 clean install, L4 drill) need real hardware; software side left: F10 (D1 statement budget of the other routes), F14 (safe page update), F15 (installer/CI hardening), F17-F20 (admin separation, validation, docs, developer support).
+
+---
+
+## Commercial readiness slice 6 - import error contract (F16) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): core import path ("native Excel/CSV import with preview"); protected/Office formats are an allowed exclusion, so this slice only makes their refusal predictable.** Branch ccr-a760379a-lzybk5 from 20c0f1e.
+**Checks:** `test_import_errors` 6 (all layers, Office codes with a pretend PowerShell, the API answer, no data change, no content repeated), `test_formats`, `test_excel_io`, `test_word_io`; Linux, Python 3.13. **Not run:** Windows with Office (the two known failures should now pass there; to confirm).
+**Root cause (reproduced here by pretending Office is present and automation fails):** the two tests expected the built-in readers' plain refusal, but on a PC where Office is *registered* a DRM-looking file is sent to Office and the answer is Office's/the environment's (`officeFailed` here). It was a test/product-path mismatch, not a defect in either route.
+**Contract:** each failure has a stable code - `FormatError(msg, code)` (default derived from the standard message), carried by `ImportError_`, `WordError`, `OfficeError` and `BadRequest` into the API as `{error, code}`; `js/views/excel.js` picks the dictionary text by code (`CODE_KEY`), the English-substring map stays only as the fallback for old messages.
+Codes: drm encrypted pdf image xlsb old empty unknown big damaged wordGiven sheetGiven noTable | officeMissing officeTimeout officePassword officeFailed | noColumns noTrips previewExpired nothingToImport noForm needCategory.
+**Tests no longer depend on the host:** the refusal tests switch Office off (`_no_office`), Office has its own tests; harness `ApiError` now keeps the JSON answer. **Not done:** formula-injection check of exports, a real Office run.
+**Next:** F09 (receipts and photo durability of the driver lane), then the Windows field drills (L1/L3/L4) which need real hardware.
+
+---
+
+## Commercial readiness slice 5 - one time contract (F11) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): L2 core journey / money - "time/duration" precondition of any monetary report.** Branch ccr-a760379a-lzybk5 from 4f57d6d. **Checks:** `test_time` 10 (+1 in `test_gateway_client`), neighbours
+`test_domain`, `test_trips_api`, `test_pricing`, `test_design`; Linux, Python 3.13 (a real tz database present). **Not run:** Windows (where there is no tz database: the installed program uses the built-in rules - proven equal to the database here, not run there).
+**Reproduced:** `duration('2026-10-01T08:00:00+03:00', '2026-10-01T08:00:00Z')` was 0 h (`parse_dt` cut the offset), `_epoch` read a naive expiry as UTC while it was written in the office PC's local time (links expired 3 h late, and differently on a PC with another zone setting).
+**Contract (new `server/tz.py`, `domain.py`):** a time with a zone = exact instant; without = Cairo wall time. `duration` = elapsed time between instants (Egypt's two clock-change nights are right: 3 h not 4 on 23->24 April, 6 h not 5 on 29->30 October 2026);
+`parse_dt` = naive Cairo time (what screens, reports, Excel and calendar grouping use); `business_now()` replaces `datetime.now()` where a business date/time is meant (new trip date, amendment time, rate-history date, open-too-long check);
+`link_expiry()` returns an aware UTC time; `gateway_client.local_pair` converts the phone's time and the receive time to Cairo (a phone set to UTC/any zone is corrected; drift stays the true difference); the stored event keeps the phone's original text with offset and the exact UTC receive time (`payload.phoneAt/recvAt`).
+`Y_TIME_UNCLEAR` (yellow) marks a trip whose start/end falls in the repeated or skipped hour. `EgyptRules` (tzinfo) is used when `zoneinfo` has no data; the test sweeps every half hour 2023-2030 in both directions (instant->wall, wall->offset incl. both folds) against the database.
+**Decisions:** business zone fixed to Africa/Cairo (one-company pilot); ambiguous wall times take the first occurrence (fold=0) and are flagged, not guessed; old naive `linkExpiry` values are read as Cairo (the office PCs were in Cairo). **Lesson:** a phone's clock is evidence, not truth - keep its text, show business time.
+**Next:** F16, then F09 (the driver-phone lane: receipts and photo durability).
+
+---
+
+## Commercial readiness slice 4 - backups (F13) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): L4 Recovery** - branch ccr-a760379a-lzybk5 from 312544a (+ the owner's docs commits cda804a merged). **Checks:** `test_backup` 15 (engine, tool through a subprocess, real Chrome banner) and the earlier suites; Linux, Python 3.13. **Not done:** the field drill on a real second Windows PC (L4 stays PENDING until it is run with the real installer); mixed-version restore. **Next step:** F11 (time/duration), then F09, F16.
+
+**Reproduced first (`tests/test_backup.py`, engine only):** 8 simultaneous `create()` calls -> `FileNotFoundError` / `disk I/O error` (one shared `.tmp` per name); two backups in the same second -> the second
+`os.replace` overwrote the first; a photo copy cut short by a power failure was trusted because its name existed; nothing proved that data, accounts and history belong together; an account-only change never made
+a backup due (the scheduler watched `store.version()` only).
+**What changed (`server/backup.py`, small edits in `auth.py`, `app.py`, `datatab.js`):** a lock (one run at a time); a free name (a taken second moves to the next); every part is snapshotted into a uniquely tagged temporary
+file, checked (SQLite integrity, size, SHA-256) and renamed - auth, history, manifest, and the data file LAST, because the data file is what makes a set visible/restorable; any failure removes the temporary files and the
+parts already placed, keeps the last good set and sets `last_error` (shown in Settings > Data as a red note; "overdue" as an amber one, counted from the last good backup or from program start so a new installation never warns);
+disk space is checked first (plain message); the manifest `to_<time>_<kind>.json` lists sizes, checksums, history watermark (`journal.vv()`), data version and app version; `verify()` is used by `restore()` (a legacy set without a manifest
+still restores, checked by SQLite only); the scheduler uses the watermark (data version + history), which also covers accounts because account changes are history entries; the second folder gets the same set file by file, data last;
+photos are mirrored one file at a time under a temporary name and re-copied when the size differs (a failed photo is counted and reported, it does not stop the database backup). Backup copies are plain single files now
+(`journal_mode=DELETE` on the copy; before, `-wal`/`-shm` files stayed next to every renamed copy).
+**Drill result (important for the owner's guide):** a clean PC given ONLY a set (data, accounts, history, photos) comes back with all business data, working logins and photos, but the program starts as a new device and keeps the old history
+as `journal.incomplete-*.db`: the PC's secret keys (`data/node`) and the mailbox secrets (`gateway.json`) are deliberately not in a set. Putting them in plain files on USB drives would be a key leak, and encrypting them needs a
+cipher the standard library does not have, so a restore is data level. (Correction: `nodectl export-authority` already seals the administrator key with a passphrase - scrypt + HMAC stream, written earlier in the project - so the administrator identity can be kept separately by the operator; a general key package inside every backup is still not done.)
+**New tool:** `TripOrders.exe tool restore-set <backup folder> [set]` (`nodectl.cmd_restore_set`): picks the newest set that passes `verify_set`, skips damaged ones with the reason, moves what was in the data folder (and `node/`) to `data/replaced-<time>/`, places data/accounts/history, copies photos whole, refuses safely (everything put back) if the program still runs. Tested through a real subprocess: the L4 drill is one command instead of file copying.
+**Mistakes:** my first UI strings used double quotes inside double quotes - `JsSyntaxTest` (added last slice) caught it at once; the first "overdue" rule warned on a new installation (found by the browser test).
+
+---
+
+## Commercial readiness slice 3 - rates by trip date (F07), web address check (F04) (2026-10-06)
+
+**F07 (reproduced in the plan, rebuilt as tests):** reports read the category's CURRENT rate, so raising the rate re-priced every old month. New `server/pricing.py`:
+`tripCategories.rateHistory` holds the superseded rates as `{until, ratePerKm, ratePerOtHour}`; a trip dated before `until` uses that entry, later trips the next one, finally the current
+rate. The server writes the history when a category is saved (`tripsvc.normalize_ops`): the client's copy is ignored, a change on the same day as the last one is a correction (no new entry),
+a rate that was never set is not history (the first value applies to every trip, as before - nothing invented), and `force` (full restore / sample data, needs `data.import`) keeps a history as given.
+Reconciliation money is now added trip by trip with each trip's own rate (before: whole month x one rate). The history is hidden from users without a money permission like the rates.
+The category screen explains the rule in one sentence (EN/AR). **Deliberate simplification:** the effective date is always "the day you save"; retro-corrections and a date picker are not built.
+**F04:** reproduced - through `Host: evil.example.com` the first administrator was created on a fresh server (`/api/auth/setup` only checks that the peer IP is local; a browser that was
+tricked into talking to 127.0.0.1 under an attacker's name is local). Now every request needs a Host that is an IP address, `localhost`, a one-word computer name, `*.local`, the PC's own full
+name or an `allowed_hosts` entry. Also: idle timeout 120 -> 60 s (`idle_timeout_seconds`), `max_connections` (128) with a 503, and a damaged `Content-Length` no longer drops the connection without an answer
+(`send` called `int()` on it - found by the new test).
+**Mistakes:** (1) my first English help text had an apostrophe inside a single-quoted JS string - the whole language file broke and every label showed as a raw key; `test_design` (regex based) did not notice,
+the real-Chrome test did. Added `JsSyntaxTest` (node --check on every page script). (2) first `stamp` call site sat inside an `elif` chain and would have been a syntax error - caught by reading the diff before running.
+**Owner decision (asked after the slice, answered 2026-10-06):** staff open the program from other PCs on the same network and from other networks (branches). So the plan's "loopback by default" is NOT applied.
+Instead `server/netpolicy.py` (pure functions, unit-tested) makes the program answer only this PC and private networks (RFC 1918, link-local, 100.64/10 for VPNs, IPv6 ULA/link-local): the "never reachable from the
+internet" rule now holds inside the application even if a router or the firewall lets a public address through. `allowed_networks` in `config.json` replaces the default list (this PC is always allowed); a list with nothing usable
+falls back to the default instead of locking everybody out. Refusal is tested end to end with a client bound to 127.0.0.2 against a server whose list names other networks (a real public source address cannot be created in this sandbox).
+**Still open (needs Windows or a certificate decision):** plain HTTP crosses the company network, so credentials are readable by anyone on a hostile WAN segment unless the VPN encrypts it; HTTPS for the web port needs a certificate
+people can trust without a browser warning. The installer rule `profile=any` stays: a `remoteip=` rule with the private ranges would be the next step, but a silently failing `netsh` line would block the program on the customer's PC and I cannot run it here.
+
+---
+
+## Commercial readiness slice 2 - driver events in any order, replaced links really die (2026-10-06)
+
+**Plan:** findings F08 and F05 (tasks T10/T11 first slices). Reproduced both before touching code.
+**F08 (reproduced):** `apply_event` gated on status rank only, so an `end` that arrived first set `finished` and a later valid `start` was dropped - the trip kept
+no start odometer/time. It is now an order-independent reducer: first start and first end win, a start after an end fills only what is still empty (an
+odometer the office already typed is kept), closed/cancelled/unknown status is never touched, malformed bodies (`data` not an object, non-text route) change nothing
+instead of raising. Also `pull()` now isolates each trip and photo: one that cannot be applied no longer stops the acknowledgement of the others (before, one
+poison message made every round fail and nothing was acknowledged); the office sees the reason in the mailbox status.
+**F05 (confirmed by the existing test comment "the old token's card is still on the gateway until it expires"):** replacing a link only changed the hash on the trip;
+the old card stayed live and its phone could still post events as the current trip. Now `make_link(replace)` stores the replaced hash in the new `trips.oldLinks`
+(hashes only, last five, replicated like any trip field so any PC can deliver it), `push_cards` sends `remove` for them before the new card, and the Worker keeps a
+`revoked` tombstone table (60 days) so a stale PC that still publishes the old card cannot bring it back (`INSERT ... WHERE NOT EXISTS`). The Worker creates the table
+on first use, so a mailbox deployed from the old `schema.sql` keeps working after a Worker-only update. Evidence the old phone had already delivered stays in the mailbox and is applied.
+**Tests:** Python unit f-h (all 24 arrival orders of start/end/retries give the same trip; closed/cancelled/filled; malformed), integration f (end pulled first, start next round)
+and d (old link 404, old phone's event 404, stale PC republish stays 404, three replacements), gateway.test.js +2 (tombstone, table made on first use and cleaned).
+**Mistake found on the way:** the CI command did not list `test_permissions`, so slice 1's tests would never have run in CI. Added.
+**Lesson:** the integration test must fail on the old code - the first F08 end-to-end assertion read a missing key, so it failed for the right reason but with an unhelpful message; assert with `.get`.
+**Not done (still open):** durable device-release intent (still an in-memory set), D1 statement budget per request (F10, removals use batches of 20 to stay modest), Worker-side event schema, durable office receipt (F09).
+
+---
+
 ## Commercial readiness slice 1 - real permissions on read and write, Windows rebuild (2026-10-05)
 
 **Plan:** `COMMERCIAL_READINESS_EXECUTION_PLAN.md`, findings F01, F02, F03, F06, F12 (tasks T03-T06 first slices).

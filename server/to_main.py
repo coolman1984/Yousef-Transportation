@@ -2,7 +2,7 @@
 
   TripOrders.exe                 start the system and open it in the browser
   TripOrders.exe --background    start the system without opening the browser (used when Windows starts)
-  TripOrders.exe tool <command>  maintenance tools of server/nodectl.py (status, verify, rebuild, reset-admin,
+  TripOrders.exe tool <command>  maintenance tools of server/nodectl.py (status, verify, rebuild, reset-admin, restore-set <backup folder>,
                            export-authority <file>, import-authority <file>) - run it from a command window
 
 The installed program keeps its data outside the program folder, in %ProgramData%\\TripOrders (config.json, data,

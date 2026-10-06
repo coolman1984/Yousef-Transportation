@@ -37,7 +37,7 @@ jobs:
         run: node --test --no-warnings test/gateway.test.js
       - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_multinode test_e2e_browser test_e2e_driver test_e2e_link_ui
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_e2e_browser test_e2e_driver test_e2e_link_ui
 
   windows-installer:
     needs: test

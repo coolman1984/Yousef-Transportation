@@ -5,8 +5,9 @@
   var state = null;
 
   function load() {
-    var jobs = [TO.can('trash.restore') ? TO.get('/api/trash') : Promise.resolve([]), TO.can(['backups.manage', 'backups.restore']) ? TO.get('/api/backups') : Promise.resolve([])];
-    return Promise.all(jobs).then(function (r) { state = { trash: r[0], backups: r[1] }; });
+    var jobs = [TO.can('trash.restore') ? TO.get('/api/trash') : Promise.resolve([]), TO.can(['backups.manage', 'backups.restore']) ? TO.get('/api/backups') : Promise.resolve([]),
+      TO.can('backups.manage') ? TO.get('/api/backups/folder').catch(function () { return null; }) : Promise.resolve(null)];
+    return Promise.all(jobs).then(function (r) { state = { trash: r[0], backups: r[1], status: r[2] && r[2].status }; });
   }
   function trashCard() {
     if (!TO.can('trash.restore')) return '';
@@ -21,9 +22,11 @@
   }
   function backupCard() {
     if (!TO.can(['backups.manage', 'backups.restore'])) return '';
-    var rows = state.backups.slice(0, 30);
+    var rows = state.backups.slice(0, 30), st = state.status || {};
+    var warn = st.lastError ? '<div class="tip bad" role="alert" data-bk-warn>' + TO.icon('alert') + '<div>' + TO.esc(TO.t('bk.failed')) + ' <span class="faint">' + TO.esc(st.lastError) + '</span></div></div>' :
+      st.stale ? '<div class="tip warn" role="status" data-bk-warn>' + TO.icon('alert') + '<div>' + TO.esc(TO.t('bk.stale')) + '</div></div>' : '';
     return '<section class="card"><header><h3>' + TO.icon('lock') + ' ' + TO.esc(TO.t('bk.title')) + '</h3>' +
-      (TO.can('backups.manage') ? '<button class="btn primary sm" data-backup>' + TO.icon('plus', 'sm') + TO.esc(TO.t('bk.make')) + '</button>' : '') + '</header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('bk.sub')) + '</p>' +
+      (TO.can('backups.manage') ? '<button class="btn primary sm" data-backup>' + TO.icon('plus', 'sm') + TO.esc(TO.t('bk.make')) + '</button>' : '') + '</header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('bk.sub')) + '</p>' + warn + (warn ? '<div style="height:1rem"></div>' : '') +
       (rows.length ? U.table([
         { h: 'f.time', cell: function (b) { return '<span class="num">' + U.dt(b.time) + '</span>'; } },
         { h: 'f.type', cell: function (b) { return '<span class="badge">' + TO.esc(b.kind || '') + '</span>'; } },

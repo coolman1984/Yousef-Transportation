@@ -200,13 +200,52 @@ test('a removed (replaced) link cannot be published again by a PC that still has
   assert.equal((await call(env, 'GET', '/api/card/Tk_zzzzzzzzzzzzzzzzzzzzzz')).status, 200);
 });
 
+test('a revocation lives as long as the link it revokes (not a fixed 60 days)', async () => {
+  const env = newEnv();
+  const th = await putCard(env, { expiresAt: Math.floor(Date.now() / 1000) + 120 * 86400 });      // a trip planned far ahead: the link lives 120 days
+  assert.equal((await office(env, 'PUT', '/office/cards', { remove: [th] })).status, 200);
+  await env.DB.prepare('UPDATE revoked SET at = at - ?').bind(100 * 86400).run();                  // 100 days later a PC that was off reconnects
+  await worker.scheduled({}, env);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 1, 'the tombstone is still there');
+  await putCard(env, { expiresAt: Math.floor(Date.now() / 1000) + 20 * 86400 });                   // it publishes the stale card
+  assert.equal((await call(env, 'GET', '/api/card/' + TOKEN)).status, 404, 'the revoked link is still dead');
+  await env.DB.prepare('UPDATE revoked SET until = ?').bind(Math.floor(Date.now() / 1000) - 1).run();   // the link would have expired by now
+  await worker.scheduled({}, env);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 0, 'only then is it forgotten');
+});
+
+test('a tombstone table made by the first version (without `until`) is upgraded in place and keeps its rows', async () => {
+  const env = newEnv();
+  await env.DB.prepare('DROP TABLE revoked').run();
+  await env.DB.prepare('CREATE TABLE revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  const old = await sha256Hex('Tk_oldoldoldoldoldoldold');
+  const at = Math.floor(Date.now() / 1000) - 5 * 86400;
+  await env.DB.prepare('INSERT INTO revoked(token_hash, at) VALUES(?, ?)').bind(old, at).run();
+  await putCard(env);                                                  // any office card call makes the Worker check the table
+  const r = await env.DB.prepare('SELECT at, until FROM revoked WHERE token_hash = ?').bind(old).first();
+  assert.equal(r.at, at);
+  assert.equal(r.until, at + 90 * 86400, 'an old row is kept for 90 days from its revocation');
+});
+
+test('a revoked link whose card is unknown is still remembered for a long time, and a link without expiry for ever', async () => {
+  const env = newEnv();
+  const unknown = await sha256Hex('Tk_unknownunknownunknown1');
+  await office(env, 'PUT', '/office/cards', { remove: [unknown] });
+  const r = await env.DB.prepare('SELECT until - at AS span FROM revoked').first();
+  assert.ok(r.span >= 90 * 86400, 'at least 90 days when the expiry is not known: ' + r.span);
+  const th = await putCard(env, { expiresAt: null });
+  await office(env, 'PUT', '/office/cards', { remove: [th] });
+  const forever = await env.DB.prepare('SELECT until - at AS span FROM revoked WHERE token_hash = ?').bind(th).first();
+  assert.ok(forever.span > 3000 * 86400, 'a link that never expires is revoked for ever');
+});
+
 test('a mailbox set up before revocation existed keeps working (the table is made on first use) and old tombstones are cleaned', async () => {
   const env = newEnv();
   await env.DB.prepare('DROP TABLE revoked').run();
   const th = await putCard(env);
   assert.equal((await office(env, 'PUT', '/office/cards', { remove: [th, 'not-a-hash'] })).status, 200);
   assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 1, 'a malformed hash is ignored');
-  await env.DB.prepare('UPDATE revoked SET at = at - ?').bind(61 * 86400).run();
+  await env.DB.prepare('UPDATE revoked SET until = ?').bind(Math.floor(Date.now() / 1000) - 1).run();
   await worker.scheduled({}, env);
   assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 0);
 });

@@ -157,12 +157,19 @@ async function officeAuth(request, env, url, bodyBytes) {
 }
 
 // Links the office replaced. A removed card is remembered here so a PC that still has the old link in its data cannot publish it again.
-// schema.sql was run by hand once on existing mailboxes, so the table is also created here the first time it is needed.
-const REVOKED_DAYS = 60;
+// The tombstone lives as long as the link itself (its expiry + 7 days; 90 days when the card is not known any more; for ever when the link never expires):
+// forgetting it earlier would let a PC that was off for months bring a still-valid revoked link back.
+// schema.sql was run by hand once on existing mailboxes, so the table is also created (and its `until` column added) here the first time it is needed.
+const REVOKED_UNKNOWN_DAYS = 90, REVOKED_MARGIN_DAYS = 7, REVOKED_FOREVER_DAYS = 3650;
 const revokedReady = new WeakSet();
 async function ensureRevoked(env) {
   if (revokedReady.has(env.DB)) return;
-  await env.DB.prepare('CREATE TABLE IF NOT EXISTS revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER NOT NULL DEFAULT 0)').run();
+  const cols = await env.DB.prepare('PRAGMA table_info(revoked)').all();
+  if (!(cols.results || []).some((c) => c.name === 'until')) {
+    await env.DB.prepare('ALTER TABLE revoked ADD COLUMN until INTEGER NOT NULL DEFAULT 0').run();
+    await env.DB.prepare('UPDATE revoked SET until = at + ?').bind(REVOKED_UNKNOWN_DAYS * 86400).run();
+  }
   revokedReady.add(env.DB);
 }
 
@@ -198,7 +205,8 @@ async function office(request, env, url, parts) {
     }
     for (const h of (d.remove || []).slice(0, 500)) {
       if (!/^[0-9a-f]{64}$/.test(String(h))) continue;
-      stmts.push(env.DB.prepare('INSERT OR REPLACE INTO revoked(token_hash, at) VALUES(?,?)').bind(String(h), now()));
+      stmts.push(env.DB.prepare('INSERT INTO revoked(token_hash, at, until) VALUES(?, ?, COALESCE((SELECT CASE WHEN expires_at IS NULL THEN ? ELSE MAX(expires_at, ?) + ? END FROM cards WHERE token_hash = ?), ?)) ON CONFLICT(token_hash) DO UPDATE SET until = MAX(until, excluded.until)')
+        .bind(String(h), now(), now() + REVOKED_FOREVER_DAYS * 86400, now(), REVOKED_MARGIN_DAYS * 86400, String(h), now() + REVOKED_UNKNOWN_DAYS * 86400));
       stmts.push(env.DB.prepare('DELETE FROM cards WHERE token_hash = ?').bind(String(h)));
     }
     if (stmts.length) await env.DB.batch(stmts);
@@ -284,7 +292,7 @@ export default {
     await ensureRevoked(env);
     await ensureReceipts(env);
     await env.DB.batch([
-      env.DB.prepare('DELETE FROM revoked WHERE at < ?').bind(now() - REVOKED_DAYS * 86400),
+      env.DB.prepare('DELETE FROM revoked WHERE until < ?').bind(now()),
       env.DB.prepare('DELETE FROM receipts WHERE at < ?').bind(now() - RECEIPT_DAYS * 86400),
       env.DB.prepare('DELETE FROM events WHERE recv_at < ?').bind(cut),
       env.DB.prepare('DELETE FROM photos WHERE recv_at < ?').bind(cut),

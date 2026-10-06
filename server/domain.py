@@ -135,6 +135,18 @@ def parse_dt(s):
     return d.replace(tzinfo=None)
 
 
+def business_text(s):
+    """A stored time as text. Normally naive Cairo wall time. A time that falls in the hour that happens twice (the clocks go back) keeps its
+    offset, because the wall time alone cannot say which of the two it was and a real hour would be lost. A time without a zone stays as typed."""
+    d = _parse(s)
+    if d is None:
+        return ''
+    if d.tzinfo is None:
+        return d.isoformat(timespec='seconds')
+    local = d.astimezone(tz.BUSINESS)
+    return local.isoformat(timespec='seconds') if tz.unclear(local.replace(tzinfo=None)) else local.replace(tzinfo=None).isoformat(timespec='seconds')
+
+
 def business_now():
     """Now in Cairo business time (naive), whatever time zone this PC is set to."""
     return datetime.now(tz.UTC).astimezone(tz.BUSINESS).replace(tzinfo=None)
@@ -173,7 +185,7 @@ def hours(td):
 
 
 def drift_minutes(phone_at, recv_at):
-    a, b = parse_dt(phone_at), parse_dt(recv_at)
+    a, b = instant(phone_at), instant(recv_at)
     if not a or not b:
         return None
     return round((b - a).total_seconds() / 60, 1)

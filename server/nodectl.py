@@ -166,37 +166,65 @@ def cmd_restore_set(folder, name=None):
     target = {'data': 'trips.db', 'auth': 'auth.db', 'journal': 'journal.db'}
     os.makedirs(data, exist_ok=True)
     stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+    tag = '.restoring-' + stamp
     aside = os.path.join(data, 'replaced-' + stamp)
-    mine = [n for n in os.listdir(data) if n == 'node' or any(n.startswith(t) for t in target.values())]
-    moved = []
+    staged, moved, placed = {}, [], []
+
+    def undo():
+        """Back to exactly how it was: remove what was placed or staged, bring the moved files back, remove the aside folder if it is empty."""
+        for p in placed + list(staged.values()):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        for n in reversed(moved):
+            try:
+                os.replace(os.path.join(aside, n), os.path.join(data, n))
+            except OSError:
+                pass
+        try:
+            os.rmdir(aside)
+        except OSError:
+            pass
     try:
-        for n in mine:
+        for part, fname in parts.items():                 # 1. the complete set is staged next to the data FIRST (a full disk stops here, nothing is touched)
+            if part in target and os.path.exists(os.path.join(db, fname)):
+                staged[part] = os.path.join(data, target[part] + tag)
+                shutil.copy2(os.path.join(db, fname), staged[part])
+        mine = [n for n in os.listdir(data) if n == 'node' or any(n.startswith(t) for t in target.values()) and tag not in n]
+        for n in mine:                                    # 2. what is there now moves aside (never deleted)
             os.makedirs(aside, exist_ok=True)
             os.replace(os.path.join(data, n), os.path.join(aside, n))
             moved.append(n)
-    except OSError as e:                      # the program (or another tool) still has a file open: put everything back
-        for n in reversed(moved):
-            os.replace(os.path.join(aside, n), os.path.join(data, n))
-        print('Cannot restore while Trip Orders is running. Close the program on this PC, then run this again.')
-        print('Nothing was changed. (' + str(e) + ')')
+        for part, path in list(staged.items()):           # 3. the staged files take their place
+            dest = os.path.join(data, target[part])
+            os.replace(path, dest)
+            del staged[part]
+            placed.append(dest)
+    except OSError as e:
+        undo()
+        print('The restore could not be completed (' + str(e) + '). If Trip Orders is running, close it and run this again.')
+        print('Nothing was changed.')
         return 1
-    for part, fname in parts.items():
-        if part in target and os.path.exists(os.path.join(db, fname)):
-            tmp = os.path.join(data, target[part] + '.restoring')
-            shutil.copy2(os.path.join(db, fname), tmp)
-            os.replace(tmp, os.path.join(data, target[part]))
-    photos = 0
+    photos = bad = 0
     src_up = os.path.join(folder, 'uploads') if os.path.isdir(os.path.join(folder, 'uploads')) else os.path.join(os.path.dirname(db), 'uploads')
     for root, _, files in os.walk(src_up):
         out = os.path.join(uploads, os.path.relpath(root, src_up))
         for f in files:
-            d = os.path.join(out, f)
-            if not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(os.path.join(root, f))):
+            if '.part-' in f:
+                continue
+            d, s_ = os.path.join(out, f), os.path.join(root, f)
+            if backup.is_cas_name(f) and backup._sha_file(s_) != backup.cas_hash(f):
+                bad += 1                                  # a photo whose copy no longer matches its checksum is not brought back as if it were fine
+                continue
+            if not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)):
                 os.makedirs(out, exist_ok=True)
-                shutil.copy2(os.path.join(root, f), d + '.part')
+                shutil.copy2(s_, d + '.part')
                 os.replace(d + '.part', d)
                 photos += 1
     print(f'Restored the backup {chosen} into {data}: business data, accounts, history (kept for reading) and {photos} photo file(s).')
+    if bad:
+        print(f'WARNING: {bad} damaged photo(s) were NOT restored: their copy in the backup does not match its checksum.')
     if moved:
         print(f'What was in the data folder before is kept in {aside}.')
     print('Now open Trip Orders. It starts as a new device of this PC; log in with the accounts of the backup and check the trips.')

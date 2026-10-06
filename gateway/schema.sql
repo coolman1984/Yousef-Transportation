@@ -37,7 +37,8 @@ CREATE TABLE IF NOT EXISTS photos (
 );
 CREATE TABLE IF NOT EXISTS revoked (        -- links the office replaced: a removed card cannot be published again by a PC with old data
   token_hash TEXT PRIMARY KEY,
-  at         INTEGER NOT NULL
+  at         INTEGER NOT NULL,
+  until      INTEGER NOT NULL DEFAULT 0       -- remembered until the link would have expired (+7 days); 90 days if its card is unknown
 );
 CREATE TABLE IF NOT EXISTS receipts (       -- what the office acknowledged: the phone keeps its copy until it sees the receipt
   uuid TEXT PRIMARY KEY,

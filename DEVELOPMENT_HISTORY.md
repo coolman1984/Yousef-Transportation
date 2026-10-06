@@ -15,6 +15,18 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Review follow-up on PR #7 - four findings of the Codex review, all verified and fixed (2026-10-06)
+
+Each finding was reproduced with a failing test first (`test_time` k, `gateway.test.js` x3, `test_backup` m-p), then fixed. **Gate:** the same gates as the slices they touch (L2 money/time, L4 recovery, driver lane).
+1. **P1 time (F11), real but narrow:** only the hour that happens twice (clocks go back, 29 Oct 2026 23:00-24:00) lost information: two phone events one real hour apart both became naive `23:30`, so the trip showed 0 h. (The spring case in the review is already right: `duration` localizes wall times.)
+   Fix: `domain.business_text` - a phone/receive time that falls in the repeated hour keeps its Cairo offset (`...23:30:00+03:00` vs `+02:00`); every other time stays plain wall-clock text so screens, Excel and old data are unchanged. `drift_minutes` now uses instants.
+2. **P1 revocation lifetime (F05), real:** the 60-day tombstone could be shorter than the life of a link (a trip planned months ahead), so a PC that was off long enough could bring a still-valid revoked link back. Now `revoked.until` = the card's expiry + 7 days (90 days when the card is unknown, for ever when the link never expires), never shortened by a second removal; the cleanup deletes by `until`; a table made by the first version is upgraded in place.
+3. **P2 restore-set (F13), real:** it moved the current files aside before copying, so a full disk mid-copy left an empty data folder. Now the whole set is staged next to the data first, then the swap, with an `undo()` that puts everything back; tested with a copy failure and a placement failure (the data folder is byte-for-byte as before, no leftovers).
+4. **P1 photo copies (F13), real:** a same-size corrupted copy was trusted for ever. Photos are named after their SHA-256, so every new copy is checked, every run re-checks the next 300 existing copies (a rolling cursor, so a large folder is covered over time without re-reading everything each run) and repairs a bad copy from the original - only when the original still matches its name; a damaged original is never copied over anything and is reported. `restore-set` now checks every photo against its name and refuses to bring back a damaged one (it says how many).
+**Lesson:** "size is the same" is not proof; where the data names its own checksum, use it. And a restore must be staged before it touches what exists.
+
+---
+
 ## Commercial readiness slice 7 - receipts and photo durability (F09) (2026-10-06)
 
 **Gate (LAUNCH_SCOPE.md): driver-lane precondition "phone/mailbox/office receipts distinguish durability, photos survive agreed outages" (next-release lane, not a first-pilot dependency).** Branch ccr-a760379a-lzybk5 from 42d0e7b.

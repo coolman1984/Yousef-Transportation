@@ -39,6 +39,8 @@ from datetime import datetime, timedelta
 from version import VERSION
 
 AUTO_KINDS = ('auto', 'startup')
+VERIFY_PER_RUN = 300     # existing photo copies re-checked by their checksum in every backup run (a rolling slice)
+CAS_NAME = re.compile(r'^[0-9a-f]{64}$')
 DRIVE_REMOTE = 4  # Windows GetDriveTypeW: a mapped network drive
 
 
@@ -60,6 +62,15 @@ def network_folder(path, drive_type=None):
             return False
     return False
 NAME_RE = re.compile(r'^to_\d{8}_\d{6}_[a-z-]+\.db$')
+
+
+def is_cas_name(name):
+    """A photo/document stored under its own SHA-256 (<64 hex>.<ext>): its name says what its content must be."""
+    return bool(CAS_NAME.match(os.path.splitext(name)[0]))
+
+
+def cas_hash(name):
+    return os.path.splitext(name)[0]
 
 
 def _sha_file(path):
@@ -244,7 +255,7 @@ class Backups:
 
         errors = []
         if up.get('failed'):
-            errors.append(f'{up["failed"]} photo file(s) could not be copied to the backup')
+            errors.append(f'{up["failed"]} photo file(s) could not be copied to the backup or are damaged')
         for extra in self.extra:
             try:
                 self._copy_set(name, final, mname, extra)
@@ -279,8 +290,12 @@ class Backups:
         self._mirror_uploads(os.path.join(extra, 'uploads'))
 
     def _mirror_uploads(self, target):
-        """Photos are never changed by the app, so only missing (or cut-short) files are copied - each one whole, under a temporary name."""
-        total = copied = failed = 0
+        """Photos are never changed by the app, so only missing (or cut-short) files are copied - each one whole, under a temporary name.
+        A photo is named after its SHA-256 (uploads/cas/<sha>.jpg), so a copy can be PROVEN: every new copy is checked, and every run
+        re-checks the next VERIFY_PER_RUN existing copies (a rolling slice, so the whole folder is covered over time). A copy that went bad is
+        replaced from the original - but only when the original still matches its name; a damaged original is never copied over anything."""
+        total = copied = failed = repaired = verified = 0
+        existing = []
         for root, _, files in os.walk(self.uploads_dir):
             rel = os.path.relpath(root, self.uploads_dir)
             out = os.path.join(target, rel)
@@ -289,22 +304,63 @@ class Backups:
                 src, d = os.path.join(root, f), os.path.join(out, f)
                 try:
                     if os.path.exists(d) and os.path.getsize(d) == os.path.getsize(src):
+                        if is_cas_name(f):
+                            existing.append((os.path.join(rel, f), src, d))
                         continue
                     os.makedirs(out, exist_ok=True)
-                    part = d + '.part-' + uuid.uuid4().hex[:8]
-                    try:
-                        shutil.copy2(src, part)
-                        os.replace(part, d)
-                    except OSError:
-                        try:
-                            os.remove(part)
-                        except OSError:
-                            pass
-                        raise
+                    if is_cas_name(f) and _sha_file(src) != cas_hash(f):
+                        failed += 1                      # the original is damaged: do not make a copy that looks like a backup
+                        continue
+                    self._copy_whole(src, d)
+                    if is_cas_name(f) and _sha_file(d) != cas_hash(f):
+                        os.remove(d)
+                        failed += 1
+                        continue
                     copied += 1
                 except OSError:
                     failed += 1
-        return {'files': total, 'copied': copied, 'failed': failed}
+        existing.sort()
+        cursor_file = os.path.join(target, '.verify-cursor')
+        try:
+            with open(cursor_file, encoding='utf-8') as fh:
+                cursor = fh.read().strip()
+        except OSError:
+            cursor = ''
+        after = [e for e in existing if e[0] > cursor]
+        slice_ = (after + [e for e in existing if e[0] <= cursor])[:VERIFY_PER_RUN]
+        for rel, src, d in slice_:
+            try:
+                verified += 1
+                if _sha_file(d) == cas_hash(os.path.basename(d)):
+                    continue
+                if _sha_file(src) == cas_hash(os.path.basename(src)):
+                    self._copy_whole(src, d)
+                    repaired += 1
+                else:
+                    failed += 1                          # both copies are bad: nothing to repair from, say so
+            except OSError:
+                failed += 1
+        if slice_:
+            try:
+                os.makedirs(target, exist_ok=True)
+                with open(cursor_file, 'w', encoding='utf-8') as fh:
+                    fh.write(slice_[-1][0] if len(slice_) < len(existing) else '')
+            except OSError:
+                pass
+        return {'files': total, 'copied': copied, 'failed': failed, 'repaired': repaired, 'verified': verified}
+
+    @staticmethod
+    def _copy_whole(src, d):
+        part = d + '.part-' + uuid.uuid4().hex[:8]
+        try:
+            shutil.copy2(src, part)
+            os.replace(part, d)
+        except OSError:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            raise
 
     def _prune(self):
         autos = [b for b in self.list() if b['kind'] in AUTO_KINDS]

@@ -174,6 +174,52 @@ class CreateTest(BackupBase):
         self.b.last_time -= 3 * 86400                   # the last good backup is three days old and the data changed since
         self.assertTrue(self.b.status()['stale'])
 
+    def _cas(self, root, data):
+        sha = hashlib.sha256(data).hexdigest()
+        folder = os.path.join(root, 'cas')
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, sha + '.jpg')
+        with open(path, 'wb') as f:
+            f.write(data)
+        return sha, path
+
+    def test_m_a_backup_copy_that_went_bad_without_changing_size_is_found_and_repaired(self):
+        """F13 review: size alone does not prove a copy. Photos are named after their SHA-256, so every backup re-checks a slice of the
+        existing copies and re-copies a bad one from the (verified) original."""
+        sha, src = self._cas(self.uploads, b'\xff\xd8' + b'photo-bytes-' * 400)
+        self.b.create('manual')
+        copy = os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg')
+        with open(copy, 'r+b') as f:                        # bit rot: same length, different content
+            f.seek(100)
+            f.write(b'ROT')
+        self.assertEqual(os.path.getsize(copy), os.path.getsize(src))
+        self.b.create('manual')
+        with open(copy, 'rb') as f:
+            self.assertEqual(hashlib.sha256(f.read()).hexdigest(), sha, 'repaired from the original')
+        m = self.manifest(self.b.list()[0]['name'])
+        self.assertEqual((m['uploads']['repaired'], m['uploads']['failed']), (1, 0))
+
+    def test_n_a_damaged_original_is_never_copied_over_a_copy_and_the_problem_is_reported(self):
+        sha, src = self._cas(self.uploads, b'\xff\xd8' + b'original-' * 500)
+        self.b.create('manual')
+        copy = os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg')
+        for path in (src, copy):                               # both rot (same length): nothing to repair from
+            with open(path, 'r+b') as f:
+                f.seek(50)
+                f.write(b'BAD')
+        with open(copy, 'rb') as f:
+            before = f.read()
+        self.b.create('manual')
+        with open(copy, 'rb') as f:
+            self.assertEqual(f.read(), before, 'a damaged original is not copied over anything')
+        self.assertIn('photo', self.b.last_error.lower(), 'and the problem is reported')
+        sha2, src2 = self._cas(self.uploads, b'\xff\xd8' + b'fresh-' * 500)       # a NEW damaged original is not copied at all
+        with open(src2, 'r+b') as f:
+            f.seek(10)
+            f.write(b'BAD')
+        self.b.create('manual')
+        self.assertFalse(os.path.exists(os.path.join(self.bk, 'uploads', 'cas', sha2 + '.jpg')))
+
 
 class WatermarkTest(BackupBase):
     def test_g_a_changed_account_alone_makes_the_next_automatic_backup_due(self):
@@ -310,6 +356,85 @@ class RestoreToolTest(BackupBase):
         code, out = self.run_tool(clean, 'restore-set', self.bk, 'to_20000101_000000_manual.db')
         self.assertEqual(code, 1)
         self.assertIn('Nothing was changed', out)
+        self.open()
+
+    def test_o_restore_set_does_not_bring_back_a_damaged_photo(self):
+        os.makedirs(os.path.join(self.uploads, 'cas'), exist_ok=True)
+        good = b'\xff\xd8' + b'good-' * 300
+        bad = b'\xff\xd8' + b'bad!-' * 300
+        for data in (good, bad):
+            sha = hashlib.sha256(data).hexdigest()
+            with open(os.path.join(self.uploads, 'cas', sha + '.jpg'), 'wb') as f:
+                f.write(data)
+        n = self.b.create('manual')
+        badsha = hashlib.sha256(bad).hexdigest()
+        with open(os.path.join(self.bk, 'uploads', 'cas', badsha + '.jpg'), 'r+b') as f:
+            f.seek(30)
+            f.write(b'XYZ')                                  # the copy in the backup folder is damaged, same length
+        self.sy.close()
+        clean = os.path.join(self.d, 'clean3')
+        os.makedirs(clean)
+        code, out = self.run_tool(clean, 'restore-set', self.bk, n)
+        self.assertEqual(code, 0, out)
+        self.assertIn('1 damaged photo', out)
+        names = os.listdir(os.path.join(clean, 'data', 'uploads', 'cas'))
+        self.assertEqual(names, [hashlib.sha256(good).hexdigest() + '.jpg'], 'only the good photo came back')
+        self.open()
+
+    def _run_in_process(self, cfg_dir, failing, *args):
+        """cmd_restore_set in this process with a file operation that fails: (return code, output)."""
+        import io
+        import contextlib
+        import nodectl
+        cfg = os.path.join(cfg_dir, 'config.json')
+        with open(cfg, 'w') as f:
+            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk')}, f)
+        os.environ['TO_CONFIG'] = cfg
+        real_copy, real_replace = shutil.copy2, os.replace
+        calls = {'copy': 0, 'replace': 0}
+
+        def copy2(a, b, **kw):
+            calls['copy'] += 1
+            if failing == 'copy' and calls['copy'] == 2:
+                raise OSError(28, 'No space left on device')
+            return real_copy(a, b, **kw)
+
+        def replace(a, b):
+            calls['replace'] += 1
+            if failing == 'place' and '.restoring' in str(a) and str(b).endswith('journal.db'):
+                raise OSError(5, 'disk error while placing')
+            return real_replace(a, b)
+        shutil.copy2, os.replace = copy2, replace
+        out = io.StringIO()
+        try:
+            with contextlib.redirect_stdout(out):
+                code = nodectl.cmd_restore_set(*args)
+        finally:
+            shutil.copy2, os.replace = real_copy, real_replace
+            os.environ.pop('TO_CONFIG', None)
+        return code, out.getvalue()
+
+    def test_p_a_failure_while_restoring_leaves_the_current_data_exactly_as_it_was(self):
+        n = self.b.create('manual')
+        self.sy.close()
+        for failing in ('copy', 'place'):
+            clean = os.path.join(self.d, 'rb-' + failing)
+            data = os.path.join(clean, 'data')
+            os.makedirs(os.path.join(data, 'node'))
+            for name in ('trips.db', 'auth.db', 'journal.db'):
+                with open(os.path.join(data, name), 'w') as f:
+                    f.write('current ' + name)
+            with open(os.path.join(data, 'node', 'identity.json'), 'w') as f:
+                f.write('{"id": "keep me"}')
+            code, out = self._run_in_process(clean, failing, self.bk, n)
+            self.assertEqual(code, 1, (failing, out))
+            self.assertIn('Nothing was changed', out)
+            self.assertEqual(sorted(os.listdir(data)), ['auth.db', 'journal.db', 'node', 'trips.db'], (failing, 'no half-restored files, no aside folder left'))
+            for name in ('trips.db', 'auth.db', 'journal.db'):
+                with open(os.path.join(data, name)) as f:
+                    self.assertEqual(f.read(), 'current ' + name, (failing, name))
+            with open(os.path.join(data, 'node', 'identity.json')) as f:
+                self.assertEqual(f.read(), '{"id": "keep me"}')
         self.open()
 
 

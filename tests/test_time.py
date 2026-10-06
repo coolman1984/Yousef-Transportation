@@ -142,6 +142,22 @@ class PhoneAndLinkTest(unittest.TestCase):
         colour, reasons = domain.trust({**base, 'startAt': '2026-10-29T10:00:00', 'endAt': '2026-10-29T15:00:00'})
         self.assertNotIn('Y_TIME_UNCLEAR', reasons)
 
+    def test_k_the_repeated_hour_keeps_its_offset_so_a_real_hour_is_not_lost(self):
+        """Cairo clocks go back at 24:00 on Thu 29 Oct 2026: 23:30 happens twice. A phone event inside it must stay exact."""
+        first, second = '2026-10-29T20:30:00Z', '2026-10-29T21:30:00Z'                  # one real hour apart, both 23:30 on the wall
+        a, b = G.local_pair(first, first)[0], G.local_pair(second, second)[0]
+        self.assertEqual((a, b), ('2026-10-29T23:30:00+03:00', '2026-10-29T23:30:00+02:00'))
+        self.assertEqual(domain.duration(a, b), 1 * H, 'before: both became naive 23:30 and the hour was lost')
+        self.assertEqual(domain.duration('2026-10-29T22:00:00', b), 2.5 * H, 'a naive start and a start in the repeated hour')
+        self.assertEqual(domain.parse_dt(b), datetime(2026, 10, 29, 23, 30), 'screens and reports still see Cairo wall time')
+        self.assertFalse(domain.time_unclear(b), 'a time that carries its offset is not unclear any more')
+        self.assertEqual(domain.drift_minutes(a, '2026-10-29T20:41:00Z'), 11.0)
+        self.assertEqual(domain.drift_minutes(b, '2026-10-29T21:41:00Z'), 11.0, 'drift is real minutes, also in the repeated hour')
+        # ordinary times stay plain wall-clock text; the skipped spring hour never occurs for an exact instant
+        self.assertEqual(G.local_pair('2026-10-01T05:00:00Z', '2026-10-01T05:00:00Z')[0], '2026-10-01T08:00:00')
+        self.assertEqual(G.local_pair('2026-04-23T22:30:00Z', '2026-04-23T22:30:00Z')[0], '2026-04-24T01:30:00')
+        self.assertEqual(domain.duration(*[G.local_pair(x, x)[0] for x in ('2026-04-23T21:30:00Z', '2026-04-23T22:30:00Z')]), 1 * H, 'spring: 23:30 -> 01:30 is one real hour')
+
 
 if __name__ == '__main__':
     unittest.main()

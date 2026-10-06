@@ -199,14 +199,13 @@ def card_for(state, trip):
 
 
 def local_pair(phone_at, recv_at):
-    """(phone time, receive time) as naive Cairo business-time strings. The phone may be set to any zone (even a wrong one): both times are
-    exact moments, so the difference is the real drift and the shown times are the same on every PC. A phone time without a zone is Cairo time.
-    The original text with its offset stays in the stored event (`payload`)."""
-    p = domain.parse_dt(phone_at)
-    if p is None:
+    """(phone time, receive time) as Cairo business-time strings. The phone may be set to any zone (even a wrong one): both times are exact
+    moments, so the difference is the real drift and the shown times are the same on every PC. A phone time without a zone is Cairo time.
+    Only a time in the hour the clocks go back keeps its offset (domain.business_text). The phone's original text stays in the stored event."""
+    p = domain.business_text(phone_at)
+    if not p:
         return '', ''
-    r = domain.parse_dt(recv_at)
-    return p.isoformat(timespec='seconds'), r.isoformat(timespec='seconds') if r else ''
+    return p, domain.business_text(recv_at)
 
 
 def apply_event(trip, ev, bound_device=''):

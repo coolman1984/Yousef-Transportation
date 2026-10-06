@@ -77,6 +77,22 @@ async function driver(request, env, url, parts) {
   }
   if (card.cancelled) throw new Fail(410, 'This trip was cancelled', { cancelled: true });
 
+  if (kind === 'receipts' && m === 'POST') {
+    const { data } = await readJson(request, 8192);
+    const ids = [...new Set((Array.isArray(data && data.uuids) ? data.uuids : []).map(String).filter((u) => UUID_RE.test(u)))].slice(0, 100);
+    if (!ids.length) return reply(200, { office: [], mailbox: [] });
+    await ensureReceipts(env);
+    const q = ids.map(() => '?').join(',');
+    const [rc, ev, ph] = await Promise.all([
+      env.DB.prepare(`SELECT uuid FROM receipts WHERE uuid IN (${q})`).bind(...ids).all(),
+      env.DB.prepare(`SELECT uuid FROM events WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...ids).all(),
+      env.DB.prepare(`SELECT uuid FROM photos WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...ids).all(),
+    ]);
+    const office = new Set((rc.results || []).map((r) => r.uuid));
+    const mailbox = [...(ev.results || []), ...(ph.results || [])].map((r) => r.uuid).filter((u) => !office.has(u));
+    return reply(200, { office: [...office], mailbox });
+  }
+
   if (kind === 'bind' && m === 'POST') {
     const { data } = await readJson(request, 1024);
     const dev = String(data.deviceId || '');
@@ -150,6 +166,18 @@ async function ensureRevoked(env) {
   revokedReady.add(env.DB);
 }
 
+// What the office has acknowledged. The phone asks for these receipts and only then forgets its own copy: "received by the mailbox" is not "stored by the office".
+// A receipt is just the id of the item and the time; items the mailbox dropped without an acknowledgement (retention) have none, so the phone sends them again.
+const RECEIPT_DAYS = 60;
+const receiptsReady = new WeakSet();
+async function ensureReceipts(env) {
+  if (receiptsReady.has(env.DB)) return;
+  await env.DB.prepare('CREATE TABLE IF NOT EXISTS receipts (uuid TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
+  receiptsReady.add(env.DB);
+}
+const marks = (n, per) => Array.from({ length: n }, () => '(' + Array(per).fill('?').join(',') + ')').join(',');
+function chunks(list, n) { const out = []; for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n)); return out; }
+
 async function office(request, env, url, parts) {
   const bodyBytes = request.method === 'GET' ? new Uint8Array(0) : await readBody(request, MAX_CARDS_BODY);
   await officeAuth(request, env, url, bodyBytes);
@@ -193,8 +221,11 @@ async function office(request, env, url, parts) {
   }
   if (what === 'ack' && m === 'POST') {
     const d = json(), stmts = [];
-    for (const u of (d.events || []).slice(0, 500)) if (UUID_RE.test(u)) stmts.push(env.DB.prepare('DELETE FROM events WHERE uuid = ?').bind(u));
-    for (const u of (d.photos || []).slice(0, 500)) if (UUID_RE.test(u)) stmts.push(env.DB.prepare('DELETE FROM photos WHERE uuid = ?').bind(u));
+    await ensureReceipts(env);
+    const ev = (d.events || []).slice(0, 500).filter((u) => UUID_RE.test(u)), ph = (d.photos || []).slice(0, 500).filter((u) => UUID_RE.test(u)), t = now();
+    for (const c of chunks([...ev, ...ph], 40)) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO receipts(uuid, at) VALUES ${marks(c.length, 2)}`).bind(...c.flatMap((u) => [u, t])));
+    for (const c of chunks(ev, 90)) stmts.push(env.DB.prepare(`DELETE FROM events WHERE uuid IN (${c.map(() => '?').join(',')})`).bind(...c));
+    for (const c of chunks(ph, 90)) stmts.push(env.DB.prepare(`DELETE FROM photos WHERE uuid IN (${c.map(() => '?').join(',')})`).bind(...c));
     if (stmts.length) await env.DB.batch(stmts);
     return reply(200, { ok: true });
   }
@@ -251,8 +282,10 @@ export default {
   async scheduled(_event, env) {
     const days = Number(env.RETENTION_DAYS || 30), cut = now() - days * 86400;
     await ensureRevoked(env);
+    await ensureReceipts(env);
     await env.DB.batch([
       env.DB.prepare('DELETE FROM revoked WHERE at < ?').bind(now() - REVOKED_DAYS * 86400),
+      env.DB.prepare('DELETE FROM receipts WHERE at < ?').bind(now() - RECEIPT_DAYS * 86400),
       env.DB.prepare('DELETE FROM events WHERE recv_at < ?').bind(cut),
       env.DB.prepare('DELETE FROM photos WHERE recv_at < ?').bind(cut),
       env.DB.prepare('DELETE FROM cards WHERE expires_at IS NOT NULL AND expires_at < ?').bind(now() - 7 * 86400),

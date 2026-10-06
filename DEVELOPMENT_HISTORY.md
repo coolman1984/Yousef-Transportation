@@ -15,6 +15,19 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 7 - receipts and photo durability (F09) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): driver-lane precondition "phone/mailbox/office receipts distinguish durability, photos survive agreed outages" (next-release lane, not a first-pilot dependency).** Branch ccr-a760379a-lzybk5 from 42d0e7b.
+**Checks:** `gateway.test.js` 21 (+4), `test_e2e_driver` 8 (+1, and test_a now proves the three ticks and that the photo blob stays until the office receipt), `test_gateway_client` +2; Linux, node 22, Chromium 1194. **Not run:** a real Cloudflare account, a phone with real storage limits.
+**Reproduced from the code (F09):** the phone deleted its photo and printed "Received by the office" as soon as the *mailbox* answered ok; the mailbox deletes unacknowledged items after 30 days (`scheduled`) - with the office off for a month the only copy of an odometer photo was silently gone and the phone had already said it was safe.
+**Design:** `receipts(uuid, at)` in the gateway, written by `/office/ack` (one multi-row INSERT per 40 ids, DELETEs per 90 ids - far fewer statements than one per item), kept 60 days, created lazily for mailboxes deployed with the old schema.
+`POST /api/receipts/<token>` {uuids<=100} -> {office, mailbox}; an id in neither list is *unknown* (never stored, or dropped by retention). The phone (`outbox.js`) keeps photo blobs until `officeAt`; unknown items are marked unsent and go out again with the same uuid (the gateway and the office both de-duplicate by uuid, the office also checks its own tables); items are tidied 7 days after the office receipt and after 120 days regardless.
+UI: ✓ saved on phone, ✓✓ in the mailbox, ✓✓✓ stored by the office; driver guide and strings in both languages. Office: `oldest_waiting_seconds()`, `late` after 3 days, a warning card in Settings > Mailbox. Service worker cache name bumped so phones fetch the new page (F14 still open: a page that is open keeps running the old script until reloaded).
+**Mistakes:** my first bulk-ack test hit the per-link rate limit (60/10 min) - the Worker was right, the test inserted the rows directly instead; `test_a` fetched a photo after acknowledging it (acknowledging deletes it) - order fixed.
+**Next:** the Windows/field gates (L1 candidate, L3 clean install, L4 drill) need real hardware; software side left: F10 (D1 statement budget of the other routes), F14 (safe page update), F15 (installer/CI hardening), F17-F20 (admin separation, validation, docs, developer support).
+
+---
+
 ## Commercial readiness slice 6 - import error contract (F16) (2026-10-06)
 
 **Gate (LAUNCH_SCOPE.md): core import path ("native Excel/CSV import with preview"); protected/Office formats are an allowed exclusion, so this slice only makes their refusal predictable.** Branch ccr-a760379a-lzybk5 from 20c0f1e.

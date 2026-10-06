@@ -211,6 +211,74 @@ test('a mailbox set up before revocation existed keeps working (the table is mad
   assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 0);
 });
 
+const receipts = async (env, uuids, token = TOKEN) => (await call(env, 'POST', '/api/receipts/' + token, { body: JSON.stringify({ uuids }), headers: { 'Content-Type': 'application/json' } })).json();
+
+test('the phone can tell "in the mailbox" from "the office has it" from "unknown"', async () => {
+  const env = newEnv();
+  await putCard(env);
+  const e1 = ev(), e2 = ev(), pid = randomUUID(), never = randomUUID();
+  await postEvent(env, e1);
+  await postEvent(env, e2);
+  assert.equal((await putPhoto(env, pid, jpeg())).status, 200);
+  let r = await receipts(env, [e1.uuid, e2.uuid, pid, never]);
+  assert.deepEqual([r.office.sort(), r.mailbox.sort()], [[], [e1.uuid, e2.uuid, pid].sort()], 'received by the mailbox is not yet received by the office');
+  assert.equal((await office(env, 'POST', '/office/ack', { events: [e1.uuid], photos: [pid] })).status, 200);
+  r = await receipts(env, [e1.uuid, e2.uuid, pid, never]);
+  assert.deepEqual([r.office.sort(), r.mailbox], [[e1.uuid, pid].sort(), [e2.uuid]], 'e1 and the photo are stored by the office; e2 still waits; the unknown id is in neither list');
+  assert.equal((await office(env, 'POST', '/office/ack', { events: [e1.uuid] })).status, 200, 'acknowledging again is harmless');
+  assert.deepEqual((await receipts(env, [e1.uuid])).office, [e1.uuid]);
+});
+
+test('an item the mailbox dropped without an acknowledgement is unknown, so the phone sends it again - and sending it again is safe', async () => {
+  const env = newEnv();
+  await putCard(env);
+  const e1 = ev();
+  await postEvent(env, e1);
+  await env.DB.prepare('UPDATE events SET recv_at = recv_at - ?').bind(40 * 86400).run();
+  await worker.scheduled({}, env);                                   // retention: 30 days
+  let r = await receipts(env, [e1.uuid]);
+  assert.deepEqual([r.office, r.mailbox], [[], []], 'purged unacknowledged: neither');
+  assert.equal((await postEvent(env, e1)).status, 200, 'the phone sends the same event again');
+  r = await receipts(env, [e1.uuid]);
+  assert.deepEqual(r.mailbox, [e1.uuid]);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 1, 'one copy');
+});
+
+test('receipts: only the items of this link are shown as waiting in the mailbox; bad ids and bad requests are refused or ignored; old receipts are cleaned', async () => {
+  const env = newEnv();
+  await putCard(env);
+  const other = 'Tk_zzzzzzzzzzzzzzzzzzzzzz', oh = await sha256Hex(other);
+  await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: oh, tripId: 'tr2', body: {}, expiresAt: Math.floor(Date.now() / 1000) + 86400 }] });
+  const mine = ev(), theirs = ev({ tripId: 'tr2' });
+  await postEvent(env, mine);
+  await postEvent(env, theirs, other);
+  const r = await receipts(env, [mine.uuid, theirs.uuid, 'not-a-uuid', 7]);
+  assert.deepEqual([r.office, r.mailbox], [[], [mine.uuid]], "another link's waiting item is not reported");
+  assert.equal((await call(env, 'POST', '/api/receipts/Tk_unknownunknownunknown1', { body: '{}' })).status, 404);
+  assert.equal((await call(env, 'POST', '/api/receipts/' + TOKEN, { body: 'not json' })).status, 400);
+  assert.deepEqual(await receipts(env, []), { office: [], mailbox: [] });
+  await office(env, 'POST', '/office/ack', { events: [mine.uuid] });
+  await env.DB.prepare('UPDATE receipts SET at = at - ?').bind(61 * 86400).run();
+  await worker.scheduled({}, env);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM receipts').first()).n, 0);
+});
+
+test('a large acknowledgement uses few statements, and a mailbox from before receipts existed keeps working', async () => {
+  const env = newEnv();
+  await env.DB.prepare('DROP TABLE receipts').run();
+  await putCard(env);
+  const evs = Array.from({ length: 120 }, () => ev()), th = await sha256Hex(TOKEN);
+  for (const e of evs) await env.DB.prepare('INSERT INTO events(uuid, token_hash, trip_id, type, body, device_id, phone_at, recv_at, second) VALUES(?,?,?,?,?,?,?,?,0)').bind(e.uuid, th, 'tr1', 'start', '{}', 'device-0001', '', Math.floor(Date.now() / 1000)).run();
+  let statements = 0;
+  const batch = env.DB.batch.bind(env.DB);
+  env.DB.batch = async (st) => { statements += st.length; return batch(st); };
+  assert.equal((await office(env, 'POST', '/office/ack', { events: evs.map((e) => e.uuid) })).status, 200);
+  assert.ok(statements <= 6, 'was ' + statements + ' (one DELETE per event before)');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM receipts').first()).n, 120);
+  assert.equal((await receipts(env, evs.slice(0, 100).map((e) => e.uuid))).office.length, 100);
+});
+
 test('the single-file bundle serves the driver page without any asset binding', async () => {
   const { execFileSync } = await import('node:child_process');
   const { pathToFileURL, fileURLToPath } = await import('node:url');

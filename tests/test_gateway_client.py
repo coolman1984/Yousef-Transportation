@@ -32,9 +32,9 @@ def node_ok():
 
 
 class GatewayProcess:
-    def __init__(self, secret=SECRET):
+    def __init__(self, secret=SECRET, db=None):
         self.port = free_port()
-        env = {**os.environ, 'PORT': str(self.port), 'OFFICE_SECRET': secret}
+        env = {**os.environ, 'PORT': str(self.port), 'OFFICE_SECRET': secret, **({'GATEWAY_DB': db} if db else {})}
         self.proc = subprocess.Popen(['node', '--no-warnings', os.path.join(ROOT, 'gateway', 'dev', 'server.js')], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         line = self.proc.stdout.readline()
         assert line.startswith('READY'), line
@@ -135,6 +135,13 @@ class UnitTest(unittest.TestCase):
             G.apply_event(t, bad, '')                                 # must not raise
         t = {'status': 'mystery'}
         self.assertFalse(G.apply_event(t, {**good, 'body': {'data': {'startKm': 1}}}, ''), 'an unknown status is left alone')
+
+    def test_i_the_age_of_the_oldest_waiting_driver_message_is_reported(self):
+        now = datetime(2026, 10, 10, 12, 0, tzinfo=timezone.utc).timestamp()
+        items = [{'recvAt': '2026-10-10T11:00:00Z'}, {'recvAt': '2026-10-05T12:00:00Z'}, {'recvAt': 'junk'}, {}]
+        self.assertEqual(G.oldest_waiting_seconds(items, now), 5 * 86400)
+        self.assertEqual(G.oldest_waiting_seconds([], now), 0)
+        self.assertEqual(G.oldest_waiting_seconds([{'recvAt': '2026-10-11T00:00:00Z'}], now), 0, 'never negative')
 
     def test_signature_matches_the_gateway_rule(self):
         h = G.sign_headers('k', 'GET', '/office/status', b'', t=1000, nonce='ab' * 8)
@@ -317,6 +324,16 @@ class IntegrationTest(unittest.TestCase):
         self.assertRegex(ev['payload']['recvAt'], r'Z$', 'the exact receive time')
         self.assertEqual(ev['phoneAt'], '2026-09-28T09:41:12', 'shown as Cairo time')
         self.assertEqual(self.trip(t['id'])['startAt'], '2026-09-28T09:41:12')
+
+    def test_h_a_message_that_cannot_be_applied_stays_in_the_mailbox_and_is_counted(self):
+        token = 'TkGhostAbcdefghijklmn'[:22]
+        G.Client(self.gw.url, SECRET).put_cards([{'tokenHash': G.token_hash(token), 'tripId': 'no-such-trip', 'body': {}, 'cancelled': False, 'expiresAt': int(time.time()) + 3600}])
+        self.event(token, 'start', startKm=1)
+        res = self.pull()
+        self.assertEqual(res['waiting'], 1)
+        self.assertGreaterEqual(res['oldestSeconds'], 0)
+        self.assertFalse(res['late'])
+        self.assertEqual(len(G.Client(self.gw.url, SECRET).inbox()['events']), 1, 'it is kept, not dropped')
 
     def test_e_permissions_and_errors(self):
         with self.assertRaises(ApiError) as e:

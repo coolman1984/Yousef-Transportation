@@ -609,6 +609,7 @@
     'gw.st.ok': 'Connected',
     'gw.st.wait': 'Waiting for the first contact',
     'gw.lastok': 'Last contact',
+    'gw.late': 'Some driver messages have been waiting in the mailbox for {d} days and could not be applied (for example a trip that no longer exists). The mailbox deletes them after 30 days. Ask the person who supports the program.',
     'gw.waiting': 'Items waiting',
     'gw.applied': 'Items received',
     'gw.off.body': 'The mailbox carries the driver links between the office and the drivers\' phones. Set it up once, then it works by itself.',

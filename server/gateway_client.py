@@ -163,6 +163,20 @@ def _epoch(iso):
     return int(d.timestamp()) if d else None
 
 
+LATE_AFTER_DAYS = 3        # driver messages that sit in the mailbox longer than this are reported to the office (the mailbox drops them after 30)
+
+
+def oldest_waiting_seconds(items, now=None):
+    """How long the oldest item still in the mailbox has been waiting (0 when none). `items`: inbox events/photos with their `recvAt` (UTC)."""
+    now = now or time.time()
+    ages = []
+    for it in items:
+        d = domain.instant(it.get('recvAt'))
+        if d:
+            ages.append(now - d.timestamp())
+    return max(0, int(max(ages))) if ages else 0
+
+
 def card_for(state, trip):
     """What the driver's page shows - nothing else leaves the office."""
     by = lambda ent: {r['id']: r for r in state.get(ent, [])}  # noqa: E731
@@ -248,7 +262,7 @@ class GatewaySync:
         self.pushed = {}            # token hash -> signature of the card the gateway has
         self.release = set()        # token hashes whose bound phone the office released
         self.removed = set()        # replaced link hashes the gateway has already been told to remove (the trips keep the list, so a restart repeats it harmlessly)
-        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'applied': 0}
+        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
         self._stop = False
         self._thread = None
 
@@ -347,6 +361,7 @@ class GatewaySync:
         events, photos = sorted(box.get('events', []), key=lambda e: e['id']), box.get('photos', [])
         self.stat['waiting'] = len(events) + len(photos)
         if not events and not photos:
+            self.stat['oldestSeconds'], self.stat['late'] = 0, False
             return
         ack_e, ack_p = [], []
         by_trip = {}
@@ -370,6 +385,9 @@ class GatewaySync:
             cl.ack(ack_e, ack_p)
             self.stat['applied'] += len(ack_e) + len(ack_p)
             self.stat['waiting'] = max(0, self.stat['waiting'] - len(ack_e) - len(ack_p))
+        left = [e for e in events if e['uuid'] not in ack_e] + [p for p in photos if p['uuid'] not in ack_p]
+        self.stat['oldestSeconds'] = oldest_waiting_seconds(left)
+        self.stat['late'] = self.stat['oldestSeconds'] > LATE_AFTER_DAYS * 86400
         if problem:                     # what was applied is acknowledged; the rest stays in the mailbox and the office sees why
             raise problem if isinstance(problem, GatewayError) else GatewayError('A driver message could not be applied and stays in the mailbox: ' + str(problem)[:120])
 

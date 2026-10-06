@@ -39,6 +39,10 @@ CREATE TABLE IF NOT EXISTS revoked (        -- links the office replaced: a remo
   token_hash TEXT PRIMARY KEY,
   at         INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS receipts (       -- what the office acknowledged: the phone keeps its copy until it sees the receipt
+  uuid TEXT PRIMARY KEY,
+  at   INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS rate (key TEXT NOT NULL, window INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (key, window));
 CREATE INDEX IF NOT EXISTS events_recv ON events (recv_at);

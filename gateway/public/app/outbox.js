@@ -1,9 +1,12 @@
-/* Driver page storage and sending: everything the driver does is written to IndexedDB first, then sent; it stays
-   until the gateway answered "ok". Retries with backoff, on going online, on coming back to the page, and on open. */
+/* Driver page storage and sending: everything the driver does is written to IndexedDB first, then sent. Three honest states:
+   saved on the phone -> in the mailbox (the gateway answered "ok": sentAt) -> stored by the office (its receipt arrived: officeAt).
+   A photo stays on the phone until the OFFICE receipt: if the mailbox drops it without the office having collected it, it is sent again.
+   Retries with backoff, on going online, on coming back to the page, and on open. */
 (function () {
   'use strict';
   var D = window.D;
   var dbp = null, timer = null, delay = 1000, busy = false, listeners = [];
+  var rtimer = null, rdelay = 10000, reconciling = false, KEEP_DONE_DAYS = 7, KEEP_ANY_DAYS = 120;
 
   function open() {
     if (dbp) return dbp;
@@ -107,7 +110,7 @@
             item.tries++;
             if (r.ok) {
               return r.json().then(function (j) {
-                item.sentAt = j.recvAt || new Date().toISOString(); delete item.blob; if (j.secondDevice) D.secondDevice = true;
+                item.sentAt = j.recvAt || new Date().toISOString(); item.officeAt = null; if (j.secondDevice) D.secondDevice = true;      // the photo stays until the office has it
                 D.outbox.online = true; delay = 1000;
                 return tx('outbox', 'readwrite', function (s) { return s.put(item); }).then(function () { emit(); return true; });
               });
@@ -123,13 +126,69 @@
         });
       });
       return chain;
-    }).then(function () { busy = false; emit(); }, function () {
+    }).then(function () { busy = false; emit(); reconcileSoon(true); }, function () {
       busy = false; D.outbox.online = false; emit();
       delay = Math.min(delay * 2, 300000);
       clearTimeout(timer); timer = setTimeout(flush, delay);
     });
   }
 
+  /* ---------- receipts: did the OFFICE store what the mailbox received? ---------- */
+  function allItems() {
+    return open().then(function (db) {
+      return new Promise(function (ok, bad) {
+        var r = db.transaction('outbox').objectStore('outbox').getAll();
+        r.onsuccess = function () { ok(r.result); }; r.onerror = function () { bad(r.error); };
+      });
+    });
+  }
+  function put(item) { return tx('outbox', 'readwrite', function (s) { return s.put(item); }); }
+  function housekeeping(all) {
+    var now = Date.now(), jobs = [];
+    all.forEach(function (i) {
+      var done = i.officeAt && now - new Date(i.officeAt).getTime() > KEEP_DONE_DAYS * 86400000;
+      var old = i.sentAt && now - new Date(i.sentAt).getTime() > KEEP_ANY_DAYS * 86400000;
+      if (done || old) jobs.push(tx('outbox', 'readwrite', function (s) { return s.delete(i.id); }));
+    });
+    return Promise.all(jobs);
+  }
+  function reconcile() {
+    if (reconciling || !D.token) return;
+    reconciling = true;
+    var token = D.token, changed = false, left = false;
+    allItems().then(function (all) {
+      return housekeeping(all).then(function () {
+        var waiting = all.filter(function (i) { return i.sentAt && !i.officeAt && !i.error && i.token === token; });
+        left = waiting.length > 0;
+        if (!waiting.length) return null;
+        var batch = waiting.slice(0, 100);
+        return fetch('/api/receipts/' + token, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ uuids: batch.map(function (i) { return i.uuid; }) }) }).then(function (r) {
+          if (r.status === 410) { D.gone = true; return r.json().catch(function () { return {}; }).then(function (j) { D.goneWhy = j.cancelled ? 'cancelled' : 'expired'; left = false; }); }
+          if (!r.ok) throw new Error('receipts ' + r.status);
+          return r.json().then(function (j) {
+            var office = {}, box = {};
+            (j.office || []).forEach(function (u) { office[u] = 1; });
+            (j.mailbox || []).forEach(function (u) { box[u] = 1; });
+            return Promise.all(batch.map(function (i) {
+              if (office[i.uuid]) { i.officeAt = new Date().toISOString(); delete i.blob; }          // the office has it: now the phone may forget its copy
+              else if (!box[i.uuid] && (i.kind !== 'photo' || i.blob)) { i.sentAt = null; i.tries = (i.tries || 0) + 1; }   // the mailbox no longer has it and the office never got it: send again
+              else return null;
+              changed = true;
+              return put(i);
+            }));
+          });
+        });
+      });
+    }).then(function () { rdelay = changed ? 10000 : Math.min(rdelay * 2, 300000); reconciling = false; if (changed) emit(); if (changed) D.outbox.kick(true); if (left) reconcileSoon(false); },
+      function () { reconciling = false; rdelay = Math.min(rdelay * 2, 300000); reconcileSoon(false); });
+  }
+  function reconcileSoon(fast) {
+    clearTimeout(rtimer);
+    if (fast) rdelay = 10000;
+    rtimer = setTimeout(reconcile, fast ? 1500 : rdelay);
+  }
+  D.outbox.reconcile = function () { reconcileSoon(true); };
+
   window.addEventListener('online', function () { delay = 1000; D.outbox.kick(true); });
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { delay = 1000; D.outbox.kick(true); } });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { delay = 1000; D.outbox.kick(true); reconcileSoon(true); } });
 })();

@@ -5,6 +5,7 @@ import uuid
 from datetime import datetime, timedelta
 
 import domain
+import pricing
 from store import BadRequest
 
 CREATE_FIELDS = ('date', 'categoryId', 'vehicleId', 'driverId', 'requesterId', 'departmentId', 'destination', 'stops', 'purpose', 'notes', 'seq',
@@ -195,7 +196,7 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
     return out
 
 
-def normalize_ops(store, ops):
+def normalize_ops(store, ops, trusted=False):
     """Clean names, plates and mobiles on the server (so every client and the Excel import agree) and refuse duplicates
     of things that must be unique: a plate, a driver, a place, a department. People may share a name."""
     if not isinstance(ops, list):
@@ -222,6 +223,8 @@ def normalize_ops(store, ops):
             for f in ('destination', 'purpose', 'routeText'):
                 if row.get(f) is not None:
                     row[f] = domain.norm_text(row[f])
+        if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save
+            row['rateHistory'] = pricing.stamp(_row(store, 'tripCategories', op.get('id')), row, datetime.now().date().isoformat())
         if e in unique and not op.get('resolve'):
             table, col, js, label = unique[e]
             if row.get(js):

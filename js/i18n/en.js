@@ -194,6 +194,7 @@
     'help.exportSheet': 'Which sheet of the Excel workbook this category goes to.',
     'help.hasSequence': 'Fills the "Column1" number of the workbook.',
     'help.mobile': '01xxxxxxxxx - the driver link is sent to this number.',
+    'help.rateHistory': 'A new rate counts for trips from the day you save it. Earlier trips keep the rate they had, so last month\'s reports do not change.',
     'help.openLimit': 'After this many hours an unfinished trip turns red.',
     'help.passengers': 'Separate names with a comma or " - ". Names that are not in the list are kept as typed.',
     'help.plate': 'Letters and numbers, in any spacing - the system writes it like the real plate.',

@@ -33,6 +33,7 @@ ENTITIES = {
         ('name', 'name', T, 'Name'), ('nameAr', 'name_ar', T, 'Name (Arabic)'), ('exportSheet', 'export_sheet', T, 'Export Sheet'),
         ('hasSequence', 'has_sequence', B, 'Daily Sequence'), ('openLimitHours', 'open_limit_hours', I, 'Open Limit (h)'),
         ('ratePerKm', 'rate_per_km', R, 'Rate per km'), ('ratePerOtHour', 'rate_per_ot_hour', R, 'Rate per OT hour'),
+        ('rateHistory', 'rate_history', J, 'Rate History'),
         ('vendor', 'vendor', T, 'Vendor'), ('order', 'sort_order', I, 'Order')]),
     'vehicles': ('vehicles', 'Vehicles', [
         ('plate', 'plate', T, 'Car Plate'), ('plateKey', 'plate_key', T, 'Plate Key'), ('type', 'type', T, 'Type'),

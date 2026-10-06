@@ -4,6 +4,25 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 3 - rates by trip date (F07), web address check (F04) (2026-10-06)
+
+**F07 (reproduced in the plan, rebuilt as tests):** reports read the category's CURRENT rate, so raising the rate re-priced every old month. New `server/pricing.py`:
+`tripCategories.rateHistory` holds the superseded rates as `{until, ratePerKm, ratePerOtHour}`; a trip dated before `until` uses that entry, later trips the next one, finally the current
+rate. The server writes the history when a category is saved (`tripsvc.normalize_ops`): the client's copy is ignored, a change on the same day as the last one is a correction (no new entry),
+a rate that was never set is not history (the first value applies to every trip, as before - nothing invented), and `force` (full restore / sample data, needs `data.import`) keeps a history as given.
+Reconciliation money is now added trip by trip with each trip's own rate (before: whole month x one rate). The history is hidden from users without a money permission like the rates.
+The category screen explains the rule in one sentence (EN/AR). **Deliberate simplification:** the effective date is always "the day you save"; retro-corrections and a date picker are not built.
+**F04:** reproduced - through `Host: evil.example.com` the first administrator was created on a fresh server (`/api/auth/setup` only checks that the peer IP is local; a browser that was
+tricked into talking to 127.0.0.1 under an attacker's name is local). Now every request needs a Host that is an IP address, `localhost`, a one-word computer name, `*.local`, the PC's own full
+name or an `allowed_hosts` entry. Also: idle timeout 120 -> 60 s (`idle_timeout_seconds`), `max_connections` (128) with a 503, and a damaged `Content-Length` no longer drops the connection without an answer
+(`send` called `int()` on it - found by the new test).
+**Mistakes:** (1) my first English help text had an apostrophe inside a single-quoted JS string - the whole language file broke and every label showed as a raw key; `test_design` (regex based) did not notice,
+the real-Chrome test did. Added `JsSyntaxTest` (node --check on every page script). (2) first `stamp` call site sat inside an `elif` chain and would have been a syntax error - caught by reading the diff before running.
+**Not done / owner decision:** the default `host` stays `0.0.0.0` (plain HTTP on the office network) and the installer firewall rule stays `profile=any`, because staff on other PCs may open the program through the
+address Settings shows, and a stricter rule could silently break sync between PCs on different subnets; I cannot test either on Windows here. The plan's choice (loopback only + HTTPS for LAN) needs the owner's yes.
+
+---
+
 ## Commercial readiness slice 2 - driver events in any order, replaced links really die (2026-10-06)
 
 **Plan:** findings F08 and F05 (tasks T10/T11 first slices). Reproduced both before touching code.

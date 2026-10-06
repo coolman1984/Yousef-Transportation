@@ -6,6 +6,7 @@ kilometres the vendor bills); cost allocation to departments; anomalies. The sam
 the presentation mode, the clean Excel export and the Word report, so all of them show the same numbers.
 """
 import domain
+import pricing
 import tripsvc
 
 CANCELLED = 'cancelled'
@@ -31,12 +32,13 @@ def enrich(state, ym='', ot_threshold=12):
         km = i.get('km')
         dur = domain.duration(t.get('startAt'), t.get('endAt'))
         cat = n['cat'].get(t.get('categoryId')) or {}
+        rate_km, rate_ot = pricing.rates_on(cat, t.get('date'))          # the rates valid on the day of the trip, not today's
         out.append({**t, 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''), 'driverName': (n['drv'].get(t.get('driverId')) or {}).get('name', ''),
                     'requesterName': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'departmentName': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
                     'categoryName': cat.get('name', ''), 'vendor': cat.get('vendor') or (n['veh'].get(t.get('vehicleId')) or {}).get('vendor') or '',
                     'kmDone': km if km is not None and km > 0 else 0, 'kmKnown': km is not None, 'hours': domain.hours(dur) if dur else None,
                     'otHours': i.get('otHours') or 0.0, 'trust': i.get('trust', 'grey'), 'reasons': i.get('reasons', []),
-                    'rateKm': cat.get('ratePerKm') or 0, 'rateOt': cat.get('ratePerOtHour') or 0})
+                    'rateKm': rate_km, 'rateOt': rate_ot})
     return out
 
 
@@ -99,8 +101,10 @@ def reconciliation(state, ym=''):
     g = {}
     for r in rows:
         key = (r['categoryName'], r['vendor'])
-        a = g.setdefault(key, {'category': r['categoryName'], 'vendor': r['vendor'], 'trips': 0, 'actualKm': 0, 'billedKm': 0, 'rate': r['rateKm'], 'lines': []})
+        a = g.setdefault(key, {'category': r['categoryName'], 'vendor': r['vendor'], 'trips': 0, 'actualKm': 0, 'billedKm': 0, 'rate': r['rateKm'], 'diffMoney': 0.0, 'lines': []})
         a['trips'] += 1
+        a['rate'] = r['rateKm']             # the latest rate of the month; the money below is added up trip by trip with each trip's own rate
+        a['diffMoney'] += (r['billableKm'] - r['kmDone']) * r['rateKm']
         a['actualKm'] += r['kmDone']
         a['billedKm'] += r['billableKm']
         if r['billableKm'] != r['kmDone']:
@@ -108,7 +112,7 @@ def reconciliation(state, ym=''):
     out = []
     for a in g.values():
         a['diffKm'] = a['billedKm'] - a['actualKm']
-        a['diffMoney'] = round(a['diffKm'] * (a['rate'] or 0), 2)
+        a['diffMoney'] = round(a['diffMoney'], 2)
         a['lines'].sort(key=lambda x: -abs(x['diff']))
         out.append(a)
     return sorted(out, key=lambda a: -abs(a['diffKm']))

@@ -239,6 +239,7 @@
     'why.R_NO_PAPER': 'الورقة الموقّعة ما اتصورتش',
     'why.R_SECOND_DEVICE': 'اتبعت من موبايل تاني',
     'why.R_OPEN_TOO_LONG': 'مفتوح من وقت طويل',
+    'why.Y_TIME_UNCLEAR': 'الوقت وقع في الساعة اللي الساعة بتتغير فيها - راجعه',
     'why.Y_FALLBACK_PHOTO': 'صورة من المعرض',
     'why.Y_NO_START_PHOTO': 'مفيش صورة عداد البداية',
     'why.Y_KM_UNUSUAL': 'كيلومترات غير معتادة للمسار',

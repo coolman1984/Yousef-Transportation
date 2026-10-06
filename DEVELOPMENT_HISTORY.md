@@ -15,6 +15,20 @@ Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
 ---
 
+## Commercial readiness slice 5 - one time contract (F11) (2026-10-06)
+
+**Gate (LAUNCH_SCOPE.md): L2 core journey / money - "time/duration" precondition of any monetary report.** Branch ccr-a760379a-lzybk5 from 4f57d6d. **Checks:** `test_time` 10 (+1 in `test_gateway_client`), neighbours
+`test_domain`, `test_trips_api`, `test_pricing`, `test_design`; Linux, Python 3.13 (a real tz database present). **Not run:** Windows (where there is no tz database: the installed program uses the built-in rules - proven equal to the database here, not run there).
+**Reproduced:** `duration('2026-10-01T08:00:00+03:00', '2026-10-01T08:00:00Z')` was 0 h (`parse_dt` cut the offset), `_epoch` read a naive expiry as UTC while it was written in the office PC's local time (links expired 3 h late, and differently on a PC with another zone setting).
+**Contract (new `server/tz.py`, `domain.py`):** a time with a zone = exact instant; without = Cairo wall time. `duration` = elapsed time between instants (Egypt's two clock-change nights are right: 3 h not 4 on 23->24 April, 6 h not 5 on 29->30 October 2026);
+`parse_dt` = naive Cairo time (what screens, reports, Excel and calendar grouping use); `business_now()` replaces `datetime.now()` where a business date/time is meant (new trip date, amendment time, rate-history date, open-too-long check);
+`link_expiry()` returns an aware UTC time; `gateway_client.local_pair` converts the phone's time and the receive time to Cairo (a phone set to UTC/any zone is corrected; drift stays the true difference); the stored event keeps the phone's original text with offset and the exact UTC receive time (`payload.phoneAt/recvAt`).
+`Y_TIME_UNCLEAR` (yellow) marks a trip whose start/end falls in the repeated or skipped hour. `EgyptRules` (tzinfo) is used when `zoneinfo` has no data; the test sweeps every half hour 2023-2030 in both directions (instant->wall, wall->offset incl. both folds) against the database.
+**Decisions:** business zone fixed to Africa/Cairo (one-company pilot); ambiguous wall times take the first occurrence (fold=0) and are flagged, not guessed; old naive `linkExpiry` values are read as Cairo (the office PCs were in Cairo). **Lesson:** a phone's clock is evidence, not truth - keep its text, show business time.
+**Next:** F16, then F09 (the driver-phone lane: receipts and photo durability).
+
+---
+
 ## Commercial readiness slice 4 - backups (F13) (2026-10-06)
 
 **Gate (LAUNCH_SCOPE.md): L4 Recovery** - branch ccr-a760379a-lzybk5 from 312544a (+ the owner's docs commits cda804a merged). **Checks:** `test_backup` 15 (engine, tool through a subprocess, real Chrome banner) and the earlier suites; Linux, Python 3.13. **Not done:** the field drill on a real second Windows PC (L4 stays PENDING until it is run with the real installer); mixed-version restore. **Next step:** F11 (time/duration), then F09, F16.

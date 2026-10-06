@@ -303,6 +303,21 @@ class IntegrationTest(unittest.TestCase):
         self.assertTrue(row['startAt'] and row['endAt'])
         self.assertEqual(self.ac.get('/api/insights')[t['id']]['km'], 120)
 
+    def test_g_the_stored_event_keeps_the_phone_time_with_its_offset_and_the_exact_receive_time(self):
+        """F11: shown times are Cairo business time, but the original evidence is not thrown away."""
+        t = self.new_trip()
+        token = self.token_of(self.ac.post('/api/trips/link', {'id': t['id']})['url'])
+        self.pull()
+        e = {'uuid': str(uuid.uuid4()), 'v': 1, 'type': 'start', 'deviceId': 'device-AAAA-1', 'seq': 1, 'queued': False,
+             'phoneAt': '2026-09-28T06:41:12+00:00', 'data': {'startKm': 100}}      # a phone that is set to UTC
+        self.assertEqual(self.gw.driver('POST', f'/api/event/{token}', e)[0], 200)
+        self.pull()
+        ev = next(x for x in self.ac.get('/api/state')['tripEvents'] if x['tripId'] == t['id'])
+        self.assertEqual(ev['payload']['phoneAt'], '2026-09-28T06:41:12+00:00', 'the phone text, with its offset')
+        self.assertRegex(ev['payload']['recvAt'], r'Z$', 'the exact receive time')
+        self.assertEqual(ev['phoneAt'], '2026-09-28T09:41:12', 'shown as Cairo time')
+        self.assertEqual(self.trip(t['id'])['startAt'], '2026-09-28T09:41:12')
+
     def test_e_permissions_and_errors(self):
         with self.assertRaises(ApiError) as e:
             self.ac.post('/api/trips/link', {'id': 'nope'})

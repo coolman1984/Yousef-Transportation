@@ -239,6 +239,7 @@
     'why.R_NO_PAPER': 'Signed paper not photographed',
     'why.R_SECOND_DEVICE': 'Sent from a second phone',
     'why.R_OPEN_TOO_LONG': 'Open for too long',
+    'why.Y_TIME_UNCLEAR': 'The time is in the hour the clocks change - check it',
     'why.Y_FALLBACK_PHOTO': 'Photo taken from the gallery',
     'why.Y_NO_START_PHOTO': 'No start odometer photo',
     'why.Y_KM_UNUSUAL': 'Unusual km for this route',

@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import domain
 from store import Conflict
@@ -158,11 +158,9 @@ class Client:
 
 # --------------------------------------------------------------------------- cards and events
 def _epoch(iso):
-    try:
-        d = datetime.fromisoformat(str(iso))
-        return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
-    except (TypeError, ValueError):
-        return None
+    """Unix seconds of an expiry. A time with a zone is exact; one without (written by an older version) was Cairo office time."""
+    d = domain.instant(iso)
+    return int(d.timestamp()) if d else None
 
 
 def card_for(state, trip):
@@ -187,18 +185,14 @@ def card_for(state, trip):
 
 
 def local_pair(phone_at, recv_at):
-    """(phone time, receive time) as naive strings in the phone's own clock zone, so the difference is the real drift."""
-    try:
-        p = datetime.fromisoformat(str(phone_at))
-    except ValueError:
+    """(phone time, receive time) as naive Cairo business-time strings. The phone may be set to any zone (even a wrong one): both times are
+    exact moments, so the difference is the real drift and the shown times are the same on every PC. A phone time without a zone is Cairo time.
+    The original text with its offset stays in the stored event (`payload`)."""
+    p = domain.parse_dt(phone_at)
+    if p is None:
         return '', ''
-    try:
-        r = datetime.fromisoformat(str(recv_at).replace('Z', '+00:00'))
-    except ValueError:
-        return p.replace(tzinfo=None).isoformat(timespec='seconds'), ''
-    if p.tzinfo:
-        r = r.astimezone(p.tzinfo)
-    return p.replace(tzinfo=None).isoformat(timespec='seconds'), r.replace(tzinfo=None).isoformat(timespec='seconds')
+    r = domain.parse_dt(recv_at)
+    return p.isoformat(timespec='seconds'), r.isoformat(timespec='seconds') if r else ''
 
 
 def apply_event(trip, ev, bound_device=''):
@@ -313,7 +307,7 @@ class GatewaySync:
     def push_cards(self):
         st = self.store.state()
         cards, sigs = [], {}
-        cutoff = (datetime.now() - timedelta(days=45)).date().isoformat()
+        cutoff = (domain.business_now() - timedelta(days=45)).date().isoformat()
         for t in st.get('trips', []):
             h = t.get('linkHash')
             if not h or str(t.get('date', '')) < cutoff:
@@ -407,6 +401,7 @@ class GatewaySync:
                 p_at, r_at = local_pair(e.get('phoneAt'), e.get('recvAt'))
                 body = dict(e.get('body') or {})
                 body['second'] = bool(e.get('second'))
+                body['recvAt'] = e.get('recvAt') or ''      # the exact receive time (UTC) next to the phone's own text with its offset
                 ops.append({'e': 'tripEvents', 'id': 'ev-' + e['uuid'], 'op': 'put', 'row': {'tripId': tid, 'uuid': e['uuid'], 'type': e.get('type', ''), 'payload': body,
                                                                                                'phoneAt': p_at, 'recvAt': r_at, 'deviceId': e.get('deviceId', '')}})
                 changed |= apply_event(trip, e, e.get('boundDevice') or '')
@@ -448,7 +443,7 @@ class GatewaySync:
 
 
 def _now():
-    return datetime.now().isoformat(timespec='seconds')
+    return domain.business_now().isoformat(timespec='seconds')
 
 
 def new_nonce():

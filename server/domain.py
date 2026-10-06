@@ -7,6 +7,8 @@ import statistics
 import unicodedata
 from datetime import datetime, timedelta
 
+import tz
+
 _TATWEEL = 'ـ'
 _ZERO_WIDTH = dict.fromkeys(map(ord, '​‌‍‎‏‪‫‬⁦⁧⁨⁩﻿'))
 _AR_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
@@ -100,20 +102,60 @@ def next_counter(existing_nos, year, letter):
 
 
 # ---------------------------------------------------------------- time
-def parse_dt(s):
-    """ISO date or date-time -> datetime (naive), None when empty or invalid."""
+# One contract: a time WITH a zone is an exact instant; a time WITHOUT a zone (typed at the office, from Excel, from an old version) is
+# Cairo wall time. Durations are real elapsed time (so the nights the clocks change are right); days and shown times are Cairo time.
+def _parse(s):
     if not s:
         return None
     if isinstance(s, datetime):
-        return s.replace(tzinfo=None)
+        return s
     try:
-        return datetime.fromisoformat(str(s).replace('Z', '+00:00')).replace(tzinfo=None)
+        return datetime.fromisoformat(str(s).strip().replace('Z', '+00:00'))
     except ValueError:
         return None
 
 
+def instant(s):
+    """The exact moment as an aware UTC datetime, None when empty or invalid. A time without a zone is Cairo time."""
+    d = _parse(s)
+    if d is None:
+        return None
+    if d.tzinfo is None:
+        d = d.replace(tzinfo=tz.BUSINESS)
+    return d.astimezone(tz.UTC)
+
+
+def parse_dt(s):
+    """ISO date or date-time -> naive datetime in Cairo business time (a time with a zone is converted), None when empty or invalid."""
+    d = _parse(s)
+    if d is None:
+        return None
+    if d.tzinfo is not None:
+        d = d.astimezone(tz.BUSINESS)
+    return d.replace(tzinfo=None)
+
+
+def business_now():
+    """Now in Cairo business time (naive), whatever time zone this PC is set to."""
+    return datetime.now(tz.UTC).astimezone(tz.BUSINESS).replace(tzinfo=None)
+
+
+def link_expiry(trip_date, now=None):
+    """When a driver link stops working, as an exact UTC time: seven days from now, or three days after the planned date, whichever is later."""
+    now = now or datetime.now(tz.UTC)
+    day = instant(trip_date)
+    later = day + timedelta(days=3) if day else now
+    return max(now + timedelta(days=7), later).isoformat(timespec='seconds')
+
+
+def time_unclear(s):
+    """True when a time typed without a zone falls in the hour the clocks change (it may mean either of two moments)."""
+    d = _parse(s)
+    return d is not None and d.tzinfo is None and tz.unclear(d)
+
+
 def duration(start_at, end_at):
-    a, b = parse_dt(start_at), parse_dt(end_at)
+    a, b = instant(start_at), instant(end_at)
     if not a or not b or b < a:
         return None
     return b - a
@@ -181,7 +223,7 @@ DONE = ('finished', 'closed')
 def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(), open_limit_hours=16, now=None, drift_limit=10,
           billable_check=True):
     """(colour, [reason codes]) - deterministic, computed on read. Not-finished trips are grey (or red when left open too long)."""
-    now = now or datetime.now()
+    now = now or business_now()
     reasons = []
     status = trip.get('status') or 'draft'
     if status == 'cancelled':
@@ -211,6 +253,8 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
         reasons.append('Y_KM_UNUSUAL')
     if any(abs(drift_minutes(e.get('phoneAt'), e.get('recvAt')) or 0) > drift_limit for e in events if not (e.get('payload') or {}).get('queued')):
         reasons.append('Y_DRIFT')
+    if time_unclear(trip.get('startAt')) or time_unclear(trip.get('endAt')):
+        reasons.append('Y_TIME_UNCLEAR')
     if any(a.get('field') == 'status' and a.get('new') in DONE for a in amendments):
         reasons.append('Y_CLOSED_BY_OFFICE')
     if amendments:

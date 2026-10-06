@@ -1,3 +1,10 @@
+<!-- first-sale-contract: 2026-10-06 -->
+> **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
+
+## Current work queue — first sale
+
+Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
+
 # Tasks – where to continue
 
 Tick `[x]` when a task is done (code + tests + docs). Details of every ID: `docs/EXECUTION_PLAN.md` Part C.

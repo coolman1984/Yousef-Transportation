@@ -30,15 +30,21 @@ def slug(group):  # the same key js/views/access.js builds for a group title
     return '_'.join(re.sub(r'[^a-z]+', ' ', group.lower()).split()[:2])
 
 
-def catalogue(ar):
+def catalogue(ar, en=None):
+    """English words: the dictionary's when it has the key (that is what the screen shows), else the server's label."""
+    en = en if en is not None else words('en')
+    pick = lambda key, fallback: en[key] if key in en else fallback  # noqa: E731
     groups = []
     for i, (g, ps) in enumerate(auth.PERMISSIONS):
         admin = g == auth.ADMIN_GROUP
-        groups.append({'id': slug(g), 'admin': admin, 'labels': {'en': g, 'ar': ar.get('permgroup.' + slug(g), '')},
+        groups.append({'id': slug(g), 'admin': admin, 'labels': {'en': pick('permgroup.' + slug(g), g), 'ar': ar.get('permgroup.' + slug(g), '')},
                        'permissions': [{'id': p, 'kind': 'page' if i == 0 else 'admin' if admin else 'action',
-                                        'labels': {'en': label, 'ar': ar.get('perm.' + p, '')}} for p, label in ps]})
-    pages = {pid: '*' if perm == 'null' else re.findall(r"'([\w.]+)'", perm) for pid, perm in ROUTE.findall(read('js', 'shell.js'))}
-    profiles = [{'id': pid, 'locked': pid == auth.LOCKED_PROFILE, 'labels': {'en': name, 'ar': ar.get('prof.' + pid, '')},
+                                        'labels': {'en': pick('perm.' + p, label), 'ar': ar.get('perm.' + p, '')}} for p, label in ps]})
+    shell = read('js', 'shell.js')
+    pages = {pid: '*' if perm == 'null' else re.findall(r"'([\w.]+)'", perm) for pid, perm in ROUTE.findall(shell)}
+    every = set(re.findall(r"^\s*\{ id: '([\w-]+)', icon:", shell, re.M))  # every menu entry, however its fields are written
+    assert every == set(pages), f'menu routes the gate could not read: {sorted(every - set(pages))}'
+    profiles = [{'id': pid, 'locked': pid == auth.LOCKED_PROFILE, 'labels': {'en': pick('prof.' + pid, name), 'ar': ar.get('prof.' + pid, '')},
                  'perms': list(auth.ALL if pid == auth.LOCKED_PROFILE else perms)} for pid, name, perms in auth.BUILTIN_PROFILES]
     return {'product': os.path.basename(ROOT), 'languages': ['en', 'ar'], 'manage': 'users.manage', 'groups': groups,
             'pages': pages, 'profiles': profiles}
@@ -66,6 +72,12 @@ class AccessGate(unittest.TestCase):
         self.assertTrue(auth.Auth.link_allowed({'perms': list(auth.WORK)}))
         self.assertEqual(afaccess.admin_safety([], [{'id': 'x', 'perms': [p], 'link': True} for p in ['users.manage']], 'y',
                                                auth.ADMIN_PERMS), ['link-admin'])
+
+    def test_gate_catches_an_empty_english_word(self):
+        en = words('en')
+        first = auth.PERMISSIONS[1][1][0][0]
+        en['perm.' + first] = ''
+        self.assertIn('label-missing', {f.code for f in afaccess.errors(catalogue(self.ar, en))})
 
     def test_english_and_arabic_have_the_same_permission_words(self):
         en = words('en')

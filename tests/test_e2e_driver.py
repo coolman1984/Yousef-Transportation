@@ -82,6 +82,10 @@ class DriverPageTest(unittest.TestCase):
         pg.click('.cam [data-s]')
         pg.wait_for_selector('.photo img')
 
+    def sent(self, pg):
+        """Everything is in the mailbox (two ticks). Only the third tick means the office has it."""
+        self.until(pg, "() => (document.querySelector('#sync') || { innerText: '' }).innerText.indexOf('✓✓') >= 0")
+
     def inbox(self, want_events=0, want_photos=0, timeout=20):
         end = time.time() + timeout
         while time.time() < end:
@@ -116,9 +120,12 @@ class DriverPageTest(unittest.TestCase):
         self.shoot(pg)
         pg.click('[data-a="paper"]')
         pg.wait_for_selector('.big-ok')
-        pg.wait_for_selector('.sync.ok')                            # ✓✓ all received
+        pg.wait_for_selector('.sync.wait')                          # ✓✓ in the mailbox - NOT yet "received by the office"
+        self.until(pg, "() => document.querySelector('#sync').innerText.indexOf('✓✓✓') < 0 && document.querySelector('#sync').innerText.indexOf('✓✓') >= 0")
         self.assertNotIn('!', pg.inner_text('#sync')[:1])
         box = self.inbox(2, 3)
+        photos_kept = "() => D.outbox.items('trip:' + D.token).then(a => a.filter(i => i.kind === 'photo' && i.blob).length)"
+        self.assertEqual(pg.evaluate(photos_kept), 3, 'the photos stay on the phone until the office has them')
         self.assertEqual([e['type'] for e in box['events']], ['start', 'end'])
         self.assertEqual([e['body']['data'].get('startKm', e['body']['data'].get('endKm')) for e in box['events']], [45000, 45120])
         self.assertEqual(sorted(p['kind'] for p in box['photos']), ['end_odo', 'paper', 'start_odo'])
@@ -126,8 +133,63 @@ class DriverPageTest(unittest.TestCase):
         self.assertTrue(all(p['size'] < 300 * 1024 for p in box['photos']))
         photo = self.office.photo(box['photos'][0]['uuid'])
         self.assertEqual(hashlib.sha256(photo).hexdigest(), box['photos'][0]['sha256'])
+        self.office.ack([e['uuid'] for e in box['events']], [p['uuid'] for p in box['photos']])   # the office PC collects and stores them
+        pg.evaluate('() => D.outbox.reconcile()')
+        pg.wait_for_selector('.sync.ok')                            # ✓✓✓ everything is at the office
+        self.assertIn('✓✓✓', pg.inner_text('#sync'))
+        self.until(pg, "() => D.outbox.items('trip:' + D.token).then(a => a.every(i => i.officeAt && !i.blob))")
+        self.assertEqual(pg.evaluate(photos_kept), 0, 'now the phone may forget its copy')
         self.assertEqual(self.errors, [])
         ctx.close()
+
+    def test_h_an_item_the_mailbox_lost_is_sent_again_and_nothing_is_called_received_before_the_office_has_it(self):
+        import shutil
+        import sqlite3
+        import tempfile
+        d = tempfile.mkdtemp(prefix='to-gw-')
+        gw = None
+        try:
+            from test_gateway_client import GatewayProcess as GP
+            gw = GP(db=os.path.join(d, 'gateway.db'))
+            office = G.Client(gw.url, SECRET)
+            token = 'TkLostAbcdefghijklmnop'[:22]
+            office.put_cards([{'tokenHash': G.token_hash(token), 'tripId': 'trL', 'body': {**CARD, 'tripId': 'trL'}, 'cancelled': False, 'expiresAt': int(time.time()) + 86400}])
+            ctx = self.browser.new_context(viewport={'width': 393, 'height': 851}, is_mobile=True, has_touch=True, permissions=['camera'])
+            ctx.add_init_script("try { localStorage.setItem('to.lang', 'en') } catch (e) {}")
+            pg = ctx.new_page()
+            pg.goto(f'{gw.url}/t/{token}')
+            pg.wait_for_selector('[data-a="begin"]')
+            pg.click('[data-a="begin"]')
+            self.shoot(pg)
+            pg.fill('#km', '1000')
+            pg.click('[data-a="start"]')
+            pg.wait_for_selector('[data-a="finish"]')
+            self.until(pg, "() => document.querySelector('#sync') && document.querySelector('#sync').innerText.indexOf('✓✓') >= 0")
+            end = time.time() + 20
+            while time.time() < end and not (office.inbox()['events'] and office.inbox()['photos']):
+                time.sleep(0.2)
+            first = office.inbox()
+            self.assertEqual((len(first['events']), len(first['photos'])), (1, 1))
+            # the mailbox loses them (retention, a storage problem): rows gone, no receipt
+            db = sqlite3.connect(os.path.join(d, 'gateway.db'), timeout=10)
+            db.execute('DELETE FROM events')
+            db.execute('DELETE FROM photos')
+            db.commit()
+            db.close()
+            self.assertEqual((len(office.inbox()['events']), len(office.inbox()['photos'])), (0, 0))
+            pg.evaluate('() => D.outbox.reconcile()')                  # the phone asks: neither at the office nor in the mailbox -> unknown
+            end = time.time() + 20
+            while time.time() < end and not (office.inbox()['events'] and office.inbox()['photos']):
+                time.sleep(0.2)
+            again = office.inbox()
+            self.assertEqual([e['uuid'] for e in again['events']], [e['uuid'] for e in first['events']], 'the same event came back, not a new one')
+            self.assertEqual([p['uuid'] for p in again['photos']], [p['uuid'] for p in first['photos']])
+            self.assertEqual(hashlib.sha256(office.photo(again['photos'][0]['uuid'])).hexdigest(), first['photos'][0]['sha256'], 'the photo is intact')
+            ctx.close()
+        finally:
+            if gw:
+                gw.stop()
+            shutil.rmtree(d, ignore_errors=True)
 
     def test_b_offline_in_the_middle_and_reopen(self):
         self.ack_all()
@@ -139,7 +201,7 @@ class DriverPageTest(unittest.TestCase):
         pg.fill('#km', '1000')
         pg.click('[data-a="start"]')
         pg.wait_for_selector('[data-a="finish"]')
-        pg.wait_for_selector('.sync.ok')
+        self.sent(pg)
         ctx.set_offline(True)
         pg.click('[data-a="finish"]')
         self.shoot(pg)
@@ -158,7 +220,7 @@ class DriverPageTest(unittest.TestCase):
         self.assertEqual([e['type'] for e in box['events']], ['start', 'end'])
         if before == 1:
             self.assertTrue(box['events'][1]['body']['queued'], 'an event that waited is marked queued')
-        pg.wait_for_selector('.sync.ok')
+        self.sent(pg)
         ctx.close()
 
     def test_c_second_phone_sees_a_notice(self):
@@ -170,7 +232,7 @@ class DriverPageTest(unittest.TestCase):
         pg.fill('#km', '10')
         pg.click('[data-a="start"]')
         pg.wait_for_selector('[data-a="finish"]')
-        pg.wait_for_selector('.sync.ok')
+        self.sent(pg)
         pg2, ctx2 = self.page(token, lang='en')
         pg2.wait_for_selector('.note.warn')
         self.assertIn('another phone', pg2.inner_text('main'))

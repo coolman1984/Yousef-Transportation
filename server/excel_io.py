@@ -41,7 +41,12 @@ _PREVIEW_TTL = 30 * 60
 
 
 class ImportError_(Exception):
-    """An import problem with a message the person can act on."""
+    """An import problem with a message the person can act on, and a stable `code` the screens translate (the codes of formats.FormatError, and
+    noColumns, noTrips, previewExpired, nothingToImport, noForm, needCategory)."""
+
+    def __init__(self, msg='', code=''):
+        super().__init__(msg)
+        self.code = code
 
 
 def _hkey(s):
@@ -150,7 +155,7 @@ def read_workbook(data, name='', engine='auto'):
     try:
         wb = formats.read_workbook(data, name, engine)
     except formats.FormatError as e:
-        raise ImportError_(str(e))
+        raise ImportError_(str(e), e.code)
     rows, report = [], []
     for sh in wb.sheets:
         if sh.hidden:
@@ -164,9 +169,9 @@ def read_workbook(data, name='', engine='auto'):
         rows += got
         report.append({'sheet': sh.name, 'used': True, 'rows': len(got)})
     if not any(r['used'] for r in report):
-        raise ImportError_('No sheet with trip columns was found. The first rows of a sheet must contain at least: Date, Driver Name and Car Plate.')
+        raise ImportError_('No sheet with trip columns was found. The first rows of a sheet must contain at least: Date, Driver Name and Car Plate.', 'noColumns')
     if not rows:
-        raise ImportError_('The sheets have the right columns but no trips in them.')
+        raise ImportError_('The sheets have the right columns but no trips in them.', 'noTrips')
     return rows, report
 
 
@@ -361,7 +366,7 @@ def store_preview(user, p):
 def get_preview(pid, user):
     v = _PREVIEWS.get(pid)
     if not v or v['user'] != user or time.time() - v['at'] > _PREVIEW_TTL:
-        raise ImportError_('The preview expired. Choose the file again.')
+        raise ImportError_('The preview expired. Choose the file again.', 'previewExpired')
     return v['plan']
 
 
@@ -377,7 +382,7 @@ def build_ops(p, state, letter, skip_rows=(), merges=(), new_id=None, include_pr
     skip = set(skip_rows)
     rows = [r for r in p['rows'] if f'{r["sheet"]}#{r["row"]}' not in skip and (r['status'] == 'new' or (include_problems and r['status'] == 'problem'))]
     if not rows:
-        raise ImportError_('There is nothing to import: every row is a duplicate, has a problem, or was left out.')
+        raise ImportError_('There is nothing to import: every row is a duplicate, has a problem, or was left out.', 'nothingToImport')
     used_keys = lambda entity: {  # noqa: E731
         'drivers': {domain.key_text(x['name']): x['id'] for x in state.get('drivers', [])},
         'people': {domain.key_text(x['name']): x['id'] for x in state.get('people', [])},

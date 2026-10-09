@@ -21,7 +21,7 @@ import time
 import urllib.error
 import urllib.request
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 import domain
 from store import Conflict
@@ -158,11 +158,23 @@ class Client:
 
 # --------------------------------------------------------------------------- cards and events
 def _epoch(iso):
-    try:
-        d = datetime.fromisoformat(str(iso))
-        return int((d if d.tzinfo else d.replace(tzinfo=timezone.utc)).timestamp())
-    except (TypeError, ValueError):
-        return None
+    """Unix seconds of an expiry. A time with a zone is exact; one without (written by an older version) was Cairo office time."""
+    d = domain.instant(iso)
+    return int(d.timestamp()) if d else None
+
+
+LATE_AFTER_DAYS = 3        # driver messages that sit in the mailbox longer than this are reported to the office (the mailbox drops them after 30)
+
+
+def oldest_waiting_seconds(items, now=None):
+    """How long the oldest item still in the mailbox has been waiting (0 when none). `items`: inbox events/photos with their `recvAt` (UTC)."""
+    now = now or time.time()
+    ages = []
+    for it in items:
+        d = domain.instant(it.get('recvAt'))
+        if d:
+            ages.append(now - d.timestamp())
+    return max(0, int(max(ages))) if ages else 0
 
 
 def card_for(state, trip):
@@ -187,35 +199,46 @@ def card_for(state, trip):
 
 
 def local_pair(phone_at, recv_at):
-    """(phone time, receive time) as naive strings in the phone's own clock zone, so the difference is the real drift."""
-    try:
-        p = datetime.fromisoformat(str(phone_at))
-    except ValueError:
+    """(phone time, receive time) as Cairo business-time strings. The phone may be set to any zone (even a wrong one): both times are exact
+    moments, so the difference is the real drift and the shown times are the same on every PC. A phone time without a zone is Cairo time.
+    Only a time in the hour the clocks go back keeps its offset (domain.business_text). The phone's original text stays in the stored event."""
+    p = domain.business_text(phone_at)
+    if not p:
         return '', ''
-    try:
-        r = datetime.fromisoformat(str(recv_at).replace('Z', '+00:00'))
-    except ValueError:
-        return p.replace(tzinfo=None).isoformat(timespec='seconds'), ''
-    if p.tzinfo:
-        r = r.astimezone(p.tzinfo)
-    return p.replace(tzinfo=None).isoformat(timespec='seconds'), r.replace(tzinfo=None).isoformat(timespec='seconds')
+    return p, domain.business_text(recv_at)
 
 
 def apply_event(trip, ev, bound_device=''):
     """Change the trip row for one driver event (the trip row is a dict; returns True when it changed).
-    Later status wins, the first start is kept, and a finished trip is never changed by a late message."""
-    body = ev.get('body') or {}
-    data = body.get('data') or {}
+
+    The result does not depend on the order the messages reach the office: the first start and the first end are kept,
+    an end that arrives before its start still lets the start fill the missing facts later, and a closed or cancelled trip
+    is never touched by a late message (every raw event is stored separately for the office to read). A malformed event
+    changes nothing instead of raising, so one bad message can never block the others."""
+    if not isinstance(ev, dict):
+        return False
+    body = ev.get('body') if isinstance(ev.get('body'), dict) else {}
+    data = body.get('data') if isinstance(body.get('data'), dict) else {}
     p_at, r_at = local_pair(ev.get('phoneAt'), ev.get('recvAt'))
     before = json.dumps(trip, sort_keys=True, default=str)
     status = trip.get('status') or 'draft'
     if bound_device and not trip.get('boundDevice'):
         trip['boundDevice'] = bound_device
-    if ev['type'] == 'start' and RANK[status] < RANK['started']:
-        trip.update(status='started', startKm=_int(data.get('startKm')), startAt=p_at, startAtRecv=r_at)
-    elif ev['type'] == 'end' and RANK[status] < RANK['finished']:
+    rank = RANK.get(status)
+    kind = ev.get('type')
+    if rank is None or rank >= RANK['closed']:
+        pass                                                    # unknown or closed/cancelled: the office decides, not a late message
+    elif kind == 'start':
+        if rank < RANK['started']:
+            trip.update(status='started', startKm=_int(data.get('startKm')), startAt=p_at, startAtRecv=r_at)
+        else:                                                   # an end came first: fill only what is still empty
+            if not trip.get('startAt'):
+                trip.update(startAt=p_at, startAtRecv=r_at)
+            if trip.get('startKm') in (None, ''):
+                trip['startKm'] = _int(data.get('startKm'))
+    elif kind == 'end' and rank < RANK['finished']:
         trip.update(status='finished', endKm=_int(data.get('endKm')), endAt=p_at, endAtRecv=r_at, locked=True)
-        route = domain.norm_text(data.get('routeText'))
+        route = domain.norm_text(data.get('routeText')) if isinstance(data.get('routeText'), str) else ''
         if route:
             trip['routeText'] = route
     return json.dumps(trip, sort_keys=True, default=str) != before
@@ -237,7 +260,8 @@ class GatewaySync:
         self.wake = threading.Event()
         self.pushed = {}            # token hash -> signature of the card the gateway has
         self.release = set()        # token hashes whose bound phone the office released
-        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'applied': 0}
+        self.removed = set()        # replaced link hashes the gateway has already been told to remove (the trips keep the list, so a restart repeats it harmlessly)
+        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
         self._stop = False
         self._thread = None
 
@@ -296,7 +320,7 @@ class GatewaySync:
     def push_cards(self):
         st = self.store.state()
         cards, sigs = [], {}
-        cutoff = (datetime.now() - timedelta(days=45)).date().isoformat()
+        cutoff = (domain.business_now() - timedelta(days=45)).date().isoformat()
         for t in st.get('trips', []):
             h = t.get('linkHash')
             if not h or str(t.get('date', '')) < cutoff:
@@ -313,6 +337,16 @@ class GatewaySync:
             if rel:
                 c['releaseDevice'] = True
             cards.append(c)
+        gone = []
+        for t in st.get('trips', []):
+            if str(t.get('date', '')) >= cutoff:
+                gone += [h for h in (t.get('oldLinks') or []) if isinstance(h, str) and h not in self.removed and h != t.get('linkHash')]
+        gone = list(dict.fromkeys(gone))
+        if gone:                        # replaced links die first: the new card is published only after the old one is gone
+            cl = self.client()
+            for i in range(0, len(gone), 20):
+                cl.put_cards([], remove=gone[i:i + 20])
+                self.removed.update(gone[i:i + 20])
         if cards:
             cl = self.client()
             for i in range(0, len(cards), 100):
@@ -326,20 +360,35 @@ class GatewaySync:
         events, photos = sorted(box.get('events', []), key=lambda e: e['id']), box.get('photos', [])
         self.stat['waiting'] = len(events) + len(photos)
         if not events and not photos:
+            self.stat['oldestSeconds'], self.stat['late'] = 0, False
             return
         ack_e, ack_p = [], []
         by_trip = {}
         for e in events:
             by_trip.setdefault(e['tripId'], []).append(e)
+        problem = None                  # one trip or photo that cannot be applied must not hold back the others
         for tid, evs in by_trip.items():
-            ack_e += self._apply_events(tid, evs)
+            try:
+                ack_e += self._apply_events(tid, evs)
+            except Exception as e:
+                log.exception('gateway: events of trip %s could not be applied', tid)
+                problem = problem or e
         for ph in photos:
-            if self._apply_photo(cl, ph):
-                ack_p.append(ph['uuid'])
+            try:
+                if self._apply_photo(cl, ph):
+                    ack_p.append(ph['uuid'])
+            except Exception as e:
+                log.exception('gateway: photo %s could not be applied', ph.get('uuid'))
+                problem = problem or e
         if ack_e or ack_p:
             cl.ack(ack_e, ack_p)
             self.stat['applied'] += len(ack_e) + len(ack_p)
             self.stat['waiting'] = max(0, self.stat['waiting'] - len(ack_e) - len(ack_p))
+        left = [e for e in events if e['uuid'] not in ack_e] + [p for p in photos if p['uuid'] not in ack_p]
+        self.stat['oldestSeconds'] = oldest_waiting_seconds(left)
+        self.stat['late'] = self.stat['oldestSeconds'] > LATE_AFTER_DAYS * 86400
+        if problem:                     # what was applied is acknowledged; the rest stays in the mailbox and the office sees why
+            raise problem if isinstance(problem, GatewayError) else GatewayError('A driver message could not be applied and stays in the mailbox: ' + str(problem)[:120])
 
     # -- applying
     def _trip(self, tid):
@@ -369,7 +418,8 @@ class GatewaySync:
                 p_at, r_at = local_pair(e.get('phoneAt'), e.get('recvAt'))
                 body = dict(e.get('body') or {})
                 body['second'] = bool(e.get('second'))
-                ops.append({'e': 'tripEvents', 'id': 'ev-' + e['uuid'], 'op': 'put', 'row': {'tripId': tid, 'uuid': e['uuid'], 'type': e['type'], 'payload': body,
+                body['recvAt'] = e.get('recvAt') or ''      # the exact receive time (UTC) next to the phone's own text with its offset
+                ops.append({'e': 'tripEvents', 'id': 'ev-' + e['uuid'], 'op': 'put', 'row': {'tripId': tid, 'uuid': e['uuid'], 'type': e.get('type', ''), 'payload': body,
                                                                                                'phoneAt': p_at, 'recvAt': r_at, 'deviceId': e.get('deviceId', '')}})
                 changed |= apply_event(trip, e, e.get('boundDevice') or '')
             if not ops:
@@ -378,7 +428,7 @@ class GatewaySync:
                 ops.append({'e': 'trips', 'id': tid, 'op': 'put', 'ver': ver, 'row': trip})
             try:
                 driver = 'driver link'
-                self.store.commit(f'Driver link ({trip.get("no")})', 'gateway', f'Driver link {trip.get("no")}: ' + ', '.join(e['type'] for e in evs), ops)
+                self.store.commit(f'Driver link ({trip.get("no")})', 'gateway', f'Driver link {trip.get("no")}: ' + ', '.join(str(e.get('type')) for e in evs), ops)
                 return [e['uuid'] for e in evs]
             except Conflict:
                 time.sleep(0.2)             # somebody edited the trip at the same moment: read it again and repeat
@@ -410,7 +460,7 @@ class GatewaySync:
 
 
 def _now():
-    return datetime.now().isoformat(timespec='seconds')
+    return domain.business_now().isoformat(timespec='seconds')
 
 
 def new_nonce():

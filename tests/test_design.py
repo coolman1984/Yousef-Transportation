@@ -1,6 +1,9 @@
 """Design-system checks that need no browser: WCAG contrast of every theme, and language/CSS hygiene rules."""
 import os
 import re
+import shutil
+import subprocess
+import tempfile
 import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -147,3 +150,30 @@ class PermissionLabelsTest(unittest.TestCase):
             self.assertIn('permgroup.' + slug, keys, group)
             for p, _ in perms:
                 self.assertIn('perm.' + p, keys, p)
+
+
+def js_error(path):
+    """None when node can parse the file, else its message (a string with a stray apostrophe breaks a whole screen at run time)."""
+    r = subprocess.run(['node', '--check', path], capture_output=True, text=True)
+    return None if r.returncode == 0 else (r.stderr or r.stdout).strip().splitlines()[0:4]
+
+
+@unittest.skipUnless(shutil.which('node'), 'node is needed to check the scripts')
+class JsSyntaxTest(unittest.TestCase):
+    def test_every_script_of_the_pages_parses(self):
+        bad = {}
+        for base in ('js', os.path.join('gateway', 'public')):
+            for root, _, files in os.walk(os.path.join(ROOT, base)):
+                for f in files:
+                    if f.endswith('.js'):
+                        err = js_error(os.path.join(root, f))
+                        if err:
+                            bad[os.path.relpath(os.path.join(root, f), ROOT)] = err
+        self.assertEqual(bad, {})
+
+    def test_the_check_really_catches_a_stray_apostrophe(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, 'x.js')
+            with open(p, 'w', encoding='utf-8') as fh:
+                fh.write("var t = {'a': 'last month's reports'};\n")
+            self.assertTrue(js_error(p))

@@ -1,6 +1,6 @@
 /* Trip Orders driver page - service worker. The page shell and app files are cached so a trip can be opened and finished
    without a network; the card is fetched network-first and the last copy is used when offline. Nothing else is cached. */
-var VERSION = 'to-driver-1';
+var VERSION = 'to-driver-2';
 var SHELL = ['/app/style.css', '/app/i18n.js', '/app/outbox.js', '/app/camera.js', '/app/app.js', '/app/manifest.webmanifest', '/app/icon.svg'];
 
 function cardKey(path) {

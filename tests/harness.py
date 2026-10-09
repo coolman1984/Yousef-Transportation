@@ -42,10 +42,11 @@ def wait_until(cond, timeout=30, step=0.2, what='condition'):
 
 
 class ApiError(Exception):
-    def __init__(self, code, msg):
+    def __init__(self, code, msg, data=None):
         super().__init__(f'{code}: {msg}')
         self.code = code
         self.msg = msg
+        self.data = data or {}          # the JSON answer (it carries 'code' for import problems)
 
 
 class Client:
@@ -65,11 +66,13 @@ class Client:
                 ctype = r.headers.get('Content-Type', '')
         except urllib.error.HTTPError as e:
             payload = e.read()
+            data = None
             try:
-                msg = json.loads(payload).get('error')
+                data = json.loads(payload)
+                msg = data.get('error')
             except ValueError:
                 msg = payload[:200]
-            raise ApiError(e.code, msg)
+            raise ApiError(e.code, msg, data if isinstance(data, dict) else None)
         return json.loads(payload) if 'json' in ctype else payload
 
     def get(self, path):

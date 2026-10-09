@@ -985,6 +985,7 @@ class Auth:
             target = sqlite3.connect(path)
             try:
                 self.conn.backup(target)
+                target.execute('PRAGMA journal_mode=DELETE')    # a plain single file (no -wal/-shm next to the copy)
             finally:
                 target.close()
 

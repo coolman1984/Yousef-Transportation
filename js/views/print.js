@@ -29,10 +29,12 @@
     return '<div class="ps-head"><div>' + (name ? '<div class="ps-org">' + TO.esc(name) + '</div>' : '') + '<h1>' + TO.esc(TO.t('form.title')) + '</h1><div class="ps-no">' + TO.esc(TO.t('form.no')) + ': <b dir="ltr">' + TO.esc(t.no) + '</b></div></div>' +
       '<div class="ps-qr" aria-hidden="true">' + qr(t.no) + '</div></div><table class="ps-table">' + rows + '</table>' + (legal ? '<p class="ps-legal">' + TO.esc(legal) + '</p>' : '');
   }
-  TO.printTrip = function (t) {
+  TO.printTrip = function (t) { TO.printHTML(sheet(t)); };
+  /* any A4 sheet (the trip order, the who-can-do-what table): printed from its own element, the page's print style shows only it */
+  TO.printHTML = function (html) {
     var el = document.createElement('div');
     el.id = 'print-sheet';
-    el.innerHTML = sheet(t);
+    el.innerHTML = html;
     document.body.appendChild(el);
     document.body.classList.add('printing');
     var done = function () { document.body.classList.remove('printing'); el.remove(); window.removeEventListener('afterprint', done); };

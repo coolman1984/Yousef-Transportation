@@ -3,7 +3,13 @@
 
 # Unreleased (next version)
 
+## New
+- **Who can do what:** Settings → People & access → Profiles shows every permission against every profile in one table, and prints it.
+- The ready-made profiles show their names in Arabic on the Arabic screen.
+
 ## Fixed
+- **A new person no longer gets the wrong profile name.** The ticks were the Viewer's but the list showed "Full access", and saving kept that name.
+- "Money" (rates and cost in reports and exports) is listed with "Change rates" instead of the pages, because it opens no page of its own.
 - **Rates and contact numbers are only sent to people who may see them.** A user with only "Trip orders list" no longer receives the rates per km / per overtime hour or the drivers' and people's mobile numbers. The clean Excel report, the Word report and the Reports page leave out vendor reconciliation and cost allocation unless the user has the "Money" permission.
 - **Approval, status, driver link and lock can only be changed with their own buttons**, never by a plain edit of the trip. A locked (closed) trip can only be corrected with "Change this trip" and a written reason, so the old value is always kept.
 - **Dispatchers can cancel a trip again** (it needed a reviewer permission by mistake). Cancelling a closed trip needs the reviewer or "change a locked trip" permission.

@@ -8,6 +8,14 @@
   function slug(g) { return g.toLowerCase().replace(/[^a-z]+/g, ' ').trim().split(' ').slice(0, 2).join('_'); }
   function permLabel(id, fallback) { return TO.has('perm.' + id) ? TO.t('perm.' + id) : fallback; }
   function groupLabel(g) { var k = 'permgroup.' + slug(g); return TO.has(k) ? TO.t(k) : g; }
+  // ready-made profiles keep their English name in the data; the screen shows them in the reader's language unless renamed
+  var BUILTIN = { 'full-access': 'Full access', administrator: 'Administrator', dispatcher: 'Dispatcher', 'ga-approver': 'GA Approver', reviewer: 'Reviewer', finance: 'Finance', viewer: 'Viewer' };
+  function roleLabel(name) {
+    if (!name || name === 'Custom') return TO.t('acc.custom');
+    for (var id in BUILTIN) if (BUILTIN[id] === name && TO.has('prof.' + id)) return TO.t('prof.' + id);
+    return name;
+  }
+  TO.roleLabel = roleLabel;
   function load() {
     return Promise.all([TO.get('/api/users'), TO.get('/api/quick-links')]).then(function (r) { cache = { users: r[0], links: r[1] }; return cache; });
   }
@@ -19,7 +27,7 @@
     var users = cache.users.users.filter(function (u) { return !u.deleted; });
     return U.table([
       { h: 'f.name', cell: function (u) { return '<b>' + TO.esc(u.full_name) + '</b><div class="muted" style="font-size:.85rem">@' + TO.esc(u.username) + (u.title ? ' · ' + TO.esc(u.title) : '') + '</div>'; } },
-      { h: 'acc.profile', cell: function (u) { return '<span class="badge ' + (u.role === 'Administrator' ? 'signal' : '') + '">' + TO.esc(u.role || 'Custom') + '</span>'; } },
+      { h: 'acc.profile', cell: function (u) { return '<span class="badge ' + (u.role === 'Administrator' ? 'signal' : '') + '">' + TO.esc(roleLabel(u.role)) + '</span>'; } },
       { h: 'acc.login', cell: function (u) { var l = linkFor(u.id); return l.login === 'link' ? '<span class="badge info">' + TO.icon('chat', 'sm') + TO.esc(TO.t('acc.login.link')) + '</span>' : '<span class="badge">' + TO.icon('lock', 'sm') + TO.esc(TO.t('acc.login.pw')) + '</span>'; } },
       { h: 'acc.cats', cell: function (u) { return u.scopes ? '<span class="badge warn">' + TO.fmt.num(u.scopes.length) + ' ' + TO.esc(TO.t('acc.catsOnly')) + '</span>' : '<span class="muted">' + TO.esc(TO.t('acc.allCats')) + '</span>'; } },
       { h: 'acc.last', cell: function (u) { return u.last_login ? '<span class="num">' + U.dt(u.last_login) + '</span>' : '<span class="faint">–</span>'; } },
@@ -41,7 +49,10 @@
   /* ---------- user form ---------- */
   function openUser(u) {
     var isNew = !u, l = u ? linkFor(u.id) : {}, profiles = cache.users.profiles, cats = TO.data.list('tripCategories');
-    var perms = u ? u.perms : (profiles.filter(function (p) { return p.id === 'viewer'; })[0] || { perms: [] }).perms;
+    // a new person starts with the smallest ready-made profile (Viewer), and the list shows that same profile - it showed
+    // "Full access" over the Viewer ticks, and saving kept the wrong name on the person (fixed in Hessa first)
+    var start = isNew ? (profiles.filter(function (p) { return p.id === 'viewer'; })[0] || { name: 'Custom', perms: [] }) : null;
+    var perms = u ? u.perms : start.perms, role = u ? u.role : start.name;
     var mode = l.login === 'link' ? 'link' : 'password';
     var scoped = !!(u && u.scopes);
     TO.panel.open({ title: isNew ? TO.t('acc.add') : u.full_name,
@@ -51,7 +62,7 @@
         '<div data-pwbox class="stack"><div class="field"><label>' + TO.esc(TO.t('auth.username')) + '</label><input class="input" name="username" dir="ltr" value="' + TO.esc(u ? u.username : '') + '" autocapitalize="off" spellcheck="false"></div>' +
         (isNew ? '<div class="field"><label>' + TO.esc(TO.t('auth.password')) + '</label><input class="input" name="password" type="text" dir="ltr" autocomplete="off"><span class="help">' + TO.esc(TO.t('acc.pw.h')) + '</span></div>' : '') + '</div>' +
         '<div class="field"><label>' + TO.esc(TO.t('acc.title')) + '</label><input class="input" name="title" value="' + TO.esc(u ? u.title : '') + '"></div>' +
-        '<div class="field"><label>' + TO.esc(TO.t('acc.profile')) + '</label><select class="input" name="role">' + profiles.map(function (p) { return '<option value="' + TO.esc(p.name) + '"' + (u && u.role === p.name ? ' selected' : '') + '>' + TO.esc(p.name) + '</option>'; }).join('') + '<option value="Custom"' + (u && (!u.role || u.role === 'Custom') ? ' selected' : '') + '>' + TO.esc(TO.t('acc.custom')) + '</option></select><span class="help">' + TO.esc(TO.t('acc.profile.h')) + '</span></div>' +
+        '<div class="field"><label>' + TO.esc(TO.t('acc.profile')) + '</label><select class="input" name="role">' + profiles.map(function (p) { return '<option value="' + TO.esc(p.name) + '"' + (role === p.name ? ' selected' : '') + '>' + TO.esc(roleLabel(p.name)) + '</option>'; }).join('') + '<option value="Custom"' + (!role || role === 'Custom' ? ' selected' : '') + '>' + TO.esc(TO.t('acc.custom')) + '</option></select><span class="help">' + TO.esc(TO.t('acc.profile.h')) + '</span></div>' +
         '<div class="field"><label>' + TO.esc(TO.t('acc.cats')) + '</label><div class="seg" role="group"><button type="button" data-scope="all" aria-pressed="' + (!scoped) + '">' + TO.esc(TO.t('acc.allCats')) + '</button><button type="button" data-scope="some" aria-pressed="' + scoped + '">' + TO.esc(TO.t('acc.catsOnly')) + '</button></div>' +
           '<div data-cats class="chip-row" style="margin-top:.4rem"' + (scoped ? '' : ' hidden') + '>' + cats.map(function (c) { return '<label class="perm"><input type="checkbox" data-cat="' + TO.esc(c.id) + '"' + (u && u.scopes && u.scopes.indexOf(c.id) >= 0 ? ' checked' : '') + '><span>' + TO.esc(TO.data.catName(c.id)) + '</span></label>'; }).join('') + '</div></div>' +
         '<div class="field"><div class="row"><span class="switch"><input type="checkbox" name="active"' + (!u || u.active ? ' checked' : '') + '><span></span></span><label style="font-weight:600">' + TO.esc(TO.t('f.active')) + '</label></div></div>' +
@@ -108,21 +119,38 @@
     }
   }
 
+  /* ---------- who can do what: every permission against every profile, printable (factory access standard) ---------- */
+  function matrixHTML() {
+    var list = cache.users.profiles;
+    return '<div class="table-wrap"><table class="tbl matrix"><thead><tr><th>' + TO.esc(TO.t('acc.matrix.perm')) + '</th>' + list.map(function (p) { return '<th class="c">' + TO.esc(roleLabel(p.name)) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+      cache.users.permissions.map(function (g) {
+        return '<tr class="group-row"><th colspan="' + (list.length + 1) + '">' + TO.esc(groupLabel(g[0])) + '</th></tr>' + g[1].map(function (x) {
+          return '<tr><td>' + TO.esc(permLabel(x[0], x[1])) + '</td>' + list.map(function (p) { return '<td class="c">' + (p.perms.indexOf(x[0]) >= 0 ? '<b aria-label="' + TO.esc(TO.t('acc.matrix.yes')) + '">✓</b>' : '<span class="faint" aria-label="' + TO.esc(TO.t('acc.matrix.no')) + '">–</span>') + '</td>'; }).join('') + '</tr>';
+        }).join('');
+      }).join('') + '</tbody></table></div>';
+  }
+  function openMatrix() {
+    var el = TO.dialog({ title: TO.t('acc.matrix'), wide: true, body: '<p class="muted">' + TO.esc(TO.t('acc.matrix.h')) + '</p>' + matrixHTML(),
+      footer: '<button class="btn" data-print>' + TO.icon('printer', 'sm') + TO.esc(TO.t('acc.matrix.print')) + '</button><button class="btn primary" data-close>' + TO.esc(TO.t('common.close')) + '</button>' });
+    el.querySelector('[data-print]').addEventListener('click', function () { TO.printHTML('<h1>' + TO.esc(TO.t('acc.matrix')) + '</h1>' + matrixHTML()); });
+  }
+
   /* ---------- profiles ---------- */
   function openProfiles() {
     var list = cache.users.profiles;
     var el = TO.dialog({ title: TO.t('acc.profiles'), wide: true,
       body: '<p class="muted">' + TO.esc(TO.t('acc.profiles.h')) + '</p><div class="stack">' + list.map(function (p) {
-        return '<div class="card row" style="justify-content:space-between"><div><b>' + TO.esc(p.name) + '</b><div class="muted" style="font-size:.85rem">' + TO.fmt.num(p.perms.length) + ' ' + TO.esc(TO.t('acc.perms.count')) + '</div></div>' +
+        return '<div class="card row" style="justify-content:space-between"><div><b>' + TO.esc(roleLabel(p.name)) + '</b><div class="muted" style="font-size:.85rem">' + TO.fmt.num(p.perms.length) + ' ' + TO.esc(TO.t('acc.perms.count')) + '</div></div>' +
           (p.id === 'administrator' ? '<span class="badge signal">' + TO.icon('lock', 'sm') + TO.esc(TO.t('acc.locked')) + '</span>' : '<button class="btn sm" data-edit="' + TO.esc(p.id) + '">' + TO.esc(TO.t('common.open')) + '</button>') + '</div>'; }).join('') + '</div>',
-      footer: '<button class="btn primary" data-newprofile>' + TO.icon('plus', 'sm') + TO.esc(TO.t('acc.profile.add')) + '</button>' });
+      footer: '<button class="btn" data-matrix style="margin-inline-end:auto">' + TO.icon('sheet', 'sm') + TO.esc(TO.t('acc.matrix')) + '</button><button class="btn primary" data-newprofile>' + TO.icon('plus', 'sm') + TO.esc(TO.t('acc.profile.add')) + '</button>' });
     el.addEventListener('click', function (e) {
+      if (e.target.closest('[data-matrix]')) { TO.overlay.close(); openMatrix(); return; }
       if (e.target.closest('[data-newprofile]')) { TO.overlay.close(); editProfile(null); }
       var b = e.target.closest('[data-edit]'); if (b) { TO.overlay.close(); editProfile(list.filter(function (p) { return p.id === b.dataset.edit; })[0]); }
     });
   }
   function editProfile(p) {
-    var el = TO.dialog({ title: p ? p.name : TO.t('acc.profile.add'), wide: true,
+    var el = TO.dialog({ title: p ? roleLabel(p.name) : TO.t('acc.profile.add'), wide: true,
       body: '<div class="field"><label>' + TO.esc(TO.t('f.name')) + '</label><input class="input" id="pf-name" value="' + TO.esc(p ? p.name : '') + '"></div><div class="field"><div class="row"><span class="switch"><input type="checkbox" id="pf-apply" checked><span></span></span><label for="pf-apply" style="font-weight:600">' + TO.esc(TO.t('acc.profile.apply')) + '</label></div></div>' + ticks(p ? p.perms : []) + '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
       footer: (p ? '<button class="btn danger" data-del style="margin-inline-end:auto">' + TO.esc(TO.t('common.delete')) + '</button>' : '') + '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t('common.save')) + '</button>' });
     el.querySelector('[data-ok]').addEventListener('click', function () {

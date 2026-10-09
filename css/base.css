@@ -430,3 +430,7 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
   body { background: #fff; }
   .card, .table-wrap { box-shadow: none; }
 }
+
+/* who can do what (factory access standard): every permission against every profile */
+.tbl.matrix td.c, .tbl.matrix th.c { text-align: center; }
+.tbl.matrix .group-row th { background: var(--surface-2); font-weight: 700; }

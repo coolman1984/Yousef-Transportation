@@ -27,4 +27,7 @@ description: Working memory for the Trip Orders project (vehicle trip orders, dr
 - Branch + push only; never `main`, never force-push; merge only when the owner says so.
 
 ## Pitfalls
+- Permissions: a new permission, page or ready-made profile needs its words in both dictionaries (`perm.*`, `permgroup.*`, `prof.*`);
+  `tests/test_access_gate.py` runs the factory gate (`server/afaccess.py`; update from Apps-Factory with `python scripts/vendor_access.py ../Yousef-Transportation`).
+  Standard: `Apps-Factory/docs/ACCESS_AND_ADMINISTRATION_STANDARD.md`.
 See `docs/EXECUTION_PLAN.md` Part F and add new ones there and here.

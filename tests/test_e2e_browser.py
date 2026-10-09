@@ -195,6 +195,28 @@ class TripFlowTest(BrowserBase):
         self.assertEqual([e for e in self.errors if '400' not in e], [], 'only the refused duplicate driver (HTTP 400) is expected')
 
 
+    def test_who_can_do_what_and_a_new_person_starts_as_viewer(self):
+        """Factory access standard: the matrix of every permission against every profile, printable; a new person's
+        profile name matches the ticks shown (it showed the first profile over the Viewer ticks) and is in Arabic."""
+        pg = self.open({'lang': 'ar'})
+        pg.goto(self.S.base + '/#/settings?tab=access')
+        pg.wait_for_selector('[data-adduser]')
+        pg.click('[data-adduser]')
+        pg.wait_for_selector('.drawer.on #u-form')
+        self.assertEqual(pg.input_value('.drawer.on [name="role"]'), 'Viewer')
+        self.assertEqual(pg.eval_on_selector('.drawer.on [name="role"]', 'e => e.selectedOptions[0].textContent'), 'مشاهد فقط')
+        pg.keyboard.press('Escape')
+        pg.wait_for_selector('.drawer.on', state='detached')
+        pg.evaluate("() => { window.print = () => { window.__printed = document.getElementById('print-sheet').innerHTML; }; }")
+        pg.click('[data-profiles]')
+        pg.click('[data-matrix]')
+        pg.wait_for_selector('.tbl.matrix')
+        self.assertGreater(pg.locator('.tbl.matrix tbody tr').count(), 25)
+        pg.click('[data-print]')
+        pg.wait_for_function('() => !!window.__printed')
+        self.assertIn('✓', pg.evaluate('window.__printed'))
+        self.assertEqual(self.errors, [])
+
     def test_people_and_access(self):
         pg = self.open({'lang': 'en'})
         pg.goto(self.S.base + '/#/settings?tab=rules')

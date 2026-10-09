@@ -55,7 +55,6 @@ PERMISSIONS = [
         ('fleet.view', 'Vehicles and drivers'),
         ('people.view', 'People, departments and places'),
         ('reports.view', 'Reports page'),
-        ('finance.view', 'Money: rates, vendor reconciliation, cost allocation'),
     ]),
     ('Trips', [
         ('trips.create', 'Create trip orders'),
@@ -84,6 +83,7 @@ PERMISSIONS = [
         ('print', 'Print lists, trip orders and reports / save as PDF'),
         ('report.full', 'Complete database export (all data and logs)'),
         ('rates.manage', 'Change rates per km and per overtime hour'),
+        ('finance.view', 'See money: rates, vendor reconciliation, cost allocation (in reports and exports)'),
     ]),
     ('Settings & Backups', [
         ('logs.view', 'Data changes log (who changed what)'),

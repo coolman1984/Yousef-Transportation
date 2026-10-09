@@ -1,6 +1,22 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Factory access standard: gate, Arabic profile names, new-person fix, "Who can do what" (2026-10-09)
+
+**Why:** the owner made BAMS's people-and-permissions model a factory standard (`Apps-Factory/docs/ACCESS_AND_ADMINISTRATION_STANDARD.md`,
+controls IAM-08…IAM-12) so Trip Orders, Hessa and Al-Store follow one set of rules instead of drifting copies.
+**What:** `server/afaccess.py` (vendored from `Apps-Factory/packages/af-access`) and `tests/test_access_gate.py` check the
+catalogue on every run. The first run found:
+1. **The ready-made profiles had no Arabic names** — the Arabic screen showed "Dispatcher", "GA Approver"… Added `prof.*` words
+   and the `roleLabel` of Hessa (data keeps the English name; the screen shows the reader's language unless renamed).
+2. **A new person was saved under the wrong profile name:** the ticks were Viewer's but the list showed the first profile
+   ("Full access"), and saving kept that name. Fixed as Hessa did (start = Viewer, list shows Viewer). Regression: browser test
+   `test_who_can_do_what_and_a_new_person_starts_as_viewer`.
+3. **"Money" sat in the Pages group but opens no page** — it decides whether rates and cost appear in reports and exports.
+   Moved next to "Change rates" (id unchanged, nobody's rights change).
+New: Settings → People & access → Profiles → **Who can do what**, every permission against every profile, printable (`TO.printHTML`).
+**Tests:** `test_access_gate` (4), the browser test above. **Lesson:** a copied engine stays correct only if its rules are copied as a test.
+
 ## First-sale documentation review corrections (2026-10-06)
 
 Keep copied/standalone optional-service guides independent of repository-relative contract paths; point implementers to the online source contract. For transport, remove the stale-release installation instruction and unconditional no-data-loss claim, and describe the office-only pilot before optional phone work. Documentation only; all branch copies retain the same contract and application history. Verified source/standalone link targets and Markdown-only diffs.

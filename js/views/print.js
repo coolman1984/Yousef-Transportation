@@ -31,13 +31,15 @@
   }
   TO.printTrip = function (t) { TO.printHTML(sheet(t)); };
   /* any A4 sheet (the trip order, the who-can-do-what table): printed from its own element, the page's print style shows only it */
-  TO.printHTML = function (html) {
+  TO.printHTML = function (html, pageCss) {   // pageCss: e.g. a landscape page for a wide table
     var el = document.createElement('div');
     el.id = 'print-sheet';
     el.innerHTML = html;
     document.body.appendChild(el);
+    var page = null;
+    if (pageCss) { page = document.createElement('style'); page.id = 'print-page'; page.textContent = pageCss; document.head.appendChild(page); }
     document.body.classList.add('printing');
-    var done = function () { document.body.classList.remove('printing'); el.remove(); window.removeEventListener('afterprint', done); };
+    var done = function () { document.body.classList.remove('printing'); el.remove(); if (page) page.remove(); window.removeEventListener('afterprint', done); };
     window.addEventListener('afterprint', done);
     setTimeout(function () { window.print(); }, 60);
   };

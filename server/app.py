@@ -33,6 +33,7 @@ from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E4
 import excel_io  # noqa: E402
 import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
+import errkeys  # noqa: E402
 import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
@@ -251,6 +252,10 @@ def project_state(st, perms):
     return out
 
 
+def crash_report(exc, path, incident):
+    """Hook for the factory-hub crash relay (wired in the telemetry section below)."""
+
+
 def required(entity, op, changed):
     """The permissions (any one of them is enough) needed for one saved change."""
     if entity == 'trips':
@@ -309,7 +314,8 @@ def commit_guard(u, internal=False):
             if need is SYSTEM_ONLY and e in ('tripAmendments', 'tripEvents'):
                 raise Forbidden('Amendments and driver submissions are written by the system itself. To correct a locked trip use "Change this trip".')
             if not perms.intersection(need):
-                raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".')
+                raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".',
+                                'err.notAllowedTo', op=op, entity=e, perm=need[0])
     return guard
 
 
@@ -430,7 +436,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def need(self, *perms):
         if not self.can(*perms):
-            raise Forbidden('You do not have permission for this. Ask the administrator for: "' + PERM_LABEL[perms[0]] + '".')
+            raise Forbidden('You do not have permission for this. Ask the administrator for: "' + PERM_LABEL[perms[0]] + '".', 'err.needPerm', perm=perms[0])
 
     def send(self, code, body=b'', ctype='application/json', headers=None):
         if isinstance(body, (dict, list)):
@@ -507,7 +513,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def json_body(self):
         raw = self.body(200 * 1048576 if self.u else 65536)  # before logging in only small requests
-        return json.loads(raw.decode('utf-8')) if raw else {}
+        if not raw:
+            return {}
+        try:
+            d = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            raise BadRequest('The request must be a JSON object.', 'bad-json')
+        if not isinstance(d, dict):                          # null, a list, a number ...: every handler below reads it as an object
+            raise BadRequest('The request must be a JSON object.', 'bad-json')
+        return d
 
     def denied(self, msg):
         AUTH.log(self.user, self.ip, 'access-denied', self.log_path.split('?')[0], msg)
@@ -516,41 +530,61 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def fail(self, code, msg, key='', vars=None, **extra):
+        """An error answer: the English text (logs, scripts) plus the key the screen translates."""
+        if not key:
+            key, vars = errkeys.key_for(msg)
+        body = {'error': msg, **({'key': key} if key else {}), **({'vars': vars} if vars else {}), **extra}
+        return self.send(code, body)
+
     def handle_safely(self, fn):
         if not netpolicy.peer_allowed(self.ip, policy()['nets']):
             log.info('REFUSED peer %s: not this PC and not inside the allowed networks', self.ip)
-            return self.send(403, {'error': 'This PC only accepts connections from the office network. Ask the administrator to allow your network.'})
+            return self.fail(403, 'This PC only accepts connections from the office network. Ask the administrator to allow your network.')
         if not netpolicy.host_allowed(self.headers.get('Host'), policy()['names']):
             host = (self.headers.get('Host') or '')[:80]
             log.info('REFUSED address %r from %s', host, self.ip)
-            return self.send(400 if not host else 403, {'error': 'This is not one of this PC\'s addresses, so the request was refused. '
-                                                        f'Open the program with http://localhost:{CFG["port"]}/ or the address shown in Settings.'})
+            return self.fail(400 if not host else 403, 'This is not one of this PC\'s addresses, so the request was refused. '
+                             f'Open the program with http://localhost:{CFG["port"]}/ or the address shown in Settings.')
         try:
             fn()
         except NotLoggedIn:
-            self.send(401, {'error': 'Please log in.', 'login': True}, headers=self.clear_session())
+            self.send(401, {'error': 'Please log in.', 'key': 'err.signIn', 'login': True}, headers=self.clear_session())
         except Forbidden as e:
             log.info('DENIED %s %s %s', self.user, self.log_path, e)
             self.denied(str(e))
-            self.send(403, {'error': str(e)})
+            self.fail(403, str(e), getattr(e, 'key', ''), getattr(e, 'vars', None))
         except AuthError as e:
-            self.send(400, {'error': str(e)})
+            self.fail(400, str(e))
         except Conflict as e:
             log.info('CONFLICT %s %s %s', self.user, self.log_path, e)
             self.send(409, {'error': str(e)})
-        except (BadRequest, ValueError) as e:
+        except BadRequest as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {})})
+            key, vars = errkeys.key_for(str(e))
+            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {}), **({'key': key, 'vars': vars} if key else {})})
+        except (ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError):
+            # a value the request carried in a form no handler expected (junk type, a number that is not a number ...): a calm 400,
+            # the details stay in the log under an incident number - never in the answer
+            inc = uuid.uuid4().hex[:8]
+            log.warning('BAD INPUT %s %s incident %s\n%s', self.user, self.log_path, inc, traceback.format_exc())
+            self.send(400, {'error': 'The request could not be understood.', 'key': 'err.badRequest', 'incident': inc})
         except (ConnectionError, BrokenPipeError):
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            inc = uuid.uuid4().hex[:8]
             tb = traceback.format_exc()
-            log.error('ERROR %s %s\n%s', self.user, self.log_path, tb)
+            log.error('ERROR %s %s incident %s\n%s', self.user, self.log_path, inc, tb)
             try:
-                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': tb[-1900:]}])
+                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': f'incident {inc}: ' + tb[-1900:]}])
             except Exception:
                 pass
-            self.send(500, {'error': f'Server error: {e}'})
+            try:
+                crash_report(e, self.log_path, inc)       # I4: privacy-safe fingerprint to the factory hub (only with consent)
+            except Exception:  # noqa: BLE001
+                log.warning('crash report failed', exc_info=True)
+            self.send(500, {'error': 'Something went wrong on the server. Tell the administrator the incident number.', 'key': 'err.server', 'incident': inc,
+                            'vars': {'incident': inc}})
 
     # ------------------------------------------------------------ routing
     def do_HEAD(self):

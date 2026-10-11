@@ -19,7 +19,9 @@
       }
     }, function () {
       TO.$('#root').innerHTML = '<div class="auth"><div class="panel"><div class="empty"><div class="art">' + TO.icon('alert', 'lg') + '</div><h3>' + TO.esc(TO.t('common.error')) + '</h3>' +
-        '<button class="btn primary" onclick="location.reload()">' + TO.esc(TO.t('common.retry')) + '</button></div></div></div>';
+        '<button class="btn primary" id="retry-start">' + TO.esc(TO.t('common.retry')) + '</button></div></div></div>';
+      var retry = TO.$('#retry-start');             // no inline onclick: the page's content security policy forbids it
+      if (retry) retry.addEventListener('click', function () { location.reload(); });
     });
   }
   TO.on('logged-in', start);

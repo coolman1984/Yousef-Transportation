@@ -137,7 +137,12 @@ class AuthError(Exception):
 
 
 class Forbidden(Exception):
-    """The user is logged in but is not allowed to do this (HTTP 403)."""
+    """The user is logged in but is not allowed to do this (HTTP 403). `key`/`vars` (optional) let the screen say it in its own language."""
+
+    def __init__(self, msg='', key='', **vars):
+        super().__init__(msg)
+        self.key = key
+        self.vars = vars
 
 
 class NotAuthority(Forbidden):

@@ -108,6 +108,7 @@ jobs:
           if ($acl -match 'BUILTIN\\Users' -or $acl -match 'Authenticated Users' -or $acl -match 'Everyone') { throw 'the data folder is open to other Windows accounts' }
           $fw = (netsh advfirewall firewall show rule name="Trip Orders") -join "`n"
           if ($fw -notmatch 'No rules match') { throw 'a firewall rule exists although the office did not ask for other PCs' }
+          exit 0  # netsh returns 1 when the rule is missing, which is the expected result here
       - name: Core journey on the installed program, then update over it (the trip, the backup and the licence must survive)
         shell: pwsh
         run: |

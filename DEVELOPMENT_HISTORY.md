@@ -32,6 +32,7 @@ A guide id taken from the address is now looked up with `getElementById`, so a b
 Codex's review of the PR found two more problems, both fixed:
 - The course and finished lessons were saved per PC, so on a shared office PC the next person inherited them. They are now kept per signed-in person, and the facts cache knows whose facts it holds. A regression test is in `tests/test_guides_frontend.js`; the same fix went to Hessa (#32).
 - The backup-folder save showed "copied" even when the copy failed. It now checks the answer first.
+Codex then found that a failed facts fetch right after a change of person still returned the previous person's facts. It now returns nothing in that case, and a regression test covers it.
 **Lessons:** check the factory's `main` before copying a shared part. A wording rule only holds when a test reads every text.
 
 ## Factory access standard: gate, Arabic profile names, new-person fix, "Who can do what" (2026-10-09)

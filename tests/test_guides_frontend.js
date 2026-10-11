@@ -73,3 +73,13 @@ test('the course and the finished lessons belong to the person, not to the PC (r
   assert.equal(G.myPath().id, 'dispatcher');
   assert.ok(!G.lessons(G.myPath(), {}).find((x) => x.g.id === 'find').done);
 });
+
+test('a failed facts fetch after a change of person never shows the previous person\'s facts (review)', async () => {
+  const TO = startup('en'); TO.prefs.data = {};
+  TO.me = { id: 'a', perms: [] };
+  TO.get = () => Promise.resolve({ myTripCreated: true });
+  assert.equal((await TO.guides.loadFacts(true)).myTripCreated, true);
+  TO.me = { id: 'b', perms: [] };
+  TO.get = () => Promise.reject(new Error('offline'));
+  assert.equal(Object.keys(await TO.guides.loadFacts()).length, 0);
+});

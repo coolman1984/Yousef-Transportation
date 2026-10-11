@@ -267,6 +267,6 @@ def guide_facts(store, journal, user, must_change=False, users=1, backup_folders
         'myAmendment': any_row('trip_amendments', "by_user=? AND field<>'status'", (user,)),
         'myTripClosed': any_row('trip_amendments', status_to, (user, '"closed"', 'closed')),
         'myCancel': any_row('trip_amendments', status_to, (user, '"cancelled"', 'cancelled')),
-        'myWordForm': logged('activity', "type='export' AND action='Word export'", ()),
+        'myWordForm': logged('activity', "type='export' AND action='Word export' AND target LIKE 'Trip_order_%'", ()),  # the form, not the month report
         'myExcelExport': logged('activity', "type='export' AND action='Excel export'", ()),
         'myImport': any_row('trips', "created_by=? AND source IN ('excel', 'word')", (user,))}

@@ -98,6 +98,11 @@ class GuideFactsApiTest(unittest.TestCase):
         f = self.ac.get('/api/guide-facts')
         self.assertTrue(f['categoriesAdded'] and f['vehiclesAdded'] and f['myTripCreated'])
         self.assertFalse(f['driversAdded'])
+        # review: the month's Word report is not "print a trip order" (both log a Word export)
+        self.ac.get('/api/word/report')
+        self.assertFalse(self.ac.get('/api/guide-facts')['myWordForm'])
+        self.ac.get('/api/word/form')
+        self.assertTrue(self.ac.get('/api/guide-facts')['myWordForm'])
         # a fresh dispatcher: the office's setup is done, their own daily work is not
         perms = next(p[2] for p in auth.BUILTIN_PROFILES if p[0] == 'dispatcher')
         self.ac.post('/api/users/save', {'full_name': 'Second Person', 'username': 'second', 'password': 'Another-pass2', 'role': 'Dispatcher',

@@ -39,7 +39,7 @@
         if (e.target.closest('[data-a="slides"]')) TO.slides.open();
       });
       TO.guides.fillPath(root);
-      var g = q.guide && root.querySelector('#guide-' + q.guide);
+      var g = q.guide && document.getElementById('guide-' + q.guide);   // an id from the address: never a CSS selector
       if (g) { g.open = true; setTimeout(function () { if (g.scrollIntoView) g.scrollIntoView({ block: 'start' }); }, 50); }
       var input = root.querySelector('#help-q');
       if (!input) return;

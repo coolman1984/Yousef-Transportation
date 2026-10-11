@@ -24,6 +24,11 @@ easy words. Trip Orders had only 8 questions, a tour and slides.
 **Mistakes:** the port was started with an earlier help checker that the factory replaced the same week. The gate was rewritten
 for the factory format. The release lint then found 13 steps joining two actions, 5 long sentences and 3 «يعني»; all were
 fixed. A pricing test still looked for the old Egyptian hint («بتفضل بالسعر القديم») and now reads the new sentence.
+**Independent review** (no blockers) found two real problems, both fixed:
+- The "print a trip order" fact also counted the month's Word report, because both are logged as "Word export". It now matches only the form (`Trip_order_*`), and a regression test (in `GuideFactsApiTest`) fails without the fix.
+- The per-person facts searched the history without an index. `journal.py` now indexes `audit(user)` and `activity(user, type)`.
+
+A guide id taken from the address is now looked up with `getElementById`, so a broken link cannot stop the Help page.
 **Lessons:** check the factory's `main` before copying a shared part. A wording rule only holds when a test reads every text.
 
 ## Factory access standard: gate, Arabic profile names, new-person fix, "Who can do what" (2026-10-09)

@@ -227,7 +227,7 @@ class ScreenTest(unittest.TestCase):
         pg2 = self.open('ar')
         pg2.click('tr[data-id="cat1"]')
         pg2.wait_for_selector('.drawer.on #rec-form')
-        self.assertIn('بتفضل بالسعر القديم', pg2.inner_text('.drawer.on'))
+        self.assertIn('تبقى بسعرها القديم', pg2.inner_text('.drawer.on'))
         self.assertEqual(pg2.evaluate('document.documentElement.dir'), 'rtl')
 
 

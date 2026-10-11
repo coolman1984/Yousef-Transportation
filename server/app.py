@@ -783,6 +783,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'summary': reports.summaries(st, ym), 'overtime': reports.overtime(st, ym), 'money': money,
                                    'reconciliation': reports.reconciliation(st, ym) if money else [], 'allocation': reports.allocation(st, ym) if money else [],
                                    'anomalies': reports.anomalies(st, ym)[:300]})
+        if p == '/api/guide-facts':  # the learning path: what this person (and the office) already did - read-only, every signed-in person
+            return self.send(200, tripsvc.guide_facts(STORE, JOURNAL, self.user, bool(self.u.get('must_change')), len(AUTH.list_users()),
+                                                      len(BACKUPS.extra or []), SECRETS.configured))
         if p == '/api/insights':
             self.need('trips.view')
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))

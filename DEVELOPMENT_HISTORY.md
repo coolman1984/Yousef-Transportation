@@ -1,6 +1,40 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Learning path per role, guide coach and simple formal Arabic help (2026-10-11)
+
+**Why:** the owner's request (2026-10-09): every product has the same capabilities. A brand-new person learns alone and in
+order, with a course for their role. The administrator's course starts by setting the office up. Pressing the guide shows
+which step the person is at. All help is written in Arabic between formal and simple Egyptian: plain, slightly formal,
+easy words. Trip Orders had only 8 questions, a tour and slides.
+**What:**
+- **Coach:** Hessa's guide coach is ported to `js/views/guides.js` (Trip Orders and Hessa share the engine). 28 guides, each
+  with steps that open the page and outline the button.
+- **"Solve a problem":** 35 situations of a transport office, each with "Take me there" and "Guide me".
+- **Courses:** one per ready-made profile. Administrator (setup first), Centre manager (full access, without the
+  administrator rights), dispatcher, GA approver, reviewer, finance and viewer.
+- **"You are here":** `tripsvc.GUIDE_FACTS` / `guide_facts()`, served by `GET /api/guide-facts` to any signed-in person.
+  Setup facts are office-wide. Daily-work facts count the person's own rows, so a new dispatcher in a busy office still has
+  "create a trip" ahead.
+- **Screens:** Help opens on "My path". The overview shows the next lesson with "Guide me".
+- **Factory checks:** `tests/guide_catalogue.js` writes the help in the factory's af-guide format, and
+  `tests/test_guide_gate.py` runs the factory checker `server/afguide.py` (af-guide 0.1.4) with `release=True`. The checks
+  cover: complete texts in both languages, courses each profile can walk (`role-perm`), every page covered, every problem
+  with a guide, and the «العربية الميسّرة» lint. Both new tests run in CI (`build.yml`).
+**Mistakes:** the port was started with an earlier help checker that the factory replaced the same week. The gate was rewritten
+for the factory format. The release lint then found 13 steps joining two actions, 5 long sentences and 3 «يعني»; all were
+fixed. A pricing test still looked for the old Egyptian hint («بتفضل بالسعر القديم») and now reads the new sentence.
+**Independent review** (no blockers) found two real problems, both fixed:
+- The "print a trip order" fact also counted the month's Word report, because both are logged as "Word export". It now matches only the form (`Trip_order_*`), and a regression test (in `GuideFactsApiTest`) fails without the fix.
+- The per-person facts searched the history without an index. `journal.py` now indexes `audit(user)` and `activity(user, type)`.
+
+A guide id taken from the address is now looked up with `getElementById`, so a broken link cannot stop the Help page.
+Codex's review of the PR found two more problems, both fixed:
+- The course and finished lessons were saved per PC, so on a shared office PC the next person inherited them. They are now kept per signed-in person, and the facts cache knows whose facts it holds. A regression test is in `tests/test_guides_frontend.js`; the same fix went to Hessa (#32).
+- The backup-folder save showed "copied" even when the copy failed. It now checks the answer first.
+Codex then found that a failed facts fetch right after a change of person still returned the previous person's facts. It now returns nothing in that case, and a regression test covers it.
+**Lessons:** check the factory's `main` before copying a shared part. A wording rule only holds when a test reads every text.
+
 ## Factory access standard: gate, Arabic profile names, new-person fix, "Who can do what" (2026-10-09)
 
 **Why:** the owner made BAMS's people-and-permissions model a factory standard (`Apps-Factory/docs/ACCESS_AND_ADMINISTRATION_STANDARD.md`,

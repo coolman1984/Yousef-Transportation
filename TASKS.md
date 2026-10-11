@@ -6,6 +6,7 @@
 Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
 
 - [x] Factory parity (2026-10-11): review `docs/YOUSEF_REVIEW.md` closed in code - status per item in `docs/YOUSEF_REVIEW_STATUS.md`. Test map: `test_permissions` (B1), `test_network` (B2/B3, gzip), `test_pricing` (B4), `test_backup` (B5/I6), `test_errors` (I7-I9), `test_guide` + `test_e2e_guide` (I1), `test_assist` (I2-I5), `test_release_files` (B6), `test_crypto` (I10), `test_design` + `docs/ui-lab` (I11). Still open: Windows installer evidence, live hub round trip, Arabic reading pass, remaining inline styles.
+- [x] Learning path per role + guide coach + "Solve a problem" (2026-10-11): 28 guides, 35 situations, 7 courses, `/api/guide-facts` (per-person daily facts, `test_guide_gate.GuideFactsApiTest`), all help in simple formal Arabic, factory af-guide 0.1.4 release lint (`tests/test_guide_gate.py`)
 - [x] Factory access standard (2026-10-09): `tests/test_access_gate.py` (factory gate `server/afaccess.py`); Arabic profile names; new person starts as Viewer with the matching name; "Money" moved out of Pages; "Who can do what" matrix (browser `test_who_can_do_what_and_a_new_person_starts_as_viewer`)
 
 # Tasks – where to continue

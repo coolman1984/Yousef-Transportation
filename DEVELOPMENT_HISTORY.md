@@ -29,6 +29,9 @@ fixed. A pricing test still looked for the old Egyptian hint («بتفضل با�
 - The per-person facts searched the history without an index. `journal.py` now indexes `audit(user)` and `activity(user, type)`.
 
 A guide id taken from the address is now looked up with `getElementById`, so a broken link cannot stop the Help page.
+Codex's review of the PR found two more problems, both fixed:
+- The course and finished lessons were saved per PC, so on a shared office PC the next person inherited them. They are now kept per signed-in person, and the facts cache knows whose facts it holds. A regression test is in `tests/test_guides_frontend.js`; the same fix went to Hessa (#32).
+- The backup-folder save showed "copied" even when the copy failed. It now checks the answer first.
 **Lessons:** check the factory's `main` before copying a shared part. A wording rule only holds when a test reads every text.
 
 ## Factory access standard: gate, Arabic profile names, new-person fix, "Who can do what" (2026-10-09)

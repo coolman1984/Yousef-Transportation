@@ -53,12 +53,23 @@ test('the path marks where the person stands, and the home card hides when the p
   const html = TO.guides.pathHTML(p, { passwordChanged: true });
   assert.match(html, /<li class="here" aria-current="step">.*?data-guide="tour"/);
   assert.equal((html.match(/aria-current="step"/g) || []).length, 1);
-  TO.prefs.data.guidesDone = { tour: 1, board: 1, find: 1 };
+  TO.prefs.data.learn = { _: { guidesDone: { tour: 1, board: 1, find: 1 } } };   // a person with no id yet: '_'
   const all = { passwordChanged: true, myTripCreated: true, myLinkMade: true, myCancel: true, myWordForm: true, myExcelExport: true };
   assert.equal(TO.guides.nextCardHTML(p, all), '');
   assert.ok(!TO.guides.pathHTML(p, all).includes('aria-current'));
-  TO.prefs.data.guidesDone = {};
+  TO.prefs.data.learn = {};
   assert.ok(TO.guides.nextCardHTML(p, { passwordChanged: true }).includes('data-guide="tour"'));
   TO.me = { role: 'Full access', perms: ['categories.manage'] };
   assert.equal(TO.guides.myPath().id, 'manager');
+});
+
+test('the course and the finished lessons belong to the person, not to the PC (review: shared office PC)', () => {
+  const TO = startup('en'); TO.prefs.data = { learn: { a: { path: 'viewer', guidesDone: { find: 1 } } } }; TO.data.state = {};
+  const G = TO.guides, perms = ['trips.view', 'board.view', 'trips.create', 'trips.send', 'trips.cancel', 'excel.export'];
+  TO.me = { id: 'a', perms };
+  assert.equal(G.myPath().id, 'viewer');
+  assert.ok(G.lessons(G.myPath(), {}).find((x) => x.g.id === 'find').done);
+  TO.me = { id: 'b', role: 'Dispatcher', perms };
+  assert.equal(G.myPath().id, 'dispatcher');
+  assert.ok(!G.lessons(G.myPath(), {}).find((x) => x.g.id === 'find').done);
 });

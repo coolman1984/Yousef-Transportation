@@ -57,7 +57,9 @@
         var r = e.target.closest('[data-restore]');
         if (r) { U.run(TO.post('/api/trash/restore', { txn: r.dataset.restore }), 'bin.restored', r).then(function () { state = null; return TO.data.load(); }).then(function () { TO.rerender(); }); return; }
         var fs = e.target.closest('[data-folder-save]');
-        if (fs) { U.run(TO.post('/api/backups/folder', { path: (root.querySelector('#bk2-path') || {}).value || '' }), 'bk2.saved', fs).then(function (r) { if (r && r.error) TO.toast(r.error, 'bad', 6000); state = null; TO.rerender(); }); return; }
+        if (fs) { U.run(TO.post('/api/backups/folder', { path: (root.querySelector('#bk2-path') || {}).value || '' }), null, fs).then(function (r) {   // say "copied" only if the copy really worked
+          if (r && (r.error || r.ok === false)) TO.toast(r.error || TO.t('common.error'), 'bad', 6000); else TO.toast(TO.t('bk2.saved'));
+          state = null; TO.rerender(); }); return; }
         if (e.target.closest('[data-backup]')) { U.run(TO.post('/api/backups'), 'bk.made').then(function () { state = null; TO.rerender(); }); return; }
         var b = e.target.closest('[data-brestore]');
         if (b) U.confirm({ title: TO.t('bk.restore'), body: TO.t('bk.restore.body'), danger: true, ok: TO.t('bk.restore') }).then(function (ok) {

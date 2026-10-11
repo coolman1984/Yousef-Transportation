@@ -218,17 +218,35 @@ PEOPLE_CONTACT_VIEWERS = ('people.view', 'people.manage')
 TRIP_SERVER_FIELDS = GA_FIELDS | LINK_FIELDS | {'locked', 'no', 'source', 'importKey'}  # written by the server through the dedicated trip routes only
 
 
+# Reading: a list is only sent to a person who has a permission that uses it. Without any of them the answer is empty,
+# so the API call itself shows nothing (not only the hidden menu).
+TRIP_READERS = ('overview.view', 'trips.view', 'board.view', 'review.view', 'reports.view', 'trips.create', 'trips.edit', 'trips.send',
+                'trips.approve', 'trips.cancel', 'trips.review', 'trips.amend', 'trips.delete', 'excel.import', 'excel.export', 'print',
+                'report.full', 'finance.view')
+LOOKUP_READERS = TRIP_READERS + ('fleet.view', 'people.view', 'vehicles.manage', 'drivers.manage', 'people.manage', 'places.manage',
+                                 'categories.manage', 'rates.manage', 'settings.view', 'settings.edit', 'data.import', 'files.download')
+TRIP_LISTS = ('trips', 'tripPassengers', 'tripPhotos', 'tripAmendments', 'tripEvents')
+LOOKUP_LISTS = ('tripCategories', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')
+
+
 def project_state(st, perms):
-    """What this user may read: rates need a money permission, contact numbers need the page that shows them.
+    """What this user may read: trips and their lists need a trip-reading permission, the lookup lists (names of vehicles, drivers,
+    places ...) need any working permission, rates need a money permission, contact numbers need the page that shows them.
     Hiding a button is not protection - the response itself is filtered."""
     perms = set(perms)
     out = dict(st)
+    if not perms.intersection(TRIP_READERS):
+        for k in TRIP_LISTS:
+            out[k] = []
+    if not perms.intersection(LOOKUP_READERS):
+        for k in LOOKUP_LISTS:
+            out[k] = []
     if not perms.intersection(RATE_VIEWERS):
-        out['tripCategories'] = [{k: v for k, v in c.items() if k not in RATE_FIELDS} for c in st.get('tripCategories', [])]
+        out['tripCategories'] = [{k: v for k, v in c.items() if k not in RATE_FIELDS} for c in out.get('tripCategories', [])]
     if not perms.intersection(DRIVER_CONTACT_VIEWERS):
-        out['drivers'] = [{k: v for k, v in d.items() if k != 'mobile'} for d in st.get('drivers', [])]
+        out['drivers'] = [{k: v for k, v in d.items() if k != 'mobile'} for d in out.get('drivers', [])]
     if not perms.intersection(PEOPLE_CONTACT_VIEWERS):
-        out['people'] = [{k: v for k, v in p.items() if k != 'mobile'} for p in st.get('people', [])]
+        out['people'] = [{k: v for k, v in p.items() if k != 'mobile'} for p in out.get('people', [])]
     return out
 
 

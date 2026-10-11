@@ -146,7 +146,8 @@ class ProgressTest(unittest.TestCase):
     def test_a_progress_is_saved_on_the_server_and_follows_the_person_to_a_second_browser(self):
         st = self.ac.get('/api/guide/state')
         self.assertEqual(st['role'], 'administrator')
-        self.assertEqual(st['course']['done'], 0)
+        self.assertEqual(st['course']['done'], 1, 'only the privacy lesson: the test office already answered the remote-help card')
+        self.assertTrue(next(i for i in st['course']['items'] if i['id'] == 'privacy-choice')['auto'])
         first = st['course']['next']
         self.assertEqual(first, 'first-look')
         self.ac.post('/api/guide/progress', {'update': {'op': 'step', 'guide': 'create-trip', 'step': 2}})
@@ -179,7 +180,7 @@ class ProgressTest(unittest.TestCase):
         c.login('gaa', 'Quarter-pass77')
         st = c.get('/api/guide/state')
         self.assertEqual(st['role'], 'ga-approver')
-        self.assertEqual(st['course']['done'], 0, 'not the administrator\'s progress')
+        self.assertEqual(st['course']['done'], 1, 'not the administrator\'s progress: only the privacy lesson the data already finished')
         self.assertEqual([i['id'] for i in st['course']['items']][:3], ['first-look', 'read-board', 'approve-trip'])
 
 

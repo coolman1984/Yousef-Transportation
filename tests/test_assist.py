@@ -82,6 +82,8 @@ class FakeHub:
         threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
 
     def public(self):
+        if self.key is None:
+            return ''
         raw = self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         return base64.urlsafe_b64encode(raw).decode().rstrip('=')
 
@@ -100,7 +102,7 @@ def events_of(hub):
 class Base(unittest.TestCase):
     @classmethod
     def start(cls, name, with_keys=False, with_hub=True):
-        cls.hub = FakeHub(Ed25519PrivateKey.generate()) if Ed25519PrivateKey else None
+        cls.hub = FakeHub(Ed25519PrivateKey.generate() if Ed25519PrivateKey else None)
         extra = {}
         if with_hub:
             extra['hub_url'] = cls.hub.url
@@ -108,7 +110,7 @@ class Base(unittest.TestCase):
             extra['licence_keys'] = [cls.hub.public()]
         os.environ['TO_DEVICE_ID'] = 'test-pc-' + name
         cls.S = Server(name, extra_cfg=extra).start()
-        cls.ac = make_authority(cls.S)
+        cls.ac = make_authority(cls.S, consent=None)
 
     @classmethod
     def tearDownClass(cls):

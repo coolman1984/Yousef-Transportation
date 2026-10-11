@@ -446,3 +446,6 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
 .lic-line.bad { background: var(--bad-soft); color: var(--bad); }
 .code-box { min-height: 6rem; font-family: ui-monospace, Consolas, monospace; }
 .report-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: .8rem; border-radius: var(--r-2); }
+/* the guide button sits under the side panels and dialogs (so it never covers their Save button); the coach and the help panel sit above the panels */
+body .afg-fab { z-index: 50; }
+body .afg-panel, body .afg-coach { z-index: 70; }

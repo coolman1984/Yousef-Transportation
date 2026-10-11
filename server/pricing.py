@@ -9,8 +9,8 @@ for last month does not change when this month's rate does:
 An entry's rates apply to trips dated BEFORE `until`; trips from `until` on use the next entry, and finally the current rate.
 The rule the user sees: a new rate applies to trips from the day it is saved; earlier trips keep the old one.
 
-Nothing is invented: a rate that was never set is not history (the first value set applies to every trip, as before), and
-0 or empty means "not set".
+Nothing is invented: a rate that was never set (empty / null) is not history (the first value set applies to every trip, as before).
+A rate of 0 IS a rate (a free period): it is kept as history like any other number, so a later rate never reprices it.
 """
 FIELDS = ('ratePerKm', 'ratePerOtHour')
 
@@ -20,6 +20,11 @@ def _num(v):
         return float(v) if v not in (None, '') else 0.0
     except (TypeError, ValueError):
         return 0.0
+
+
+def is_set(v):
+    """Was a rate entered? Empty / null = never set; 0 is a real rate."""
+    return v is not None and v != '' and not isinstance(v, bool)
 
 
 def clean_history(raw):
@@ -48,17 +53,17 @@ def stamp(before, row, today):
     if not before:
         return []
     hist = clean_history(before.get('rateHistory'))
-    old = {f: _num(before.get(f)) for f in FIELDS}
-    new = {f: _num(row.get(f)) for f in FIELDS}
-    if old == new:
+    old = {f: before.get(f) if is_set(before.get(f)) else None for f in FIELDS}
+    new = {f: row.get(f) if is_set(row.get(f)) else None for f in FIELDS}
+    if {f: _num(old[f]) if old[f] is not None else None for f in FIELDS} == {f: _num(new[f]) if new[f] is not None else None for f in FIELDS}:
         return hist
     for f in FIELDS:                                   # a rate that was never set is not history: what is set now applies to the past too
-        if not old[f] and new[f]:
+        if old[f] is None and new[f] is not None:
             for h in hist:
-                if not _num(h.get(f)):
+                if not is_set(h.get(f)):
                     h[f] = new[f]
     if hist and hist[-1]['until'] >= today:            # corrected on the same day it was changed: the correction replaces it
         return hist
-    if any(old[f] and old[f] != new[f] for f in FIELDS):
-        hist.append({'until': today, **{f: (old[f] or new[f]) for f in FIELDS}})
+    if any(old[f] is not None and _num(old[f]) != _num(new[f]) for f in FIELDS):
+        hist.append({'until': today, **{f: (old[f] if old[f] is not None else new[f]) for f in FIELDS}})
     return hist

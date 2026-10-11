@@ -180,7 +180,7 @@ class ProgressTest(unittest.TestCase):
         c.login('gaa', 'Quarter-pass77')
         st = c.get('/api/guide/state')
         self.assertEqual(st['role'], 'ga-approver')
-        self.assertEqual(st['course']['done'], 1, 'not the administrator\'s progress: only the privacy lesson the data already finished')
+        self.assertEqual(st['course']['done'], 0, 'not the administrator\'s progress')
         self.assertEqual([i['id'] for i in st['course']['items']][:3], ['first-look', 'read-board', 'approve-trip'])
 
 

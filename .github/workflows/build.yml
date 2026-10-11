@@ -100,7 +100,7 @@ jobs:
         run: |
           pip install cryptography
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
-          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
           if (-not (Test-Path $exe)) { throw 'the installed program is missing' }
           $acl = (icacls (Join-Path ${env:ProgramData} 'TripOrders')) -join "`n"
@@ -116,7 +116,7 @@ jobs:
           python tools/journey_exe.py first $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the first journey failed' }
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
-          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           python tools/journey_exe.py after $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the office did not survive the update' }
       - name: Update from the previous release (N-1) keeps the data
@@ -130,15 +130,15 @@ jobs:
           $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $old) { Write-Host 'NOTICE: no earlier release exists yet, so the N-1 update could not be exercised here'; exit 0 }
           $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
-          Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
           Remove-Item -Recurse -Force (Join-Path ${env:ProgramData} 'TripOrders') -ErrorAction SilentlyContinue
-          Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
           $h = Join-Path ${env:RUNNER_TEMP} 'journey-n1'
           python tools/journey_exe.py legacy $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the previous release did not run the journey' }
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
-          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           python tools/journey_exe.py after $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the update from the previous release lost data' }
       - name: Release proof (source commit, version, installer checksum, this run)
@@ -157,7 +157,7 @@ jobs:
         shell: pwsh
         run: |
           $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
-          Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
           if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe')) { throw 'the program was not removed' }
           if (-not (Test-Path (Join-Path ${env:ProgramData} 'TripOrders'))) { throw 'the data folder must survive an uninstall' }
       - uses: actions/upload-artifact@v7

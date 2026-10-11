@@ -34,7 +34,7 @@ jobs:
           node-version: '^22.13.0'  # node:sqlite (gateway/relay D1 stand-in) needs 22.13+
       - name: Browser for the screen tests
         run: |
-          python -m pip install playwright xlwt
+          python -m pip install playwright xlwt cryptography
           python -m playwright install --with-deps chromium
           echo "TO_CHROMIUM=$(python -c "from playwright.sync_api import sync_playwright as s; p=s().start(); print(p.chromium.executable_path); p.stop()")" >> "$GITHUB_ENV"
       - name: Gateway tests (Worker + D1 stand-in)
@@ -42,7 +42,12 @@ jobs:
         run: node --test --no-warnings test/gateway.test.js
       - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_e2e_browser test_e2e_driver test_e2e_link_ui
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files
+      - name: Core journey on the source (killed without warning, then restarted)
+        run: |
+          python -m pip install cryptography
+          python tools/journey_exe.py first "$RUNNER_TEMP/journey" python server/app.py
+          python tools/journey_exe.py after "$RUNNER_TEMP/journey" python server/app.py
 
   windows-installer:
     needs: test
@@ -65,7 +70,7 @@ jobs:
           choco upgrade innosetup -y --no-progress
       - name: Build TripOrders.exe and the installer
         run: python tools/build_windows.py
-      - name: Check that the built program starts and serves its pages
+      - name: Check that the built program folder starts and serves its pages
         shell: pwsh
         run: |
           $home_dir = Join-Path $env:RUNNER_TEMP 'to-home'
@@ -80,17 +85,87 @@ jobs:
               $s = Invoke-RestMethod http://127.0.0.1:18080/api/auth/status
               $page = (Invoke-WebRequest http://127.0.0.1:18080/ -UseBasicParsing).Content
               $js = (Invoke-WebRequest http://127.0.0.1:18080/js/app.js -UseBasicParsing).StatusCode
-              if ($s.about.installed -and $page -match 'Trip Orders' -and $js -eq 200) { $ok = $true }
+              $guide = (Invoke-WebRequest http://127.0.0.1:18080/guide/catalogue.json -UseBasicParsing).StatusCode
+              if ($s.about.installed -and $page -match 'Trip Orders' -and $js -eq 200 -and $guide -eq 200) { $ok = $true }
             } catch { }
           }
           Stop-Process -Id $p.Id -Force
           if (-not $ok) { Get-Content (Join-Path $home_dir 'data\logs\server.log') -ErrorAction SilentlyContinue; throw 'TripOrders.exe did not start correctly' }
           if (-not (Test-Path (Join-Path $home_dir 'data\auth.db'))) { throw 'data was not written to TO_HOME' }
+          if (-not (Test-Path (Join-Path $home_dir 'data\assist.db'))) { throw 'the guide and privacy data was not written to TO_HOME' }
           Write-Host 'TripOrders.exe started and served its pages'
+      # ---- the INSTALLED product (B6): install, journey, update over it, N-1 update, uninstall ----
+      - name: Install silently and check the folder protection and the firewall (nothing opens the office PC by default)
+        shell: pwsh
+        run: |
+          pip install cryptography
+          $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          if (-not (Test-Path $exe)) { throw 'the installed program is missing' }
+          $acl = (icacls (Join-Path ${env:ProgramData} 'TripOrders')) -join "`n"
+          Write-Host $acl
+          if ($acl -match 'BUILTIN\\Users' -or $acl -match 'Authenticated Users' -or $acl -match 'Everyone') { throw 'the data folder is open to other Windows accounts' }
+          $fw = (netsh advfirewall firewall show rule name="Trip Orders") -join "`n"
+          if ($fw -notmatch 'No rules match') { throw 'a firewall rule exists although the office did not ask for other PCs' }
+      - name: Core journey on the installed program, then update over it (the trip, the backup and the licence must survive)
+        shell: pwsh
+        run: |
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $h = Join-Path ${env:RUNNER_TEMP} 'journey-office'
+          python tools/journey_exe.py first $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the first journey failed' }
+          $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          python tools/journey_exe.py after $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the office did not survive the update' }
+      - name: Update from the previous release (N-1) keeps the data
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Join-Path ${env:RUNNER_TEMP} 'previous'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir 2>$null
+          $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $old) { Write-Host 'NOTICE: no earlier release exists yet, so the N-1 update could not be exercised here'; exit 0 }
+          $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          Remove-Item -Recurse -Force (Join-Path ${env:ProgramData} 'TripOrders') -ErrorAction SilentlyContinue
+          Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $h = Join-Path ${env:RUNNER_TEMP} 'journey-n1'
+          python tools/journey_exe.py legacy $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the previous release did not run the journey' }
+          $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
+          Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -Wait
+          python tools/journey_exe.py after $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the update from the previous release lost data' }
+      - name: Release proof (source commit, version, installer checksum, this run)
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          $version = python -c "import sys; sys.path.insert(0, 'server'); import version; print(version.VERSION)"
+          $proof = @("product: Trip Orders", "version: $version", "source_commit: ${env:GITHUB_SHA}", "ref: ${env:GITHUB_REF}",
+            "installer: $($setup.Name)", "installer_sha256: $hash",
+            "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
+            "checks: built folder smoke, silent install, data-folder ACL, no firewall rule, installed core journey, update keeps data, N-1 update, uninstall keeps data")
+          $proof | Set-Content -Encoding utf8 dist/RELEASE-PROOF.txt
+          Get-Content dist/RELEASE-PROOF.txt
+      - name: Uninstall keeps the office's data
+        shell: pwsh
+        run: |
+          $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe')) { throw 'the program was not removed' }
+          if (-not (Test-Path (Join-Path ${env:ProgramData} 'TripOrders'))) { throw 'the data folder must survive an uninstall' }
       - uses: actions/upload-artifact@v7
         with:
           name: TripOrders-Setup
-          path: dist/TripOrders-Setup-*.exe
+          path: |
+            dist/TripOrders-Setup-*.exe
+            dist/RELEASE-PROOF.txt
           retention-days: 30
       - name: Publish the release (a new version on main, or a tag v*)
         # every version (server/version.py) that reaches main is published once under Releases, with its installer

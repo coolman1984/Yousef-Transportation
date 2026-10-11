@@ -61,18 +61,55 @@ def _stream(key, nonce, n):
     return out[:n]
 
 
+def _aead():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        return ChaCha20Poly1305
+    except ImportError:
+        return None
+
+
+def _aad(box):
+    """What the authenticated format protects besides the secret: the version, the key derivation and every field of the file's meta."""
+    head = {k: v for k, v in box.items() if k not in ('ct', 'tag')}
+    return json.dumps(head, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+
+
 def seal(secret, passphrase, meta):
-    salt, nonce = secrets.token_bytes(16), secrets.token_bytes(16)
-    ke, km = _keys(passphrase, salt)
-    ct = bytes(a ^ b for a, b in zip(secret, _stream(ke, nonce, len(secret))))
-    tag = hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest()
-    return {'v': 1, 'kdf': 'scrypt-n32768-r8-p1', 'salt': salt.hex(), 'nonce': nonce.hex(), 'ct': ct.hex(), 'tag': tag, **meta}
+    """The administrator key as a passphrase-protected file. Version 2: scrypt + ChaCha20-Poly1305 (maintained library), the whole header
+    is authenticated, so changing the cluster or the key it names makes the file unreadable. Without the library (portable copy) the
+    older version 1 is written; unseal reads both, so a file can always be recovered."""
+    AEAD = _aead()
+    salt = secrets.token_bytes(16)
+    if AEAD is None:
+        nonce = secrets.token_bytes(16)
+        ke, km = _keys(passphrase, salt)
+        ct = bytes(a ^ b for a, b in zip(secret, _stream(ke, nonce, len(secret))))
+        tag = hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest()
+        return {'v': 1, 'kdf': 'scrypt-n32768-r8-p1', 'salt': salt.hex(), 'nonce': nonce.hex(), 'ct': ct.hex(), 'tag': tag, **meta}
+    nonce = secrets.token_bytes(12)
+    box = {'v': 2, 'kdf': 'scrypt-n32768-r8-p1', 'aead': 'chacha20poly1305', 'salt': salt.hex(), 'nonce': nonce.hex(), **meta}
+    key = _keys(passphrase, salt)[0]
+    box['ct'] = AEAD(key).encrypt(nonce, bytes(secret), _aad(box)).hex()
+    return box
 
 
 def unseal(box, passphrase):
-    salt, nonce, ct = bytes.fromhex(box['salt']), bytes.fromhex(box['nonce']), bytes.fromhex(box['ct'])
+    version = box.get('v')
+    salt, nonce = bytes.fromhex(box['salt']), bytes.fromhex(box['nonce'])
+    if version == 2:
+        AEAD = _aead()
+        if AEAD is None:
+            raise ValueError('This key file needs the installed program (it uses the cryptography library).')
+        try:
+            return AEAD(_keys(passphrase, salt)[0]).decrypt(nonce, bytes.fromhex(box['ct']), _aad(box))
+        except Exception:  # noqa: BLE001 - InvalidTag: wrong passphrase or a changed file; never say which
+            raise ValueError('Wrong passphrase or damaged file.') from None
+    if version != 1:
+        raise ValueError('This key file comes from a newer version of the program.')
+    ct = bytes.fromhex(box['ct'])
     ke, km = _keys(passphrase, salt)
-    if not hmac.compare_digest(hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest(), box['tag']):
+    if not isinstance(box.get('tag'), str) or not hmac.compare_digest(hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest(), box['tag']):
         raise ValueError('Wrong passphrase or damaged file.')
     return bytes(a ^ b for a, b in zip(ct, _stream(ke, nonce, len(ct))))
 

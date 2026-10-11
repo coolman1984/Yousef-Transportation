@@ -1,4 +1,10 @@
-"""Ed25519 digital signatures (RFC 8032) in pure Python - no extra packages needed.
+"""Ed25519 digital signatures (RFC 8032).
+
+Two implementations behind one interface (generate, public_key, sign, verify):
+  * the maintained `cryptography` library (OpenSSL, constant-time signing) whenever it is installed - the installed program ships with it
+    (Apps-Factory RULES.md section 5: no hand-written cryptography);
+  * the pure-Python reference below, only for the portable stdlib-only copy and as the cross-check in tests/test_crypto.py. Set
+    TO_PURE_ED25519=1 to force it. Both produce and accept the same RFC 8032 bytes, so keys and history signed by one verify with the other.
 
 Used to prove which PC made a change (every PC has its own key) and that a user or
 permission change really comes from the administrator PC (the "authority" key).
@@ -132,17 +138,17 @@ def _expand(seed):
     return a, h[32:]
 
 
-def generate():
+def _py_generate():
     """A new random private key (32-byte seed)."""
     return os.urandom(32)
 
 
-def public_key(seed):
+def _py_public_key(seed):
     a, _ = _expand(seed)
     return _encode(_mul_base(a))
 
 
-def sign(seed, msg, pub=None):
+def _py_sign(seed, msg, pub=None):
     a, prefix = _expand(seed)
     A = pub or _encode(_mul_base(a))
     r = _hint(prefix, msg)
@@ -151,7 +157,7 @@ def sign(seed, msg, pub=None):
     return R + s.to_bytes(32, 'little')
 
 
-def verify(pub, msg, sig):
+def _py_verify(pub, msg, sig):
     """True only for a valid signature of msg by the owner of the public key pub."""
     try:
         if len(pub) != 32 or len(sig) != 64:
@@ -166,4 +172,50 @@ def verify(pub, msg, sig):
         k = _hint(sig[:32], pub, msg)
         return _equal(_mul_base(s), _add(R, _mul(k, A)))
     except (TypeError, ValueError):
+        return False
+
+
+# ---------------------------------------------------------------- the interface the program uses
+try:
+    if os.environ.get('TO_PURE_ED25519'):
+        raise ImportError('pure Python requested')
+    from cryptography.exceptions import InvalidSignature as _InvalidSignature
+    from cryptography.hazmat.primitives import serialization as _ser
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as _Priv, Ed25519PublicKey as _Pub
+    BACKEND = 'cryptography'
+except ImportError:
+    BACKEND = 'pure-python'
+
+
+def generate():
+    """A new random private key (32-byte seed)."""
+    return os.urandom(32)
+
+
+def public_key(seed):
+    if BACKEND != 'cryptography':
+        return _py_public_key(seed)
+    if len(seed) != 32:
+        raise ValueError('Ed25519 private key must be 32 bytes')
+    return _Priv.from_private_bytes(bytes(seed)).public_key().public_bytes(_ser.Encoding.Raw, _ser.PublicFormat.Raw)
+
+
+def sign(seed, msg, pub=None):
+    if BACKEND != 'cryptography':
+        return _py_sign(seed, msg, pub)
+    if len(seed) != 32:
+        raise ValueError('Ed25519 private key must be 32 bytes')
+    return _Priv.from_private_bytes(bytes(seed)).sign(bytes(msg))
+
+
+def verify(pub, msg, sig):
+    """True only for a valid signature of msg by the owner of the public key pub."""
+    if BACKEND != 'cryptography':
+        return _py_verify(pub, msg, sig)
+    try:
+        if len(pub) != 32 or len(sig) != 64:
+            return False
+        _Pub.from_public_bytes(bytes(pub)).verify(bytes(sig), bytes(msg))
+        return True
+    except (_InvalidSignature, ValueError, TypeError):
         return False

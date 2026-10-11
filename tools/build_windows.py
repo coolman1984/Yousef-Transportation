@@ -4,7 +4,7 @@
 Steps: pack the web pages into server/_assets.py, draw the icon, compile the program into TripOrders.exe with Nuitka
 (Python translated to C, no readable source files), then wrap it in the Inno Setup installer.
 
-    python tools/build_windows.py            needs: pip install nuitka ordered-set zstandard, and Inno Setup 6
+    python tools/build_windows.py            needs: pip install nuitka ordered-set zstandard cryptography, and Inno Setup 6
 """
 import glob
 import os

@@ -1,6 +1,6 @@
 {
   "port": 8090,
-  "host": "127.0.0.1",
+  "host": "0.0.0.0",
   "data_dir": "data",
   "backup_dir": "backups",
   "extra_backup_dirs": [],

@@ -57,7 +57,7 @@ except ImportError:
 from version import COPYRIGHT, DEVELOPER, LICENSE_NOTE, PRODUCT, VERSION  # noqa: E402
 DEFAULT_CONFIG = {
     'port': 8090,
-    'host': '127.0.0.1',            # this PC only (one-PC pilot). Other PCs of the office: set "0.0.0.0" on purpose, see docs/NETWORK.md
+    'host': '0.0.0.0',              # the office LAN (owner decision 6 Oct 2026, reconfirmed 11 Oct). This PC only: set "127.0.0.1", see docs/NETWORK.md
     'data_dir': 'data',
     'backup_dir': 'backups',
     'extra_backup_dirs': [],

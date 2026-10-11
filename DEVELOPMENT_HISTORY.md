@@ -29,10 +29,16 @@ Added LAUNCH_SCOPE.md and linked every tracked Markdown guide, plan and agent sk
 
 Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
+## Network default back to the office LAN (2026-10-11)
+
+**Why:** the owner decided on 11 Oct 2026 to keep the 6 Oct 2026 decision: every PC of the office LAN can connect by default. The review's loopback default (B3) had flipped it.
+**What:** `DEFAULT_CONFIG['host']` and `config.json` are `0.0.0.0` again; the installer task `lanaccess` became the unchecked `thispconly` ("This PC only"), which skips the firewall rule (private/domain only otherwise, never public) and writes `{"host": "127.0.0.1"}` only when no `config.json` exists. All other B2/B3 hardening stays (fail-closed `allowed_networks`, data-folder ACL, plain-http warning). CI now asserts the rule exists and is private/domain only after the default install, and that `/TASKS=thispconly` leaves no rule.
+**Lesson / caution:** `load_config` writes the full default file when none exists, so a PC that already ran a 1.1.0 build with the loopback default has `"host": "127.0.0.1"` in its `config.json` and stays this-PC-only after an update (an explicit config is always respected). Such an office must change `host` to `0.0.0.0` by hand. The this-PC-only setting is written before the program is started (`ssInstall`), so the first start cannot write the default over it.
+
 ## Factory parity: close the 2026-10-11 review (branch `feat/factory-parity-20261011`)
 
 **Why:** `docs/YOUSEF_REVIEW.md` found 6 blockers and 11 important gaps against the factory rules and Store's level. **What (in commit order):**
-B1 `/api/state` filtered by read permissions; B2/B3 loopback default, fail-closed allowlist, restricted data-folder ACL, private-only opt-in firewall rule; B4 a rate of 0 is a rate
+B1 `/api/state` filtered by read permissions; B2/B3 fail-closed allowlist, restricted data-folder ACL, private/domain-only firewall rule (the loopback default of this commit was reverted on 2026-10-11, see above); B4 a rate of 0 is a rate
 (`pricing.is_set`); B5/I6 coherent backup snapshot + photo inventory in the manifest + explicit "incomplete" on verify/restore; I7-I9 error keys (`server/errkeys.py`), calm 400 for junk
 JSON, incident number on 500, CSP-safe retry button; I1-I5 vendored the factory guide/consent/telemetry/licence parts, `server/assist.py` + `server/licence.py`, six role courses
 (`guide/`), privacy and licence tabs, report dialog with exact preview, crash capture, online activation against the hub; B6 CI runs every test module and exercises the installed product

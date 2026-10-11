@@ -1,5 +1,5 @@
 """B6 (the part code can prove): CI runs every test module, including the access gate, and exercises the INSTALLED product on Windows
-(silent install, folder protection, no firewall rule, core journey, update over it, N-1 update, uninstall keeps data)."""
+(silent install, folder protection, firewall rule private/domain only, this-PC-only install without a rule, core journey, update over it, N-1 update, uninstall keeps data)."""
 import os
 import re
 import unittest
@@ -18,8 +18,10 @@ class WorkflowTest(unittest.TestCase):
 
     def test_the_installed_product_is_exercised_on_windows(self):
         for needle in ('/VERYSILENT', 'journey_exe.py first', 'journey_exe.py after', 'journey_exe.py legacy', 'icacls', 'firewall show rule',
-                       'unins000.exe', 'RELEASE-PROOF', 'installer_sha256', 'source_commit'):
+                       'unins000.exe', 'RELEASE-PROOF', 'installer_sha256', 'source_commit', '/TASKS=thispconly'):
             self.assertIn(needle, WORKFLOW, needle)
+        self.assertIn("'No rules match') { throw 'the default install must add", WORKFLOW)  # the default install must HAVE the rule
+        self.assertNotIn('Start-Process -FilePath $setup.FullName -ArgumentList \'/VERYSILENT\',\'/SUPPRESSMSGBOXES\',\'/NORESTART\' -Wait', WORKFLOW)
         self.assertIn("'data was not written", WORKFLOW)
 
     def test_the_journey_tool_covers_the_core_steps(self):

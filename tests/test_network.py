@@ -1,5 +1,6 @@
 """The office web port (F04): foreign Host names are refused (DNS rebinding), normal addresses of the PC keep working,
 the number of open connections is bounded, and bad requests fail safely. Direct HTTP calls against a real server."""
+import ast
 import http.client
 import json
 import os
@@ -138,21 +139,36 @@ class PeerServerTest(unittest.TestCase):
         self.assertEqual(st, 403, 'an invalid allowlist must not fall back to every private network')
         self.assertEqual(raw(self.junk, 'GET', '/api/auth/status', 'localhost')[0], 200, 'this PC itself still works')
 
-    def test_e2_a_fresh_install_listens_on_this_pc_only(self):
-        import ast
+    def test_e2_a_fresh_install_listens_on_the_office_lan_and_a_this_pc_choice_is_respected(self):
+        """Owner decision 6 Oct 2026 (reconfirmed 11 Oct): every PC of the office LAN can connect by default; a config.json with
+        host 127.0.0.1 (the installer's 'This PC only' choice) is still honoured."""
         root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         tree = ast.parse(open(os.path.join(root, 'server', 'app.py'), encoding='utf-8').read())
         default = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG')
-        self.assertEqual(default['host'], '127.0.0.1')
-        self.assertEqual(json.load(open(os.path.join(root, 'config.json')))['host'], '127.0.0.1')
+        self.assertEqual(default['host'], '0.0.0.0')
+        self.assertEqual(json.load(open(os.path.join(root, 'config.json')))['host'], '0.0.0.0')
         self.assertFalse(default['secure_cookie'])
+        self.assertEqual(default['allowed_networks'], [])  # the fail-closed allow-list (netpolicy) still limits it to private networks
+        src = open(os.path.join(root, 'server', 'app.py'), encoding='utf-8').read()
+        self.assertIn("cfg.update(json.load(f))", src)  # an existing config.json (e.g. host 127.0.0.1) overrides the default
+        self.assertIn("plain http", src)  # the warning for a non-local host stays
 
-    def test_e3_the_installer_opens_the_firewall_only_for_private_networks_and_only_on_request(self):
+    def test_e3_the_installer_opens_the_firewall_for_private_networks_only_and_this_pc_only_removes_it(self):
         iss = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'installer', 'trip-orders.iss'), encoding='utf-8').read()
         self.assertNotIn('profile=any', iss)
         self.assertIn('profile=private,domain', iss)
+        self.assertNotIn('lanaccess', iss.lower())
+        self.assertIn('Name: "thispconly"', iss)
+        self.assertRegex(iss, r'Name: "thispconly"[^\n]*Flags: unchecked')
+        self.assertIn('This PC only (other PCs of the office cannot connect)', iss)
+        self.assertIn('هذا الجهاز فقط (أجهزة المكتب الأخرى لا تستطيع الدخول)', iss)
         add = next(l for l in iss.splitlines() if 'firewall add rule' in l)
-        self.assertIn('Tasks: lanaccess', add)
+        self.assertIn('Tasks: not thispconly', add)  # default = rule; "This PC only" = no rule
+        delete = next(l for l in iss.splitlines() if 'firewall delete rule' in l and 'Tasks' not in l)
+        self.assertLess(iss.index(delete), iss.index(add))  # any older rule is deleted first, also for "This PC only"
+        self.assertIn('{"host": "127.0.0.1"}', iss)  # only the restriction is written
+        self.assertNotIn('{"host": "0.0.0.0"}', iss)
+        self.assertIn('not FileExists(Cfg)', iss)  # an existing config.json is never overwritten
 
     def test_e4_the_data_folder_is_not_open_to_every_windows_user(self):
         """B2: no 'users-modify' over the data tree (databases, raw signing keys); icacls narrows it to system, administrators and one operator."""

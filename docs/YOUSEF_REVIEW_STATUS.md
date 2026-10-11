@@ -6,7 +6,7 @@ Branch `feat/factory-parity-20261011`. "Fixed" = changed in code and covered by 
 |---|---|---|---|
 | B1 state leaks | fixed | `project_state` empties trip lists without a trip-reading permission and lookup lists without any working permission | `test_permissions` l, m |
 | B2 data-folder ACL | fixed in installer (Windows run pending) | `icacls` narrows `%ProgramData%\TripOrders` to SYSTEM, administrators, one operator | `test_network` e4 (script); CI step `icacls` on Windows |
-| B3 one-PC boundary | fixed | loopback default, fail-closed allowlist, firewall rule only on request and private/domain only, `secure_cookie` option, plain-http warning, `docs/NETWORK.md` | `test_network` e, e2, e3 |
+| B3 one-PC boundary | fixed | office-LAN default (6 Oct decision kept, reconfirmed 11 Oct), fail-closed allowlist, firewall rule on private/domain only (none with the installer's "This PC only"), `secure_cookie` option, plain-http warning, `docs/NETWORK.md` | `test_network` e, e2, e3 |
 | B4 zero rates | fixed | `pricing.is_set`, history keeps every interval; report = Excel = Word | `test_pricing` g, h, i, c2 |
 | B5 backup coherence | fixed | 5 attempts, abort on exhaustion, accounts inside the check | `test_backup` q, r |
 | B6 installed candidate | **partly**: CI added, not run | CI runs every test module (+ access gate); Windows job: silent install, ACL + firewall check, installed journey, update over it, N-1 update, uninstall keeps data, release proof | `test_release_files`; journey ran on the source here |
@@ -29,6 +29,6 @@ Branch `feat/factory-parity-20261011`. "Fixed" = changed in code and covered by 
 2. **Live hub:** deploy the Worker, register `trip-orders`, give the install token, prove ingest/ack and a real trial (`docs/HUB_SETUP.md`). Until then reports/crashes stay in the local outbox.
 3. **Reading pass:** the Arabic of the guide, errors and installer needs a non-developer's pass (HELP-04); the factory lint is clean.
 4. **I11 leftovers:** about 130 inline `style=` attributes remain in the other views, so CSP `style-src` still allows `'unsafe-inline'`; `heading-order` (moderate) findings; keyboard/screenshot inspection by a person.
-5. **Decision for the owner:** the default changed from "every PC may connect" (2026-10-06) to "this PC only"; ticking one installer box restores it.
+5. **Decision for the owner (closed 2026-10-11):** the default stays "every PC of the office LAN may connect" (2026-10-06 decision, reconfirmed); the installer box "This PC only" restricts it. A PC whose `config.json` already says `127.0.0.1` stays this-PC-only.
 6. **Old backups** made before this version have no photo inventory and show as "cannot prove the photos" (still restorable).
 7. N2.

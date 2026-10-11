@@ -267,8 +267,28 @@
       '<dl class="kv" style="margin-top:1rem"><dt>' + TO.esc(TO.t('panel.account.role')) + '</dt><dd>' + TO.esc(me.role || '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.node')) + '</dt><dd>' + TO.esc(me.node ? me.node.name : '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.perms')) + '</dt><dd><span class="num">' + (me.perms || []).length + '</span></dd></dl></div>',
-      footer: '<button class="btn" data-logout>' + TO.icon('logout', 'sm') + TO.esc(TO.t('auth.logout')) + '</button>',
-      mount: function (el) { el.querySelector('[data-logout]').addEventListener('click', logout); } });
+      footer: (me.viaLink ? '' : '<button class="btn" data-pw>' + TO.icon('lock', 'sm') + TO.esc(TO.t('pw.change')) + '</button>') +
+        '<button class="btn" data-logout>' + TO.icon('logout', 'sm') + TO.esc(TO.t('auth.logout')) + '</button>',
+      mount: function (el) {
+        el.querySelector('[data-logout]').addEventListener('click', logout);
+        var pw = el.querySelector('[data-pw]'); if (pw) pw.addEventListener('click', changePassword);
+      } });
+  }
+  // the person changes their own password (the administrator gave a temporary one; the guide "first" walks through it)
+  function changePassword() {
+    var el = TO.dialog({ title: TO.t('pw.change'),
+      body: '<p class="muted">' + TO.esc(TO.t('pw.change.d')) + '</p>' +
+        '<div class="field"><label for="pw-old">' + TO.esc(TO.t('pw.old')) + '</label><input class="input" id="pw-old" type="password" dir="ltr" autocomplete="current-password"></div>' +
+        '<div class="field"><label for="pw-new">' + TO.esc(TO.t('pw.new')) + '</label><input class="input" id="pw-new" type="password" dir="ltr" autocomplete="new-password"><span class="help">' + TO.esc(TO.t('auth.pw.hint')) + '</span></div>' +
+        '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+      footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t('common.save')) + '</button>' });
+    el.querySelector('[data-ok]').addEventListener('click', function () {
+      var err = el.querySelector('.err'), btn = el.querySelector('[data-ok]');
+      btn.disabled = true;
+      TO.post('/api/auth/password', { old: el.querySelector('#pw-old').value, new: el.querySelector('#pw-new').value }).then(function () {
+        TO.overlay.close(); TO.toast(TO.t('pw.changed'));
+      }, function (e) { btn.disabled = false; err.hidden = false; err.textContent = TO.ui.errorText(e); });
+    });
   }
 
   function logout() {
@@ -310,6 +330,7 @@
       if (TO.tour.active) { TO.tour.stop(); return; }
       if (TO.slides.active) { TO.slides.close(); return; }
       if (TO.panel.count()) { TO.panel.close(); return; }
+      if (TO.coach && TO.coach.active()) { TO.coach.stop(); return; }
       var app = TO.$('#app-shell'); if (app && app.dataset.menu === '1') app.dataset.menu = 0;
       return;
     }

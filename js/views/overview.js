@@ -1,4 +1,4 @@
-/* Trip Orders - Overview: greeting, live tiles, getting-started list, trust colours, tips, system status. */
+/* Trip Orders - Overview: greeting, live tiles, the next lesson of my learning path, getting-started list, trust colours, tips, system status. */
 (function () {
   'use strict';
   var TO = window.TO;
@@ -33,6 +33,7 @@
         '<button class="btn" data-a="tour">' + TO.icon('play', 'sm') + TO.esc(TO.t('ov.tour.btn')) + '</button>' +
         '<button class="btn" data-a="slides">' + TO.icon('present', 'sm') + TO.esc(TO.t('ov.slides.btn')) + '</button></div>' +
         '<div class="grid cols-4" data-tour="kpis">' + kpi(0, 'route', 'today') + kpi(1, 'gauge', 'road', true) + kpi(2, 'shield', 'review') + kpi(3, 'car', 'fleet') + '</div>' +
+        '<section class="card lift path-card" data-pathcard style="margin-top:var(--gap)"></section>' +
         '<div class="grid split" style="margin-top:var(--gap)"><div class="stack">' +
           '<section class="card lift"><header><h3>' + TO.esc(TO.t('ov.start.title')) + '</h3></header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('ov.start.sub')) + '</p><ol class="steps">' + steps + '</ol></section>' +
           '<section class="card"><header><h3>' + TO.esc(TO.t('ov.trust.title')) + '</h3></header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('ov.trust.sub')) + '</p><div class="stack" style="gap:.9rem">' + trustRow('green') + trustRow('yellow') + trustRow('red') + '</div></section>' +
@@ -54,6 +55,7 @@
     mount: function (root) {
       root.querySelector('[data-a="tour"]').addEventListener('click', function () { TO.tour.start(); });
       root.querySelector('[data-a="slides"]').addEventListener('click', function () { TO.slides.open(); });
+      if (TO.guides) TO.guides.fillNext(root);   // the next lesson of my learning path (js/views/guides.js); hidden when complete
       TO.data.load().then(function (D) {
         var today = TO.ui.today(), trips = D.list('trips');
         var v = {

@@ -7,7 +7,7 @@
   function load() {
     var jobs = [TO.can('trash.restore') ? TO.get('/api/trash') : Promise.resolve([]), TO.can(['backups.manage', 'backups.restore']) ? TO.get('/api/backups') : Promise.resolve([]),
       TO.can('backups.manage') ? TO.get('/api/backups/folder').catch(function () { return null; }) : Promise.resolve(null)];
-    return Promise.all(jobs).then(function (r) { state = { trash: r[0], backups: r[1], status: r[2] && r[2].status }; });
+    return Promise.all(jobs).then(function (r) { state = { trash: r[0], backups: r[1], status: r[2] && r[2].status, folder: r[2] }; });
   }
   function trashCard() {
     if (!TO.can('trash.restore')) return '';
@@ -32,7 +32,18 @@
         { h: 'f.type', cell: function (b) { return '<span class="badge">' + TO.esc(b.kind || '') + '</span>'; } },
         { h: 'bk.size', cell: function (b) { return b.size ? '<span class="num">' + TO.fmt.num(Math.round(b.size / 1024)) + '</span> KB' : '–'; } },
         { h: 'f.action', cell: function (b) { return TO.can('backups.restore') ? '<button class="btn sm danger" data-brestore="' + TO.esc(b.name) + '">' + TO.esc(TO.t('bk.restore')) + '</button>' : ''; } }
-      ], rows) : U.empty('lock', TO.t('bk.empty'))) + '</section>';
+      ], rows) : U.empty('lock', TO.t('bk.empty'))) + folderBox() + '</section>';
+  }
+  // a second folder (USB drive, other disk) that gets a copy of every backup; chosen by an administrator on this PC itself
+  function folderBox() {
+    var f = state.folder;
+    if (!f || !TO.can('backups.manage')) return '';
+    var can = f.admin && f.local, dirs = f.dirs || [];
+    return '<div class="stack" data-folders style="margin-top:1rem;gap:.6rem"><b>' + TO.esc(TO.t('bk2.title')) + '</b>' +
+      '<p class="muted">' + TO.esc(dirs.length ? TO.t('bk2.now', { d: dirs.join(' ، ') }) : TO.t('bk2.none')) + '</p>' +
+      (can ? '<div class="row wrap"><input class="input" id="bk2-path" dir="ltr" placeholder="E:\\TripOrdersBackup" value="' + TO.esc(dirs[0] || '') + '" aria-label="' + TO.esc(TO.t('bk2.title')) + '" style="max-width:26rem">' +
+        '<button class="btn" data-folder-save>' + TO.icon('check', 'sm') + TO.esc(TO.t('bk2.save')) + '</button></div><span class="help">' + TO.esc(TO.t('bk2.help')) + '</span>'
+        : '<div class="tip">' + TO.icon('info') + '<span>' + TO.esc(TO.t('bk2.here')) + '</span></div>') + '</div>';
   }
   TO.dataTab = {
     render: function () {
@@ -45,6 +56,8 @@
       root.addEventListener('click', function (e) {
         var r = e.target.closest('[data-restore]');
         if (r) { U.run(TO.post('/api/trash/restore', { txn: r.dataset.restore }), 'bin.restored', r).then(function () { state = null; return TO.data.load(); }).then(function () { TO.rerender(); }); return; }
+        var fs = e.target.closest('[data-folder-save]');
+        if (fs) { U.run(TO.post('/api/backups/folder', { path: (root.querySelector('#bk2-path') || {}).value || '' }), 'bk2.saved', fs).then(function (r) { if (r && r.error) TO.toast(r.error, 'bad', 6000); state = null; TO.rerender(); }); return; }
         if (e.target.closest('[data-backup]')) { U.run(TO.post('/api/backups'), 'bk.made').then(function () { state = null; TO.rerender(); }); return; }
         var b = e.target.closest('[data-brestore]');
         if (b) U.confirm({ title: TO.t('bk.restore'), body: TO.t('bk.restore.body'), danger: true, ok: TO.t('bk.restore') }).then(function (ok) {

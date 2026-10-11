@@ -1,7 +1,24 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
-# Unreleased (next version)
+# Trip Orders 1.1.0
+
+## Security and recovery (independent review of 2026-10-11)
+- **The program opens on this PC only by default.** A new installation listens on `127.0.0.1`; other PCs of the office connect only if the installer box "Let the other PCs of the office connect" is ticked (or `"host": "0.0.0.0"` is set). That choice also adds the Windows firewall rule, for private and domain networks only (never public Wi-Fi). A wrong `allowed_networks` list now means "this PC only" instead of "every private network". See `docs/NETWORK.md`. *This changes the 2026-10-06 default of "every PC can connect"; the office decides per installation.*
+- **The data folder is no longer open to every Windows user of the PC.** The installer limits `%ProgramData%\TripOrders` (databases, signing keys) to the system, the administrators and one operator account (the installing person, or `/OPERATOR=DOMAIN\name`).
+- **A user can only read what their permissions allow, also when calling the program's address directly.** Without a trips permission the trip lists come back empty; vehicles, drivers, places and categories need any working permission.
+- **A rate of 0 is a rate.** A free period (10 → 0 → 20) keeps its zero in old reports, Excel and Word instead of being repriced.
+- **Backups are taken at one moment or not at all.** If changes keep arriving during the copy the backup stops with a clear message instead of publishing data, accounts and history from different moments. Each backup lists the photos the data needs; "verified" now also means every photo is present with its checksum, and a restore says plainly when photos are missing ("incomplete"). A problem copying photos to the second folder is shown, not swallowed.
+- **Errors are in your language.** Every message of the program (sign-in, passwords, permissions, trips, licence) has an Arabic and an English text. A broken request can no longer crash a screen or show Python text; an unexpected error shows only a short incident number. The start-up "Try again" button works again.
+- **Signing and the administrator key file use maintained cryptography** (`cryptography`) when installed; the key file is now versioned and authenticated (older files still open).
+- Pages load 3x smaller (compressed), long trip lists are drawn in steps, tab bars and filters are readable by screen readers, and Settings no longer shows the unfinished Organisation and Money tabs.
+
+## Guide, help and licence (Store-level)
+- **Guide:** the «الدليل» button (and F1) opens a first-day course for your role (administrator, dispatcher, General Affairs, reviewer, finance, viewer), with progress saved on the server and a guide language of its own. A "?" on every page, and a «What do I do?» button on known errors.
+- **أبلغ عن مشكلة / Report a problem** on every page: you write it, you see the exact (redacted) text that would be sent, and only then you send. It works without any agreement.
+- **Privacy & help** (Settings): two agreements, the office's and each person's; nothing about usage is counted until both agree, withdrawing deletes what waits. The help-service address and token are optional and kept on this PC only.
+- **Crash reports** (only with the office's agreement): a fingerprint of the error, never the message or any data.
+- **Licence** (Settings): device-bound trial / monthly / permanent codes checked offline with public keys; ask the company from the screen (the code arrives by itself) or paste it. Without a working code you can still read, print, export and back up. A build without public keys says "licence by contract" and works fully (the assisted pilot). Setup: `docs/HUB_SETUP.md`.
 
 ## New
 - **Who can do what:** Settings → People & access → Profiles shows every permission against every profile in one table, and prints it.

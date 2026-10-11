@@ -29,6 +29,20 @@ Added LAUNCH_SCOPE.md and linked every tracked Markdown guide, plan and agent sk
 
 Newest first. Every change adds an entry: what changed, why, mistakes, lessons.
 
+## Factory parity: close the 2026-10-11 review (branch `feat/factory-parity-20261011`)
+
+**Why:** `docs/YOUSEF_REVIEW.md` found 6 blockers and 11 important gaps against the factory rules and Store's level. **What (in commit order):**
+B1 `/api/state` filtered by read permissions; B2/B3 loopback default, fail-closed allowlist, restricted data-folder ACL, private-only opt-in firewall rule; B4 a rate of 0 is a rate
+(`pricing.is_set`); B5/I6 coherent backup snapshot + photo inventory in the manifest + explicit "incomplete" on verify/restore; I7-I9 error keys (`server/errkeys.py`), calm 400 for junk
+JSON, incident number on 500, CSP-safe retry button; I1-I5 vendored the factory guide/consent/telemetry/licence parts, `server/assist.py` + `server/licence.py`, six role courses
+(`guide/`), privacy and licence tabs, report dialog with exact preview, crash capture, online activation against the hub; B6 CI runs every test module and exercises the installed product
+(`tools/journey_exe.py`); I10 `cryptography` for signing + authenticated key file; I11 axe/speed fixes and `tools/ui_lab.py`.
+**Mistakes / lessons:** (1) the vendor script for the licence parts would have overwritten Trip Orders' own `server/ed25519.py` (it also signs the history) - only `afcodes.py` is vendored.
+(2) The first-sign-in consent card covers the page: every screen test must answer it first (`make_authority(consent=...)`). (3) The factory guide button sat over the Save button of side panels
+(z-index); it now sits under panels and dialogs. (4) A licence request and a code pasted in the same second looked "superseded"; the online path no longer counts as a manual paste.
+(5) `aria-pressed` is not allowed on `role=tab`: the tab bars are toggle-button groups. (6) Never copy `node_modules` into the read-only factory checkout (done once, removed at once);
+the UI lab now works in its own folder. **Not provable here:** Windows installer run, a real hub round trip, the Arabic reading pass by a non-developer, branch protection (see `docs/YOUSEF_REVIEW_STATUS.md`).
+
 ---
 
 ## Review follow-up on PR #7 - four findings of the Codex review, all verified and fixed (2026-10-06)

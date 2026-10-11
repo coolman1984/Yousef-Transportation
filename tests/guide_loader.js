@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const root = path.resolve(__dirname, '..');
 const html = fs.readFileSync(path.join(root, 'index.html'), 'utf8');
-const scripts = [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) => m[1]);
+const scripts = [...html.matchAll(/<script src="([^"]+)">/g)].map((m) => m[1]);   // the page's own script order (a test helper, not a sanitiser)
 
 function startup(lang) {
   const noop = () => {};

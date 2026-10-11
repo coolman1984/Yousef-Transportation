@@ -134,6 +134,7 @@
     'common.delete': 'حذف',
     'data.conflict': 'حد غيّر السجل ده قبلك. الشاشة اتحدّثت - كرر تعديلك.',
     'data.deleted': 'تم الحذف',
+    'table.region': 'جدول', 'trips.showMore': 'اعرض المزيد',
     'err.noPerm': 'ما عندكش صلاحية لده.',
     'lic.no_code': 'الصق الكود أولًا.',
     'lic.other_device': 'هذا الكود لجهاز آخر.',

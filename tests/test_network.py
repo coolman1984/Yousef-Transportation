@@ -209,3 +209,33 @@ class ConnectionLimitTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StaticTransferTest(unittest.TestCase):
+    """PERF-01: the program's own pages are sent compressed to a browser that accepts it (the factory budget is 300 kB of script per page)."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('netgz').start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def get(self, path, encoding):
+        c = http.client.HTTPConnection('127.0.0.1', self.S.port, timeout=10)
+        c.request('GET', path, headers={'Accept-Encoding': encoding})
+        r = c.getresponse()
+        body = r.read()
+        c.close()
+        return r, body
+
+    def test_h_scripts_are_gzipped_when_asked_and_identical_when_unpacked(self):
+        import gzip
+        r, packed = self.get('/js/i18n/ar.js', 'gzip')
+        self.assertEqual(r.getheader('Content-Encoding'), 'gzip')
+        self.assertEqual(r.getheader('Vary'), 'Accept-Encoding')
+        r2, plain = self.get('/js/i18n/ar.js', 'identity')
+        self.assertIsNone(r2.getheader('Content-Encoding'))
+        self.assertEqual(gzip.decompress(packed), plain)
+        self.assertLess(len(packed), len(plain) * 0.5)

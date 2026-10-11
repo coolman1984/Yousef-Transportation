@@ -1,0 +1,19 @@
+{
+  "base": "http://127.0.0.1:8197",
+  "budgets": "../Apps-Factory/factory/ui-budgets.json",
+  "init_storage": {
+    "to.prefs": "{\"lang\":\"ar\",\"welcomed\":true}"
+  },
+  "login": {
+    "steps": [
+      ["wait", "#auth-form"],
+      ["fill", "#username", "labadmin"],
+      ["fill", "#password", "Quarter-pass77"],
+      ["click", "button[type=submit]"]
+    ],
+    "ready": "#app-shell"
+  },
+  "route_prefix": "/#/",
+  "routes": ["overview", "trips", "board", "review", "vehicles", "drivers", "people", "places", "reports", "excel", "activity", "settings", "help"],
+  "viewports": [[1366, 768], [390, 844]]
+}

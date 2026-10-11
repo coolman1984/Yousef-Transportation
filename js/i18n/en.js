@@ -134,6 +134,7 @@
     'common.delete': 'Delete',
     'data.conflict': 'Someone changed this record first. The screen was refreshed - please repeat your change.',
     'data.deleted': 'Deleted',
+    'table.region': 'Table', 'trips.showMore': 'Show more',
     'err.noPerm': 'You do not have permission for this.',
     'lic.no_code': 'Paste a code first.',
     'lic.other_device': 'This code is for another PC.',

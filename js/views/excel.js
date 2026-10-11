@@ -235,7 +235,7 @@
     render: function () {
       if (!S) S = fresh();
       var tabs = TABS.map(function (t) { return '<button data-tab="' + t + '" aria-pressed="' + (S.tab === t) + '">' + TO.esc(TO.t('imp.tab.' + t)) + '</button>'; }).join('');
-      return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('nav.excel')) + '</h1><p>' + TO.esc(TO.t('page.excel.d')) + '</p></div><div class="seg" role="tablist">' + tabs + '</div></div><div id="xl-body">' + body() + '</div>';
+      return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('nav.excel')) + '</h1><p>' + TO.esc(TO.t('page.excel.d')) + '</p></div><div class="seg" role="group" data-tablist>' + tabs + '</div></div><div id="xl-body">' + body() + '</div>';
     },
     mount: function (root) {
       if (!S) S = fresh();

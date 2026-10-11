@@ -267,6 +267,7 @@
       '<span class="badge">' + TO.esc(TO.t('sum.ot')) + ' <b class="num">' + Math.round(ot * 100) / 100 + '</b></span>' +
       ['green', 'yellow', 'red'].map(function (k) { return '<button class="badge ' + ({ green: 'ok', yellow: 'warn', red: 'bad' })[k] + '" data-trust="' + k + '" style="border:0;cursor:pointer" aria-pressed="' + (F.trust === k) + '"><i class="trust ' + k + '" style="width:.55rem;height:.55rem;box-shadow:none"></i> <b class="num">' + c[k] + '</b></button>'; }).join('') + '</div>';
   }
+  var LIMIT = 40;   // rows drawn at first (a long list is drawn in steps, so the page opens fast on an old PC)
   function tableRows(rows) {
     if (!rows.length) return U.empty('route', TO.t(TO.data.list('trips').length ? 'trips.none.filter' : 'trips.none.title'), TO.t(TO.data.list('trips').length ? 'trips.none.filter.b' : 'trips.none.body'),
       TO.can('trips.create') && !TO.data.list('trips').length ? '<button class="btn primary" data-new data-guide="trips.new">' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + '</button>' : '');
@@ -281,7 +282,7 @@
       { h: 'f.destination', cell: function (t) { return '<span class="ellipsis" style="display:block;max-width:22rem">' + TO.esc(t.destination || '') + '</span>'; } },
       { h: 'f.km', cell: function (t) { var i = TO.data.trust(t.id); return U.num(i.km); } },
       { h: 'f.status', cell: function (t) { return U.status(t.status); } }
-    ], rows.slice(0, 400), { click: true, rowAttr: function (t) { return 'data-id="' + TO.esc(t.id) + '" data-guide="trips.row"'; } }) + (rows.length > 400 ? '<p class="muted" style="margin-top:.6rem">' + TO.esc(TO.t('trips.more', { n: rows.length - 400 })) + '</p>' : '');
+    ], rows.slice(0, LIMIT), { click: true, rowAttr: function (t) { return 'data-id="' + TO.esc(t.id) + '" data-guide="trips.row"'; } }) + (rows.length > LIMIT ? '<p class="muted trips-more">' + TO.esc(TO.t('trips.more', { n: rows.length - LIMIT })) + ' <button type="button" class="btn sm" data-more>' + TO.esc(TO.t('trips.showMore')) + '</button></p>' : '');
   }
 
   TO.views.trips = TO.withData({
@@ -290,18 +291,19 @@
       var opt = function (list, cur, lab) { return list.map(function (o) { return '<option value="' + TO.esc(o.v) + '"' + (cur === o.v ? ' selected' : '') + '>' + TO.esc(o.l) + '</option>'; }).join(''); };
       return TO.pageHead('nav.trips', 'page.trips.d', TO.can('trips.create') ? '<button class="btn primary" data-new data-guide="trips.new">' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + ' <i class="kbd">N</i></button>' : '') +
         '<div class="toolbar"><input class="input" data-f="q" type="search" value="' + TO.esc(F.q) + '" placeholder="' + TO.esc(TO.t('trips.search')) + '" style="max-width:20rem" aria-label="' + TO.esc(TO.t('trips.search')) + '">' +
-        '<select class="input" data-f="range" style="width:auto">' + opt(RANGES.map(function (r) { return { v: r, l: TO.t('range.' + r) }; }), F.range) + '</select>' +
-        '<select class="input" data-f="cat" style="width:auto"><option value="">' + TO.esc(TO.t('f.category')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(cats.map(function (c) { return { v: c.id, l: TO.data.catName(c.id) }; }), F.cat) + '</select>' +
-        '<select class="input" data-f="status" style="width:auto"><option value="">' + TO.esc(TO.t('f.status')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(['draft', 'sent', 'started', 'finished', 'closed', 'cancelled'].map(function (s) { return { v: s, l: TO.t('status.' + s) }; }), F.status) + '</select></div>' +
+        '<select class="input" data-f="range" style="width:auto" aria-label="' + TO.esc(TO.t('f.date')) + '">' + opt(RANGES.map(function (r) { return { v: r, l: TO.t('range.' + r) }; }), F.range) + '</select>' +
+        '<select class="input" data-f="cat" style="width:auto" aria-label="' + TO.esc(TO.t('f.category')) + '"><option value="">' + TO.esc(TO.t('f.category')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(cats.map(function (c) { return { v: c.id, l: TO.data.catName(c.id) }; }), F.cat) + '</select>' +
+        '<select class="input" data-f="status" style="width:auto" aria-label="' + TO.esc(TO.t('f.status')) + '"><option value="">' + TO.esc(TO.t('f.status')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(['draft', 'sent', 'started', 'finished', 'closed', 'cancelled'].map(function (s) { return { v: s, l: TO.t('status.' + s) }; }), F.status) + '</select></div>' +
         '<div data-sum></div><div data-rows></div>';
     },
     mount: function (root, ctx) {
       function paint() { var rows = filtered(); root.querySelector('[data-sum]').innerHTML = summary(rows); root.querySelector('[data-rows]').innerHTML = tableRows(rows); }
       paint();
-      root.addEventListener('input', TO.debounce(function (e) { var f = e.target.dataset && e.target.dataset.f; if (f === 'q') { F.q = e.target.value; paint(); } }, 120));
-      root.addEventListener('change', function (e) { var f = e.target.dataset && e.target.dataset.f; if (f && f !== 'q') { F[f] = e.target.value; paint(); } });
+      root.addEventListener('input', TO.debounce(function (e) { var f = e.target.dataset && e.target.dataset.f; if (f === 'q') { F.q = e.target.value; LIMIT = 40; paint(); } }, 120));
+      root.addEventListener('change', function (e) { var f = e.target.dataset && e.target.dataset.f; if (f && f !== 'q') { F[f] = e.target.value; LIMIT = 40; paint(); } });
       root.addEventListener('click', function (e) {
         if (e.target.closest('[data-new]')) { newTrip(); return; }
+        if (e.target.closest('[data-more]')) { LIMIT += 200; paint(); return; }
         var tb = e.target.closest('[data-trust]'); if (tb) { F.trust = F.trust === tb.dataset.trust ? '' : tb.dataset.trust; paint(); return; }
         var tr = e.target.closest('tr[data-id]'); if (tr) openTrip(tr.dataset.id);
       });

@@ -214,8 +214,8 @@
     return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t(titleKey)) + '</h1><p>' + TO.esc(TO.t(descKey)) + '</p></div>' + (extra || '') + '</div>';
   }
   function tabs(active, ids, base) {
-    return '<div class="toolbar"><div class="seg" role="tablist">' + ids.map(function (t) {
-      return '<button type="button" role="tab" data-tab="' + t + '" aria-pressed="' + (t === active) + '">' + TO.esc(TO.t('tab.' + t)) + '</button>'; }).join('') + '</div></div>';
+    return '<div class="toolbar"><div class="seg" role="group" data-tablist>' + ids.map(function (t) {
+      return '<button type="button" data-tab="' + t + '" aria-pressed="' + (t === active) + '">' + TO.esc(TO.t('tab.' + t)) + '</button>'; }).join('') + '</div></div>';
   }
   function needData(fn) {
     return function (ctx) {
@@ -243,7 +243,7 @@
       },
       mount: function (root, ctx) {
         var tab = ids.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : ids[0];
-        var tl = root.querySelector('[role="tablist"]');
+        var tl = root.querySelector('[data-tablist]');
         if (tl) tl.addEventListener('click', function (e) { var b = e.target.closest('[data-tab]'); if (b) TO.go(pageId + '?tab=' + b.dataset.tab); });
         mountList(root, LISTS[tab]);
       }

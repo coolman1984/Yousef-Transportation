@@ -449,3 +449,28 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
 /* the guide button sits under the side panels and dialogs (so it never covers their Save button); the coach and the help panel sit above the panels */
 body .afg-fab { z-index: 50; }
 body .afg-panel, body .afg-coach { z-index: 70; }
+.seg-scroll { max-width: 100%; overflow-x: auto; }
+.trips-more { margin-block-start: .6rem; }
+
+/* Settings -> Appearance (was inline styles) */
+.set-block { padding-block: 1.1rem; border-block-end: 1px solid var(--line-2); }
+.set-block-body { margin-block-start: .5rem; }
+.set-reset { padding-block-start: 1rem; }
+.set-h2 { margin-block-end: .8rem; }
+.sticky-card { position: sticky; inset-block-start: calc(var(--topbar-h) + 1rem); }
+.sw[data-sample] i { background: var(--s1); }
+.sw[data-sample] b { background: var(--s2); }
+.sw[data-sample] b em:first-child { background: var(--s3); height: .9rem; }
+.sw[data-sample] b em:last-child { background: var(--s4); inline-size: 60%; }
+.sw[data-sample="auto"] { grid-template-columns: 1fr 1fr; }
+.sw[data-sample="auto"] i { background: linear-gradient(90deg, var(--s1) 0 30%, var(--s2) 30% 100%) }
+.sw[data-sample="auto"] b { background: linear-gradient(90deg, var(--s3) 0 30%, var(--s4) 30% 100%) }
+.sw[data-sample="auto"] b em { display: none; }
+.swatch-font { inline-size: 8.6rem; }
+.font-sample { font-size: 1.5rem; padding: .4rem .2rem; line-height: 1.1; }
+.font-sample span { font-size: .95rem; }
+.font-sample[data-font-sample="plex"] { font-family: 'TO Plex Arabic', 'TO Plex'; }
+.font-sample[data-font-sample="cairo"] { font-family: 'TO Cairo'; }
+.font-sample[data-font-sample="tajawal"] { font-family: 'TO Tajawal'; }
+.font-sample[data-font-sample="kufi"] { font-family: 'TO Kufi'; }
+.font-sample[data-font-sample="system"] { font-family: 'Segoe UI', Tahoma, sans-serif; }

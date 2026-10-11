@@ -5,6 +5,7 @@ Installed with TripOrders-Setup.exe (portable: start.bat); every PC on the netwo
 printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
+import gzip
 import hashlib
 import html
 import re
@@ -85,6 +86,8 @@ STATIC_EXT = {'.html', '.js', '.css', '.svg', '.png', '.ico', '.woff', '.woff2',
 UPLOAD_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.pdf', '.doc', '.docx', '.xls', '.xlsx',
               '.ppt', '.pptx', '.txt', '.csv', '.zip'}
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'}
+COMPRESSIBLE = {'.html', '.js', '.css', '.svg', '.json', '.map'}
+GZIP_CACHE = {}
 INLINE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf'}
 TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
          '.json': 'application/json', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.heic': 'image/heic',
@@ -1333,7 +1336,16 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return self.send(404, {'error': 'File not found'})
         ctype = TYPES.get(ext) or mimetypes.guess_type(rel)[0] or 'application/octet-stream'
-        return self.send(200, data, ctype, {'Cache-Control': 'no-cache'})
+        headers = {'Cache-Control': 'no-cache', 'Vary': 'Accept-Encoding'}
+        if ext in COMPRESSIBLE and 'gzip' in (self.headers.get('Accept-Encoding') or '') and len(data) > 1024:
+            key = (rel, len(data), hash(data))
+            packed = GZIP_CACHE.get(key)
+            if packed is None:
+                packed = GZIP_CACHE[key] = gzip.compress(data, 6, mtime=0)   # the pages are a few hundred kB of text: packed once, then served from memory
+                while len(GZIP_CACHE) > 400:
+                    GZIP_CACHE.pop(next(iter(GZIP_CACHE)))
+            data, headers['Content-Encoding'] = packed, 'gzip'
+        return self.send(200, data, ctype, headers)
 
     def serve_file(self, base, rel, upload=False, src=None, private=False):
         base = os.path.realpath(base)

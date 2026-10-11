@@ -115,7 +115,7 @@
   // cols: [{ h: headerKey, cell: function(row) -> html, cls }]
   U.table = function (cols, rows, opts) {
     opts = opts || {};
-    return '<div class="table-wrap"><table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + TO.esc(TO.t(c.h)) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+    return '<div class="table-wrap" tabindex="0" role="region" aria-label="' + TO.esc(TO.t('table.region')) + '"><table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + TO.esc(TO.t(c.h)) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       rows.map(function (r, i) {
         return '<tr style="--i:' + Math.min(i, 14) + '"' + (opts.rowAttr ? ' ' + opts.rowAttr(r) : '') + (opts.click ? ' tabindex="0" role="button" style="cursor:pointer;--i:' + Math.min(i, 14) + '"' : '') + '>' +
           cols.map(function (c) { return '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.cell(r) + '</td>'; }).join('') + '</tr>';

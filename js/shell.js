@@ -71,7 +71,7 @@
           '<button class="icon-btn menu-btn" data-act="menu" aria-label="' + TO.esc(TO.t('top.menu')) + '">' + TO.icon('menu') + '</button>' +
           '<div class="crumbs" id="crumbs"></div>' +
           '<span class="grow"></span>' +
-          '<button class="search-trigger" data-act="palette" data-tour="search">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
+          '<button class="search-trigger" data-act="palette" data-tour="search" aria-label="' + TO.esc(TO.t('top.search')) + '">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
           '<span class="grow" style="flex:0 0 0"></span>' +
           '<span data-tour="tools" class="row" style="gap:.2rem">' +
           '<span data-guide-slot class="row"></span>' +

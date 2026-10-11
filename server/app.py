@@ -995,7 +995,7 @@ class Handler(BaseHTTPRequestHandler):
                                                       'detail': f'{res["changes"]} records brought back; safety backup before restore: {safety}'}])
             AUTH.log(self.user, self.ip, 'backup-restored', d.get('name'), f'{res["changes"]} records changed back; safety backup: {safety}')
             say(f'Backup {d.get("name")} restored by {self.user} ({self.ip}); {res["changes"]} records; previous data saved as {safety}')
-            return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes']})
+            return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes'], 'incomplete': res.get('incomplete', False), 'photos': res.get('photos')})
         if p == '/api/trash/restore':
             self.need('trash.restore')
             self.need_all_scopes()

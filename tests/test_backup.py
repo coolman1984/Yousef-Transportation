@@ -221,6 +221,119 @@ class CreateTest(BackupBase):
         self.assertFalse(os.path.exists(os.path.join(self.bk, 'uploads', 'cas', sha2 + '.jpg')))
 
 
+class CoherenceTest(BackupBase):
+    def test_q_b5_busy_writes_abort_the_run_instead_of_publishing_mixed_moments(self):
+        """If something is saved during every attempt, no set is published (it used to be published after the third try)."""
+        good = self.b.create('manual')
+        before = sorted(os.listdir(os.path.join(self.bk, 'db')))
+        real = self.sy.auth.backup_to
+        count = {'n': 0}
+
+        def busy(path):
+            real(path)
+            count['n'] += 1
+            self.sy.store.commit('u', 'ip', 'busy', [put('vehicles', f'busy{count["n"]}', plate=f'B {count["n"]}', plateKey=f'b{count["n"]}', active=True)])
+        self.sy.auth.backup_to = busy
+        try:
+            with self.assertRaises(RuntimeError) as e:
+                self.b.create('manual')
+        finally:
+            self.sy.auth.backup_to = real
+        self.assertIn('consistent backup', str(e.exception))
+        self.assertGreaterEqual(count['n'], 5, 'it tried several times first')
+        self.assertEqual(sorted(os.listdir(os.path.join(self.bk, 'db'))), before, 'no set of the failed run is visible, no leftovers')
+        self.assertTrue(self.b.verify(good)['ok'])
+        self.assertTrue(self.b.last_error)
+
+    def test_r_b5_one_busy_moment_is_retried_and_the_set_is_consistent(self):
+        real = self.sy.auth.backup_to
+        count = {'n': 0}
+
+        def once(path):
+            real(path)
+            count['n'] += 1
+            if count['n'] == 1:
+                self.sy.store.commit('u', 'ip', 'one more', [put('vehicles', 'v2', plate='XYZ 9', plateKey='xyz9', active=True)])
+        self.sy.auth.backup_to = once
+        try:
+            n = self.b.create('manual')
+        finally:
+            self.sy.auth.backup_to = real
+        m = self.manifest(n)
+        self.assertEqual(m['journal']['vv'], self.sy.journal.vv(), 'the set holds the state after the late change, in all three databases')
+        c = sqlite3.connect(os.path.join(self.bk, 'db', n))
+        try:
+            self.assertEqual(c.execute("SELECT COUNT(*) FROM vehicles WHERE id='v2'").fetchone()[0], 1)
+        finally:
+            c.close()
+
+
+class AttachmentTest(BackupBase):
+    def add_photo(self, payload):
+        sha = hashlib.sha256(payload).hexdigest()
+        os.makedirs(os.path.join(self.uploads, 'cas'), exist_ok=True)
+        with open(os.path.join(self.uploads, 'cas', sha + '.jpg'), 'wb') as f:
+            f.write(payload)
+        self.sy.store.record_file(f'/files/cas/{sha}.jpg', sha, len(payload), 'image/jpeg', 'u', 'ip')
+        return sha
+
+    def test_s_i6_the_manifest_lists_every_photo_the_data_needs(self):
+        sha = self.add_photo(b'\xff\xd8' + b'odo-' * 100)
+        n = self.b.create('manual')
+        att = self.manifest(n)['attachments']
+        self.assertEqual((att['required'], att['missing'], att['damaged'], att['complete']), (1, 0, 0, True))
+        self.assertEqual(att['files'][0][:2], [f'cas/{sha}.jpg', sha])
+        rep = self.b.verify(n)
+        self.assertTrue(rep['ok'] and rep['complete'] and rep['restorable'])
+
+    def test_t_i6_a_deleted_backup_photo_makes_the_set_unverified_but_still_restorable(self):
+        sha = self.add_photo(b'\xff\xd8' + b'odo-' * 100)
+        n = self.b.create('manual')
+        os.remove(os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg'))
+        rep = self.b.verify(n)
+        self.assertFalse(rep['ok'], 'a set that lost a photo is not "verified"')
+        self.assertFalse(rep['complete'])
+        self.assertTrue(rep['restorable'], 'the business data can still be brought back')
+        self.assertEqual(rep['attachments']['missing'], 1)
+        self.assertTrue(any('photos' in p for p in rep['problems']))
+
+    def test_u_i6_a_photo_damaged_in_the_backup_is_found(self):
+        sha = self.add_photo(b'\xff\xd8' + b'odo-' * 100)
+        n = self.b.create('manual')
+        with open(os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg'), 'r+b') as f:
+            f.seek(10)
+            f.write(b'ZZ')                                   # same size, other content
+        rep = self.b.verify(n)
+        self.assertFalse(rep['ok'])
+        self.assertEqual(rep['attachments']['damaged'], 1)
+
+    def test_v_i6_restore_says_when_photos_are_missing(self):
+        sha = self.add_photo(b'\xff\xd8' + b'odo-' * 100)
+        n = self.b.create('manual')
+        os.remove(os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg'))
+        safety, res = self.b.restore(n, 'u', 'ip')
+        self.assertTrue(res['incomplete'])
+        self.assertEqual(res['photos']['missing'], 1)
+
+    def test_w_i6_a_second_folder_that_cannot_hold_photos_is_reported(self):
+        self.add_photo(b'\xff\xd8' + b'odo-' * 100)
+        extra = os.path.join(self.d, 'usb')
+        self.b.extra = [extra]
+        real = shutil.copy2
+
+        def deny(src, dst, **kw):
+            if os.sep + 'usb' + os.sep in str(dst) and 'uploads' in str(dst):
+                raise OSError(28, 'No space left on device')
+            return real(src, dst, **kw)
+        shutil.copy2 = deny
+        try:
+            self.b.create('manual')
+        finally:
+            shutil.copy2 = real
+        self.assertIn('usb', self.b.last_error)
+        self.assertIn('photo', self.b.last_error)
+
+
 class WatermarkTest(BackupBase):
     def test_g_a_changed_account_alone_makes_the_next_automatic_backup_due(self):
         self.b.create('manual')
@@ -375,10 +488,28 @@ class RestoreToolTest(BackupBase):
         clean = os.path.join(self.d, 'clean3')
         os.makedirs(clean)
         code, out = self.run_tool(clean, 'restore-set', self.bk, n)
-        self.assertEqual(code, 0, out)
+        self.assertEqual(code, 3, out)                      # the data is back, but the result says it is incomplete
         self.assertIn('1 damaged photo', out)
         names = os.listdir(os.path.join(clean, 'data', 'uploads', 'cas'))
         self.assertEqual(names, [hashlib.sha256(good).hexdigest() + '.jpg'], 'only the good photo came back')
+        self.open()
+
+    def test_q2_i6_restore_set_says_incomplete_when_a_needed_photo_is_missing(self):
+        payload = b'\xff\xd8' + b'odo-' * 100
+        sha = hashlib.sha256(payload).hexdigest()
+        os.makedirs(os.path.join(self.uploads, 'cas'), exist_ok=True)
+        with open(os.path.join(self.uploads, 'cas', sha + '.jpg'), 'wb') as f:
+            f.write(payload)
+        self.sy.store.record_file(f'/files/cas/{sha}.jpg', sha, len(payload), 'image/jpeg', 'u', 'ip')
+        n = self.b.create('manual')
+        os.remove(os.path.join(self.bk, 'uploads', 'cas', sha + '.jpg'))
+        self.sy.close()
+        clean = os.path.join(self.d, 'clean-incomplete')
+        os.makedirs(clean)
+        code, out = self.run_tool(clean, 'restore-set', self.bk, n)
+        self.assertEqual(code, 3, out)
+        self.assertIn('INCOMPLETE RESTORE', out)
+        self.assertTrue(os.path.exists(os.path.join(clean, 'data', 'trips.db')), 'the business data did come back')
         self.open()
 
     def _run_in_process(self, cfg_dir, failing, *args):

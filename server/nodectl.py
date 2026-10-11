@@ -151,7 +151,7 @@ def cmd_restore_set(folder, name=None):
     chosen = None
     for n in names:
         rep = backup.verify_set(db, n)
-        if rep['ok']:
+        if rep['restorable']:                             # a set with missing photos is still the best way back for the data; it is said loudly below
             chosen = n
             break
         print(f'Skipped {n}: ' + '; '.join(rep['problems']))
@@ -207,6 +207,7 @@ def cmd_restore_set(folder, name=None):
         print('Nothing was changed.')
         return 1
     photos = bad = 0
+    bk_report = backup.verify_set(db, chosen)
     src_up = os.path.join(folder, 'uploads') if os.path.isdir(os.path.join(folder, 'uploads')) else os.path.join(os.path.dirname(db), 'uploads')
     for root, _, files in os.walk(src_up):
         out = os.path.join(uploads, os.path.relpath(root, src_up))
@@ -217,7 +218,10 @@ def cmd_restore_set(folder, name=None):
             if backup.is_cas_name(f) and backup._sha_file(s_) != backup.cas_hash(f):
                 bad += 1                                  # a photo whose copy no longer matches its checksum is not brought back as if it were fine
                 continue
-            if not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)):
+            same = os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)
+            if same and backup.is_cas_name(f) and backup._sha_file(d) != backup.cas_hash(f):
+                same = False                              # a photo of the same size but other content is damaged: replace it from the (checked) backup
+            if not same:
                 os.makedirs(out, exist_ok=True)
                 shutil.copy2(s_, d + '.part')
                 os.replace(d + '.part', d)
@@ -225,10 +229,23 @@ def cmd_restore_set(folder, name=None):
     print(f'Restored the backup {chosen} into {data}: business data, accounts, history (kept for reading) and {photos} photo file(s).')
     if bad:
         print(f'WARNING: {bad} damaged photo(s) were NOT restored: their copy in the backup does not match its checksum.')
+    inv_missing = sum(len(v) for v in (backup.attachment_problems(uploads, _inventory_of(db, chosen)),) for v in v)
+    incomplete = bool(bad or inv_missing or not bk_report['complete'])
+    if incomplete:
+        print(f'INCOMPLETE RESTORE: the data is back, but {inv_missing} photo file(s) the data refers to are missing or damaged in this PC after the restore'
+              f'{" (the backup could not prove its photos)" if not bk_report["complete"] else ""}. Copy the missing photos from another PC or another backup.')
     if moved:
         print(f'What was in the data folder before is kept in {aside}.')
     print('Now open Trip Orders. It starts as a new device of this PC; log in with the accounts of the backup and check the trips.')
-    return 0
+    return 3 if incomplete else 0
+
+
+def _inventory_of(db, name):
+    try:
+        with open(os.path.join(db, name[:-3] + '.json'), encoding='utf-8') as f:
+            return json.load(f).get('attachments', {}).get('files') or []
+    except (OSError, ValueError):
+        return []
 
 
 def cmd_reset_admin():

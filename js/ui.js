@@ -51,6 +51,13 @@
   };
 
   U.errorText = function (e) { return (e && e.message) || TO.t('common.error'); };
+  /* an error toast; when the error has an entry in the guide it also offers «What do I do?» (HELP-09) */
+  U.errorToast = function (e) {
+    TO.toast(U.errorText(e), 'bad', e && e.data && e.data.incident ? 12000 : 5000);
+    var last = TO.$('#toasts') && TO.$('#toasts').lastElementChild;
+    var btn = TO.guide && TO.guide.errorButton(e);
+    if (last && btn) last.appendChild(btn);
+  };
 
   /* ---------- forms ---------- */
   // field: { key, label, type: text|number|tel|date|datetime|select|bool|textarea|ref, entity, options, required, help, ltr, placeholder, allowNew }
@@ -108,7 +115,7 @@
   // cols: [{ h: headerKey, cell: function(row) -> html, cls }]
   U.table = function (cols, rows, opts) {
     opts = opts || {};
-    return '<div class="table-wrap"><table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + TO.esc(TO.t(c.h)) + '</th>'; }).join('') + '</tr></thead><tbody>' +
+    return '<div class="table-wrap" tabindex="0" role="region" aria-label="' + TO.esc(TO.t('table.region')) + '"><table class="tbl"><thead><tr>' + cols.map(function (c) { return '<th' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + TO.esc(TO.t(c.h)) + '</th>'; }).join('') + '</tr></thead><tbody>' +
       rows.map(function (r, i) {
         return '<tr style="--i:' + Math.min(i, 14) + '"' + (opts.rowAttr ? ' ' + opts.rowAttr(r) : '') + (opts.click ? ' tabindex="0" role="button" style="cursor:pointer;--i:' + Math.min(i, 14) + '"' : '') + '>' +
           cols.map(function (c) { return '<td' + (c.cls ? ' class="' + c.cls + '"' : '') + '>' + c.cell(r) + '</td>'; }).join('') + '</tr>';
@@ -120,7 +127,7 @@
     if (btn) btn.disabled = true;
     return promise.then(function (r) { if (okKey) TO.toast(TO.t(okKey)); return r; }, function (e) {
       if (btn) btn.disabled = false;
-      TO.toast(U.errorText(e), 'bad', 5000);
+      U.errorToast(e);
       throw e;
     });
   };

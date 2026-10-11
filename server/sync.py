@@ -313,7 +313,7 @@ class SyncService:
         self.uploads = uploads
         self.log = log
         self.port = int(cfg.get('sync_port', 8453))
-        self.host = cfg.get('host', '0.0.0.0')
+        self.host = cfg.get('host', '127.0.0.1')
         self.interval = max(1.0, float(cfg.get('sync_interval_seconds', 5)))
         self.overrides = cfg.get('peer_addresses') or {}  # {node_id: "host:port"} from config.json
         self.lock = threading.RLock()

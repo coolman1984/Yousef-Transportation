@@ -50,7 +50,7 @@
         var btn = form.querySelector('button[type=submit]'); btn.disabled = true;
         TO.post(setup ? '/api/auth/setup' : '/api/auth/login', d).then(function () { TO.emit('logged-in'); }, function (err) {
           btn.disabled = false;
-          fail(form, err.code === 401 || err.code === 400 ? (err.message || TO.t('auth.failed')) : TO.t('common.error'));
+          fail(form, err.code === 401 || err.code === 400 ? (err.message || TO.t('auth.failed')) : TO.t('common.error'));  // err.message is already in the screen's language (TO.errMessage)
         });
       });
     },

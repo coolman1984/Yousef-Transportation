@@ -59,6 +59,30 @@ class RuleTest(unittest.TestCase):
         h = pricing.stamp({'ratePerKm': 10, 'rateHistory': []}, {'ratePerKm': 0}, '2026-09-15')
         self.assertEqual(pricing.rates_on({'ratePerKm': 0, 'rateHistory': h}, '2026-09-01'), (10, 0))
 
+    def test_g_zero_is_a_rate_not_a_missing_rate(self):
+        """B4: 10 -> 0 on 1 Sep -> 20 on 1 Oct must keep September at 0 (it used to become 20)."""
+        h = pricing.stamp({'ratePerKm': 10, 'ratePerOtHour': 50, 'rateHistory': []}, {'ratePerKm': 0, 'ratePerOtHour': 50}, '2026-09-01')
+        self.assertEqual(h, [{'until': '2026-09-01', 'ratePerKm': 10, 'ratePerOtHour': 50}])
+        h = pricing.stamp({'ratePerKm': 0, 'ratePerOtHour': 50, 'rateHistory': h}, {'ratePerKm': 20, 'ratePerOtHour': 50}, '2026-10-01')
+        self.assertEqual([(x['until'], x['ratePerKm']) for x in h], [('2026-09-01', 10), ('2026-10-01', 0)])
+        cat = {'ratePerKm': 20, 'ratePerOtHour': 50, 'rateHistory': h}
+        self.assertEqual([pricing.rates_on(cat, d)[0] for d in ('2026-08-31', '2026-09-01', '2026-09-30', '2026-10-01')], [10, 0, 0, 20])
+
+    def test_h_unset_and_zero_are_different(self):
+        self.assertFalse(pricing.is_set(None))
+        self.assertFalse(pricing.is_set(''))
+        self.assertTrue(pricing.is_set(0))
+        # never set -> first real rate applies to the past (as before); a 0 that was typed in is history
+        self.assertEqual(pricing.stamp({'ratePerKm': None, 'rateHistory': []}, {'ratePerKm': 7}, '2026-09-15'), [])
+        self.assertEqual(pricing.stamp({'ratePerKm': 0, 'rateHistory': []}, {'ratePerKm': 7}, '2026-09-15'),
+                         [{'until': '2026-09-15', 'ratePerKm': 0, 'ratePerOtHour': None}])
+
+    def test_i_removing_a_rate_then_setting_it_again_keeps_every_interval(self):
+        h = pricing.stamp({'ratePerKm': 10, 'rateHistory': []}, {'ratePerKm': None}, '2026-09-01')      # field cleared
+        h = pricing.stamp({'ratePerKm': None, 'rateHistory': h}, {'ratePerKm': 20}, '2026-10-01')
+        self.assertEqual(pricing.rates_on({'ratePerKm': 20, 'rateHistory': h}, '2026-08-15')[0], 10)
+        self.assertEqual(pricing.rates_on({'ratePerKm': 20, 'rateHistory': h}, '2026-09-15')[0], 20, 'a cleared (unset) rate is not an interval of its own')
+
 
 class ReportsTest(unittest.TestCase):
     @classmethod
@@ -119,6 +143,25 @@ class ReportsTest(unittest.TestCase):
         self.assertEqual(self.money('2026-09'), (3000, 300))
         rec = self.ac.get('/api/reports?ym=2026-09')['reconciliation'][0]
         self.assertEqual((rec['actualKm'], rec['billedKm'], rec['diffKm']), (200, 220, 20))
+
+    def test_c2_a_free_period_at_zero_is_priced_at_zero_in_report_excel_and_word(self):
+        """B4: the report, the clean Excel export and the Word report all use the 0 rate of the trip's date."""
+        import io
+        import re
+        import zipfile
+        c = self.cat()
+        h = [{'until': '2026-09-15', 'ratePerKm': 0, 'ratePerOtHour': 50}]
+        self.ac.post('/api/commit', {'label': 'restore', 'force': True, 'ops': [{'e': 'tripCategories', 'id': 'cat1', 'op': 'put', 'row': {**{k: v for k, v in c.items() if k != 'ver'}, 'ratePerKm': 20, 'rateHistory': h}}]})
+        al = self.ac.get('/api/reports?ym=2026-09')['allocation'][0]
+        self.assertEqual(al['kmCost'], 2000, '10 Sep at 0/km is free, 20 Sep at 20/km: 100 x 20')
+        xl = self.ac.get('/api/excel/export?layout=clean&ym=2026-09')
+        with zipfile.ZipFile(io.BytesIO(xl)) as z:
+            sheets = ' '.join(z.read(n).decode('utf-8') for n in z.namelist() if n.startswith('xl/worksheets/'))
+        self.assertTrue(re.search(r'<v>2000(\.0)?</v>', sheets), 'the clean export carries the same cost')
+        word = self.ac.get('/api/word/report?ym=2026-09')
+        with zipfile.ZipFile(io.BytesIO(word)) as z:
+            doc = z.read('word/document.xml').decode('utf-8')
+        self.assertRegex(doc, r'2[,.]?000')
 
     def test_d_the_rate_history_is_money_information(self):
         prof = next(p for p in self.ac.get('/api/users')['profiles'] if p['id'] == 'dispatcher')

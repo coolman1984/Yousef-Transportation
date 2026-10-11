@@ -5,6 +5,7 @@ Installed with TripOrders-Setup.exe (portable: start.bat); every PC on the netwo
 printed in the console window. Everybody must log in; what each user may see and
 do is set by the administrator (Users page) and checked here for every request.
 """
+import gzip
 import hashlib
 import html
 import re
@@ -33,6 +34,11 @@ from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E4
 import excel_io  # noqa: E402
 import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
+import afconsent  # noqa: E402,F401
+import aftelemetry  # noqa: E402
+import assist as assist_mod  # noqa: E402
+import errkeys  # noqa: E402
+import licence as licence_mod  # noqa: E402
 import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
@@ -51,7 +57,7 @@ except ImportError:
 from version import COPYRIGHT, DEVELOPER, LICENSE_NOTE, PRODUCT, VERSION  # noqa: E402
 DEFAULT_CONFIG = {
     'port': 8090,
-    'host': '0.0.0.0',
+    'host': '0.0.0.0',              # the office LAN (owner decision 6 Oct 2026, reconfirmed 11 Oct). This PC only: set "127.0.0.1", see docs/NETWORK.md
     'data_dir': 'data',
     'backup_dir': 'backups',
     'extra_backup_dirs': [],
@@ -72,13 +78,16 @@ DEFAULT_CONFIG = {
     'sync_port': 8453,
     'sync_interval_seconds': 5,
     'peer_addresses': {},
+    'secure_cookie': False,         # true only behind HTTPS (a TLS front); on plain http the browser would drop the cookie
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
-STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/')
+STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/', '/guide/')
 STATIC_EXT = {'.html', '.js', '.css', '.svg', '.png', '.ico', '.woff', '.woff2', '.map', '.json'}
 UPLOAD_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic', '.pdf', '.doc', '.docx', '.xls', '.xlsx',
               '.ppt', '.pptx', '.txt', '.csv', '.zip'}
 IMAGE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.heic'}
+COMPRESSIBLE = {'.html', '.js', '.css', '.svg', '.json', '.map'}
+GZIP_CACHE = {}
 INLINE_EXT = {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.pdf'}
 TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8',
          '.json': 'application/json', '.svg': 'image/svg+xml', '.webp': 'image/webp', '.heic': 'image/heic',
@@ -165,7 +174,7 @@ if INSTANCE:
     SECRETS = gwc.Secrets(os.path.join(DATA_DIR, 'gateway.json'))
 else:
     SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = SECRETS = None
-GATE = None
+GATE = ASSIST = LIC = None
 formats.OFFICE_TMP = os.path.join(DATA_DIR, 'tmp')
 OFFICE_STATE = formats.office_state()      # is Microsoft Excel / Word on this PC? (decided once at start)
 
@@ -187,8 +196,42 @@ def store_bytes(data, ext, user='gateway', ip='', user_id=''):
     return src, sha
 
 
+
+
+def guide_facts():
+    """What is already true in the business data, for the guide to tick lessons by itself (counts only, nothing is sent anywhere)."""
+    with STORE.lock:
+        one = lambda sql: STORE.conn.execute(sql).fetchone() is not None  # noqa: E731
+        facts = {'setup.done': one('SELECT 1 FROM trip_categories WHERE deleted=0'), 'trip.first': one('SELECT 1 FROM trips WHERE deleted=0'),
+                 'link.sent': one("SELECT 1 FROM trips WHERE deleted=0 AND COALESCE(link_hash,'')<>''"),
+                 'trip.approved': one("SELECT 1 FROM trips WHERE deleted=0 AND ga_approved='yes'")}
+    facts['person.second'] = len(AUTH.list_users()) > 1
+    facts['backup.made'] = bool(BACKUPS.last_ok) or any(b for b in BACKUPS.list()[:1])
+    return facts
+
+
+def diagnostics_extra():
+    """Allowlisted numbers for a problem report: how old the last backup is, how many PCs, the licence state."""
+    out = {}
+    try:
+        newest = BACKUPS.list()[:1]
+        if newest:
+            out['last_backup_age_h'] = max(0, int((datetime.now() - datetime.fromisoformat(newest[0]['time'])).total_seconds() // 3600))
+        out['pcs'] = max(1, len(SYNC.overview().get('nodes', [])) or 1)
+        out['licence_state'] = LIC.status()['state']
+    except Exception:  # noqa: BLE001 - diagnostics must never fail a report
+        pass
+    return out
+
+
+def site_shop_name():
+    return site_names().get('systemName', '')
+
+
 if INSTANCE:
     GATE = gwc.GatewaySync(STORE, JOURNAL, NODE.id, SECRETS, store_bytes, log_fn=say)
+    ASSIST = assist_mod.Assist(DATA_DIR, CFG, ROOT, ASSETS, extra_diagnostics=diagnostics_extra)
+    LIC = licence_mod.Licence(ASSIST, ROOT, HOME, CFG, shop_name=site_shop_name)
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
                b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\u2026</text></svg>')
@@ -208,6 +251,9 @@ OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
 SHARED_LISTS = ('settings', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')  # not limited to a category
 GA_FIELDS = {'gaApproved', 'gaBy', 'gaAt'}
 LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'status', 'boundDevice'}
+# writes that stay possible while the licence does not give full access: signing in, keeping the data safe, asking for a code, privacy
+OPEN_PREFIXES = ('/api/auth/', '/api/licence/', '/api/consent/', '/api/guide/', '/api/telemetry/', '/api/join', '/api/node/')
+OPEN_WRITES = ('/api/log', '/api/backups', '/api/backups/folder', '/api/devices/export-key', '/api/xlsx')
 SYSTEM_ONLY = ('data.import',)  # driver submissions and amendments are written by the server itself, never by hand
 
 
@@ -218,18 +264,47 @@ PEOPLE_CONTACT_VIEWERS = ('people.view', 'people.manage')
 TRIP_SERVER_FIELDS = GA_FIELDS | LINK_FIELDS | {'locked', 'no', 'source', 'importKey'}  # written by the server through the dedicated trip routes only
 
 
+# Reading: a list is only sent to a person who has a permission that uses it. Without any of them the answer is empty,
+# so the API call itself shows nothing (not only the hidden menu).
+TRIP_READERS = ('overview.view', 'trips.view', 'board.view', 'review.view', 'reports.view', 'trips.create', 'trips.edit', 'trips.send',
+                'trips.approve', 'trips.cancel', 'trips.review', 'trips.amend', 'trips.delete', 'excel.import', 'excel.export', 'print',
+                'report.full', 'finance.view')
+LOOKUP_READERS = TRIP_READERS + ('fleet.view', 'people.view', 'vehicles.manage', 'drivers.manage', 'people.manage', 'places.manage',
+                                 'categories.manage', 'rates.manage', 'settings.view', 'settings.edit', 'data.import', 'files.download')
+TRIP_LISTS = ('trips', 'tripPassengers', 'tripPhotos', 'tripAmendments', 'tripEvents')
+LOOKUP_LISTS = ('tripCategories', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')
+
+
 def project_state(st, perms):
-    """What this user may read: rates need a money permission, contact numbers need the page that shows them.
+    """What this user may read: trips and their lists need a trip-reading permission, the lookup lists (names of vehicles, drivers,
+    places ...) need any working permission, rates need a money permission, contact numbers need the page that shows them.
     Hiding a button is not protection - the response itself is filtered."""
     perms = set(perms)
     out = dict(st)
+    if not perms.intersection(TRIP_READERS):
+        for k in TRIP_LISTS:
+            out[k] = []
+    if not perms.intersection(LOOKUP_READERS):
+        for k in LOOKUP_LISTS:
+            out[k] = []
     if not perms.intersection(RATE_VIEWERS):
-        out['tripCategories'] = [{k: v for k, v in c.items() if k not in RATE_FIELDS} for c in st.get('tripCategories', [])]
+        out['tripCategories'] = [{k: v for k, v in c.items() if k not in RATE_FIELDS} for c in out.get('tripCategories', [])]
     if not perms.intersection(DRIVER_CONTACT_VIEWERS):
-        out['drivers'] = [{k: v for k, v in d.items() if k != 'mobile'} for d in st.get('drivers', [])]
+        out['drivers'] = [{k: v for k, v in d.items() if k != 'mobile'} for d in out.get('drivers', [])]
     if not perms.intersection(PEOPLE_CONTACT_VIEWERS):
-        out['people'] = [{k: v for k, v in p.items() if k != 'mobile'} for p in st.get('people', [])]
+        out['people'] = [{k: v for k, v in p.items() if k != 'mobile'} for p in out.get('people', [])]
     return out
+
+
+def crash_report(exc, path, incident):
+    """A server crash goes to the factory hub as a privacy-safe fingerprint (exception type + the program's own module:function), never the
+    message, the request path of a person or any value. Only with the installation's consent and a configured help service; queued
+    in a bounded offline outbox and sent by a background thread, so a crash report can never slow or fail a request."""
+    if ASSIST is None:
+        return
+    ASSIST.note_error()
+    ASSIST.capture(exc, path)
+    ASSIST.kick()
 
 
 def required(entity, op, changed):
@@ -290,7 +365,8 @@ def commit_guard(u, internal=False):
             if need is SYSTEM_ONLY and e in ('tripAmendments', 'tripEvents'):
                 raise Forbidden('Amendments and driver submissions are written by the system itself. To correct a locked trip use "Change this trip".')
             if not perms.intersection(need):
-                raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".')
+                raise Forbidden(f'You are not allowed to {OP_WORD[op]} {ENTITY_TITLE[e]}. Ask the administrator for the permission "{PERM_LABEL[need[0]]}".',
+                                'err.notAllowedTo', op=op, entity=e, perm=need[0])
     return guard
 
 
@@ -304,7 +380,8 @@ def policy():
         for b in bad:
             log.warning('config.json allowed_networks: "%s" is not a network (example: 192.168.1.0/24) and is ignored', b)
         if CFG.get('allowed_networks') and not nets:
-            nets = None                          # a list with nothing usable in it falls back to the private ranges instead of locking everybody out
+            log.error('config.json allowed_networks has no usable network - only this PC is allowed until it is corrected')
+            nets = []                            # a list with nothing usable in it never widens access: this PC only (fail closed)
         _POLICY.update(names=netpolicy.own_names(CFG.get('allowed_hosts') or []), nets=nets)
     return _POLICY
 
@@ -338,6 +415,10 @@ def site_names():
 
 
 class NotLoggedIn(Exception):
+    pass
+
+
+class LicenceLocked(Exception):
     pass
 
 
@@ -410,7 +491,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def need(self, *perms):
         if not self.can(*perms):
-            raise Forbidden('You do not have permission for this. Ask the administrator for: "' + PERM_LABEL[perms[0]] + '".')
+            raise Forbidden('You do not have permission for this. Ask the administrator for: "' + PERM_LABEL[perms[0]] + '".', 'err.needPerm', perm=perms[0])
 
     def send(self, code, body=b'', ctype='application/json', headers=None):
         if isinstance(body, (dict, list)):
@@ -437,6 +518,13 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != 'HEAD':
             self.wfile.write(body)
+        if code == 200 and self.command == 'POST' and self.u and ASSIST is not None:
+            act = assist_mod.ACTIONS.get(self.path.split('?')[0])
+            if act:
+                try:
+                    ASSIST.note_action(self.u, *act)          # a count of confirmed actions; only with the installation's and the person's consent
+                except Exception:  # noqa: BLE001 - telemetry never fails a request
+                    pass
 
     def link_page(self, token):
         """Opening a personal link shows a tiny page that logs in by itself (js/quick.js). Logging in only happens with the
@@ -470,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200 if ok else 404, page, 'text/html; charset=utf-8', {'Cache-Control': 'no-store'})
 
     def set_session(self, token):
-        return {'Set-Cookie': f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict'}
+        return {'Set-Cookie': f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict' + ('; Secure' if CFG.get('secure_cookie') else '')}
 
     def clear_session(self):
         return {'Set-Cookie': f'{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'}
@@ -487,7 +575,15 @@ class Handler(BaseHTTPRequestHandler):
 
     def json_body(self):
         raw = self.body(200 * 1048576 if self.u else 65536)  # before logging in only small requests
-        return json.loads(raw.decode('utf-8')) if raw else {}
+        if not raw:
+            return {}
+        try:
+            d = json.loads(raw.decode('utf-8'))
+        except (ValueError, UnicodeDecodeError):
+            raise BadRequest('The request must be a JSON object.', 'bad-json')
+        if not isinstance(d, dict):                          # null, a list, a number ...: every handler below reads it as an object
+            raise BadRequest('The request must be a JSON object.', 'bad-json')
+        return d
 
     def denied(self, msg):
         AUTH.log(self.user, self.ip, 'access-denied', self.log_path.split('?')[0], msg)
@@ -496,41 +592,64 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             pass
 
+    def fail(self, code, msg, key='', vars=None, **extra):
+        """An error answer: the English text (logs, scripts) plus the key the screen translates."""
+        if not key:
+            key, vars = errkeys.key_for(msg)
+        body = {'error': msg, **({'key': key} if key else {}), **({'vars': vars} if vars else {}), **extra}
+        return self.send(code, body)
+
     def handle_safely(self, fn):
         if not netpolicy.peer_allowed(self.ip, policy()['nets']):
             log.info('REFUSED peer %s: not this PC and not inside the allowed networks', self.ip)
-            return self.send(403, {'error': 'This PC only accepts connections from the office network. Ask the administrator to allow your network.'})
+            return self.fail(403, 'This PC only accepts connections from the office network. Ask the administrator to allow your network.')
         if not netpolicy.host_allowed(self.headers.get('Host'), policy()['names']):
             host = (self.headers.get('Host') or '')[:80]
             log.info('REFUSED address %r from %s', host, self.ip)
-            return self.send(400 if not host else 403, {'error': 'This is not one of this PC\'s addresses, so the request was refused. '
-                                                        f'Open the program with http://localhost:{CFG["port"]}/ or the address shown in Settings.'})
+            return self.fail(400 if not host else 403, 'This is not one of this PC\'s addresses, so the request was refused. '
+                             f'Open the program with http://localhost:{CFG["port"]}/ or the address shown in Settings.')
         try:
             fn()
         except NotLoggedIn:
-            self.send(401, {'error': 'Please log in.', 'login': True}, headers=self.clear_session())
+            self.send(401, {'error': 'Please log in.', 'key': 'err.signIn', 'login': True}, headers=self.clear_session())
+        except LicenceLocked:
+            self.send(402, {'error': 'The licence does not allow changes now. Everything can still be read, printed, exported and backed up.',
+                            'key': 'err.licence', 'licence': LIC.status()})
         except Forbidden as e:
             log.info('DENIED %s %s %s', self.user, self.log_path, e)
             self.denied(str(e))
-            self.send(403, {'error': str(e)})
+            self.fail(403, str(e), getattr(e, 'key', ''), getattr(e, 'vars', None))
         except AuthError as e:
-            self.send(400, {'error': str(e)})
+            self.fail(400, str(e))
         except Conflict as e:
             log.info('CONFLICT %s %s %s', self.user, self.log_path, e)
             self.send(409, {'error': str(e)})
-        except (BadRequest, ValueError) as e:
+        except BadRequest as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {})})
+            key, vars = (e.code, {}) if str(getattr(e, 'code', '')).startswith('lic.') else errkeys.key_for(str(e))
+            self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {}), **({'key': key, 'vars': vars} if key else {})})
+        except (ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError):
+            # a value the request carried in a form no handler expected (junk type, a number that is not a number ...): a calm 400,
+            # the details stay in the log under an incident number - never in the answer
+            inc = uuid.uuid4().hex[:8]
+            log.warning('BAD INPUT %s %s incident %s\n%s', self.user, self.log_path, inc, traceback.format_exc())
+            self.send(400, {'error': 'The request could not be understood.', 'key': 'err.badRequest', 'incident': inc})
         except (ConnectionError, BrokenPipeError):
             pass
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            inc = uuid.uuid4().hex[:8]
             tb = traceback.format_exc()
-            log.error('ERROR %s %s\n%s', self.user, self.log_path, tb)
+            log.error('ERROR %s %s incident %s\n%s', self.user, self.log_path, inc, tb)
             try:
-                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': tb[-1900:]}])
+                STORE.log_activity(self.user, self.ip, [{'type': 'server-error', 'action': self.log_path, 'detail': f'incident {inc}: ' + tb[-1900:]}])
             except Exception:
                 pass
-            self.send(500, {'error': f'Server error: {e}'})
+            try:
+                crash_report(e, self.log_path, inc)       # I4: privacy-safe fingerprint to the factory hub (only with consent)
+            except Exception:  # noqa: BLE001
+                log.warning('crash report failed', exc_info=True)
+            self.send(500, {'error': 'Something went wrong on the server. Tell the administrator the incident number.', 'key': 'err.server', 'incident': inc,
+                            'vars': {'incident': inc}})
 
     # ------------------------------------------------------------ routing
     def do_HEAD(self):
@@ -548,7 +667,7 @@ class Handler(BaseHTTPRequestHandler):
         u = self.u
         return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'adminPerms': sorted(ADMIN_PERMS),
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
-                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}}
+                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}, 'licence': LIC.status()}
 
     def need_all_scopes(self):
         if self.u['scopes'] is not None:
@@ -587,6 +706,25 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, self.me())
         if p == '/api/state':
             return self.send(200, {**project_state(STORE.state(self.u['scopes']), self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
+        if p == '/api/guide/state':
+            return self.send(200, ASSIST.guide_state(self.u, guide_facts()))
+        if p == '/api/consent/prompt':
+            return self.send(200, ASSIST.prompt_for(self.u, qs.get('lang', 'ar')))
+        if p == '/api/consent/status':
+            return self.send(200, ASSIST.consent_status(self.u))
+        if p == '/api/telemetry/sent':
+            return self.send(200, {'sent': ASSIST.sent_public(self.u)})
+        if p == '/api/telemetry/queue':
+            return self.send(200, ASSIST.queue_state())
+        if p == '/api/telemetry/receiver':
+            self.need('settings.edit')
+            return self.send(200, ASSIST.receiver_public())
+        if p == '/api/licence':
+            return self.send(200, {**LIC.status(), 'request': LIC.public()})
+        if p == '/api/licence/request':
+            return self.send(200, LIC.public())
+        if p == '/api/licence/preview':
+            return self.send(200, LIC.preview(qs.get('kind', 'trial') if qs.get('kind') in licence_mod.KINDS else 'trial', qs.get('ref', '')))
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -653,7 +791,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
-                                   'sync': SYNC.summary(), 'gateway': SECRETS.configured})
+                                   'sync': SYNC.summary(), 'gateway': SECRETS.configured, 'licence': {k: LIC.status()[k] for k in ('state', 'full')}})
         if p == '/api/info':
             urls = lan_urls(CFG['port'])
             if not self.can('settings.view'):
@@ -822,6 +960,10 @@ class Handler(BaseHTTPRequestHandler):
             raise Forbidden('Please change your temporary password first.')
         if NODE.moved:
             raise Forbidden('This PC needs a decision first: its data folder seems to come from another PC. Open the system on this PC itself.')
+        if p.startswith('/api/guide/') or p.startswith('/api/consent/') or p.startswith('/api/telemetry/') or p.startswith('/api/licence/'):
+            return self.assist_post(p)
+        if not (p in OPEN_WRITES or p.startswith(OPEN_PREFIXES)) and not LIC.status()['full']:
+            raise LicenceLocked()          # read, print, export and back up keep working; changing business data waits for a licence code
         if p == '/api/commit':
             d = self.json_body()
             label = str(d.get('label') or 'Change')[:200]
@@ -978,7 +1120,7 @@ class Handler(BaseHTTPRequestHandler):
                                                       'detail': f'{res["changes"]} records brought back; safety backup before restore: {safety}'}])
             AUTH.log(self.user, self.ip, 'backup-restored', d.get('name'), f'{res["changes"]} records changed back; safety backup: {safety}')
             say(f'Backup {d.get("name")} restored by {self.user} ({self.ip}); {res["changes"]} records; previous data saved as {safety}')
-            return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes']})
+            return self.send(200, {'ok': True, 'safety': safety, 'changes': res['changes'], 'incomplete': res.get('incomplete', False), 'photos': res.get('photos')})
         if p == '/api/trash/restore':
             self.need('trash.restore')
             self.need_all_scopes()
@@ -1065,6 +1207,58 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True})
         self.send(404, {'error': 'Not found'})
 
+    # ------------------------------------------------------------ guide, privacy, problem reports, licence
+    def assist_post(self, p):
+        d = self.json_body()
+        try:
+            if p == '/api/guide/progress':
+                return self.send(200, ASSIST.save_progress(self.u, d.get('update'), guide_facts()))
+            if p == '/api/consent/decide':
+                try:
+                    st = ASSIST.decide(self.u, d)
+                except PermissionError:
+                    raise Forbidden('Only a person who may change settings can decide for the whole installation.', 'err.limitedPerm')
+                AUTH.log(self.u['display'], self.ip, 'consent', d.get('scope', 'person'), f'{d.get("decision")} (text {d.get("text_id")})')
+                return self.send(200, st)
+            if p == '/api/telemetry/events':
+                return self.send(200, ASSIST.browser_events(self.u, d.get('events')))
+            if p == '/api/telemetry/feedback/preview':
+                return self.send(200, ASSIST.preview(d))
+            if p == '/api/telemetry/feedback':
+                return self.send(200, ASSIST.feedback(self.u, d))
+            if p == '/api/telemetry/receiver':
+                self.need('settings.edit')
+                res = ASSIST.save_receiver(d)
+                AUTH.log(self.u['display'], self.ip, 'help-service', 'configured' if res['sending'] else 'not configured', 'Help service address/token changed')
+                return self.send(200, res)
+            if p == '/api/telemetry/flush':
+                self.need('settings.edit')
+                ASSIST.kick()
+                return self.send(200, ASSIST.queue_state())
+        except aftelemetry.PrivacyError as e:
+            raise BadRequest(f'This report cannot be sent: {e}')
+        if p == '/api/licence/activate':
+            self.need('settings.edit', 'users.manage')
+            try:
+                st = LIC.activate(d.get('code', ''))
+            except ValueError as e:
+                raise BadRequest(f'This code cannot be used ({e}).', 'lic.' + str(e))
+            AUTH.log(self.u['display'], self.ip, 'licence', st.get('serial') or '-', f'Licence code activated: {st["state"]}')
+            return self.send(200, {**st, 'request': LIC.public()})
+        if p in ('/api/licence/request', '/api/licence/request/retry', '/api/licence/request/clear'):
+            self.need('settings.edit', 'users.manage')
+            if p.endswith('/clear'):
+                return self.send(200, LIC.clear())
+            if p.endswith('/retry'):
+                return self.send(200, LIC.step(force=True))
+            try:
+                LIC.begin(d.get('kind'), str(d.get('ref') or ''), self.u['id'])
+            except LookupError as e:
+                raise BadRequest('This copy cannot ask the company by itself. Send the device code and paste the code you get.', 'lic.' + str(e))
+            AUTH.log(self.u['display'], self.ip, 'licence', d.get('kind'), 'Licence requested from the company')
+            return self.send(200, LIC.step())
+        return self.send(404, {'error': 'Not found'})
+
     # ------------------------------------------------------------ conflicts
     def conflict_list(self):
         out = STORE.conflicts()
@@ -1132,7 +1326,7 @@ class Handler(BaseHTTPRequestHandler):
         parts = rel.split('/')
         ext = os.path.splitext(rel)[1].lower()
         if (any(x in ('', '.', '..') or ':' in x for x in parts) or ext not in STATIC_EXT
-                or not (rel == 'index.html' or len(parts) > 1 and parts[0] in ('css', 'js', 'lib', 'fonts'))):
+                or not (rel == 'index.html' or len(parts) > 1 and parts[0] in ('css', 'js', 'lib', 'fonts', 'guide'))):
             return self.send(404, {'error': 'File not found'})
         if ASSETS is not None:
             data = ASSETS.get(rel)
@@ -1145,7 +1339,16 @@ class Handler(BaseHTTPRequestHandler):
         if data is None:
             return self.send(404, {'error': 'File not found'})
         ctype = TYPES.get(ext) or mimetypes.guess_type(rel)[0] or 'application/octet-stream'
-        return self.send(200, data, ctype, {'Cache-Control': 'no-cache'})
+        headers = {'Cache-Control': 'no-cache', 'Vary': 'Accept-Encoding'}
+        if ext in COMPRESSIBLE and 'gzip' in (self.headers.get('Accept-Encoding') or '') and len(data) > 1024:
+            key = (rel, len(data), hash(data))
+            packed = GZIP_CACHE.get(key)
+            if packed is None:
+                packed = GZIP_CACHE[key] = gzip.compress(data, 6, mtime=0)   # the pages are a few hundred kB of text: packed once, then served from memory
+                while len(GZIP_CACHE) > 400:
+                    GZIP_CACHE.pop(next(iter(GZIP_CACHE)))
+            data, headers['Content-Encoding'] = packed, 'gzip'
+        return self.send(200, data, ctype, headers)
 
     def serve_file(self, base, rel, upload=False, src=None, private=False):
         base = os.path.realpath(base)
@@ -1214,9 +1417,13 @@ def main(background=False):
             BACKUPS.create('startup')
     except Exception as e:
         say('Startup backup failed: ' + str(e))
+    if CFG['host'] not in ('127.0.0.1', 'localhost', '::1'):
+        say(f'WARNING: the web port listens on {CFG["host"]} over plain http - passwords cross the network unencrypted. See docs/NETWORK.md.')
     BACKUPS.start()
     SYNC.start()
     GATE.start()
+    ASSIST.start()
+    LIC.start()
 
     print('=' * 64)
     print(' Trip Orders is running')
@@ -1241,6 +1448,8 @@ def main(background=False):
         pass
     finally:
         GATE.stop()
+        LIC.stop = True
+        ASSIST.close()
         SYNC.shutdown()
         JOURNAL.flush_activity()
         say('Server stopped')

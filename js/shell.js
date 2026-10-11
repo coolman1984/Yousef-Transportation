@@ -71,14 +71,17 @@
           '<button class="icon-btn menu-btn" data-act="menu" aria-label="' + TO.esc(TO.t('top.menu')) + '">' + TO.icon('menu') + '</button>' +
           '<div class="crumbs" id="crumbs"></div>' +
           '<span class="grow"></span>' +
-          '<button class="search-trigger" data-act="palette" data-tour="search">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
+          '<button class="search-trigger" data-act="palette" data-tour="search" aria-label="' + TO.esc(TO.t('top.search')) + '">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
           '<span class="grow" style="flex:0 0 0"></span>' +
           '<span data-tour="tools" class="row" style="gap:.2rem">' +
+          '<span data-guide-slot class="row"></span>' +
+          '<button class="icon-btn" data-act="report" data-guide="report" aria-label="' + TO.esc(TO.t('report.open')) + '" title="' + TO.esc(TO.t('report.open')) + '">' + TO.icon('alert') + '</button>' +
           '<button class="icon-btn" data-act="lang" aria-label="' + TO.esc(TO.t('top.lang')) + '" title="' + TO.esc(TO.t('top.lang')) + ' (L)">' + TO.icon('globe') + '</button>' +
           '<button class="icon-btn" data-act="theme" id="theme-btn" aria-label="' + TO.esc(TO.t('top.theme')) + '" title="' + TO.esc(TO.t('top.theme')) + ' (T)"></button>' +
           '<button class="icon-btn" data-act="keys" aria-label="' + TO.esc(TO.t('top.shortcuts')) + '" title="' + TO.esc(TO.t('top.shortcuts')) + ' (?)">' + TO.icon('keyboard') + '</button>' +
           '</span>' +
         '</header>' +
+        '<div id="lic-banner"></div>' +
         '<main class="content" id="view" tabindex="-1"></main>' +
       '</div>' +
       '<div id="panels" aria-live="polite"></div>' +
@@ -196,6 +199,8 @@
       { icon: 'globe', label: TO.t('act.lang.toggle'), group: TO.t('pal.g.appearance'), hint: 'L', run: function () { TO.prefs.toggleLang(); } },
       { icon: 'collapse', label: TO.t('act.collapse'), group: TO.t('pal.g.appearance'), hint: '[', run: function () { toggleCollapse(); } },
       { icon: 'keyboard', label: TO.t('act.shortcuts'), group: TO.t('pal.g.actions'), hint: '?', run: function () { showKeys(); } },
+      { icon: 'alert', label: TO.t('report.open'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.guide.report({}); } },
+      { icon: 'help', label: TO.t('guide.open'), group: TO.t('pal.g.actions'), hint: 'F1', run: function () { TO.guide.open(); } },
       { icon: 'play', label: TO.t('act.tour'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.tour.start(); } },
       { icon: 'present', label: TO.t('act.slides'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.slides.open(); } },
       { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } },
@@ -311,6 +316,7 @@
     else if (a === 'keys') showKeys();
     else if (a === 'collapse') toggleCollapse();
     else if (a === 'account') openAccount();
+    else if (a === 'report') TO.guide.report({});
     else if (a === 'menu') { var app = TO.$('#app-shell'); app.dataset.menu = app.dataset.menu === '1' ? 0 : 1; }
   });
   document.addEventListener('click', function (e) {   // on a phone the menu closes after choosing a page

@@ -61,18 +61,55 @@ def _stream(key, nonce, n):
     return out[:n]
 
 
+def _aead():
+    try:
+        from cryptography.hazmat.primitives.ciphers.aead import ChaCha20Poly1305
+        return ChaCha20Poly1305
+    except ImportError:
+        return None
+
+
+def _aad(box):
+    """What the authenticated format protects besides the secret: the version, the key derivation and every field of the file's meta."""
+    head = {k: v for k, v in box.items() if k not in ('ct', 'tag')}
+    return json.dumps(head, sort_keys=True, separators=(',', ':'), ensure_ascii=False).encode('utf-8')
+
+
 def seal(secret, passphrase, meta):
-    salt, nonce = secrets.token_bytes(16), secrets.token_bytes(16)
-    ke, km = _keys(passphrase, salt)
-    ct = bytes(a ^ b for a, b in zip(secret, _stream(ke, nonce, len(secret))))
-    tag = hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest()
-    return {'v': 1, 'kdf': 'scrypt-n32768-r8-p1', 'salt': salt.hex(), 'nonce': nonce.hex(), 'ct': ct.hex(), 'tag': tag, **meta}
+    """The administrator key as a passphrase-protected file. Version 2: scrypt + ChaCha20-Poly1305 (maintained library), the whole header
+    is authenticated, so changing the cluster or the key it names makes the file unreadable. Without the library (portable copy) the
+    older version 1 is written; unseal reads both, so a file can always be recovered."""
+    AEAD = _aead()
+    salt = secrets.token_bytes(16)
+    if AEAD is None:
+        nonce = secrets.token_bytes(16)
+        ke, km = _keys(passphrase, salt)
+        ct = bytes(a ^ b for a, b in zip(secret, _stream(ke, nonce, len(secret))))
+        tag = hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest()
+        return {'v': 1, 'kdf': 'scrypt-n32768-r8-p1', 'salt': salt.hex(), 'nonce': nonce.hex(), 'ct': ct.hex(), 'tag': tag, **meta}
+    nonce = secrets.token_bytes(12)
+    box = {'v': 2, 'kdf': 'scrypt-n32768-r8-p1', 'aead': 'chacha20poly1305', 'salt': salt.hex(), 'nonce': nonce.hex(), **meta}
+    key = _keys(passphrase, salt)[0]
+    box['ct'] = AEAD(key).encrypt(nonce, bytes(secret), _aad(box)).hex()
+    return box
 
 
 def unseal(box, passphrase):
-    salt, nonce, ct = bytes.fromhex(box['salt']), bytes.fromhex(box['nonce']), bytes.fromhex(box['ct'])
+    version = box.get('v')
+    salt, nonce = bytes.fromhex(box['salt']), bytes.fromhex(box['nonce'])
+    if version == 2:
+        AEAD = _aead()
+        if AEAD is None:
+            raise ValueError('This key file needs the installed program (it uses the cryptography library).')
+        try:
+            return AEAD(_keys(passphrase, salt)[0]).decrypt(nonce, bytes.fromhex(box['ct']), _aad(box))
+        except Exception:  # noqa: BLE001 - InvalidTag: wrong passphrase or a changed file; never say which
+            raise ValueError('Wrong passphrase or damaged file.') from None
+    if version != 1:
+        raise ValueError('This key file comes from a newer version of the program.')
+    ct = bytes.fromhex(box['ct'])
     ke, km = _keys(passphrase, salt)
-    if not hmac.compare_digest(hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest(), box['tag']):
+    if not isinstance(box.get('tag'), str) or not hmac.compare_digest(hmac.new(km, salt + nonce + ct, hashlib.sha256).hexdigest(), box['tag']):
         raise ValueError('Wrong passphrase or damaged file.')
     return bytes(a ^ b for a, b in zip(ct, _stream(ke, nonce, len(ct))))
 
@@ -151,7 +188,7 @@ def cmd_restore_set(folder, name=None):
     chosen = None
     for n in names:
         rep = backup.verify_set(db, n)
-        if rep['ok']:
+        if rep['restorable']:                             # a set with missing photos is still the best way back for the data; it is said loudly below
             chosen = n
             break
         print(f'Skipped {n}: ' + '; '.join(rep['problems']))
@@ -207,6 +244,7 @@ def cmd_restore_set(folder, name=None):
         print('Nothing was changed.')
         return 1
     photos = bad = 0
+    bk_report = backup.verify_set(db, chosen)
     src_up = os.path.join(folder, 'uploads') if os.path.isdir(os.path.join(folder, 'uploads')) else os.path.join(os.path.dirname(db), 'uploads')
     for root, _, files in os.walk(src_up):
         out = os.path.join(uploads, os.path.relpath(root, src_up))
@@ -217,7 +255,10 @@ def cmd_restore_set(folder, name=None):
             if backup.is_cas_name(f) and backup._sha_file(s_) != backup.cas_hash(f):
                 bad += 1                                  # a photo whose copy no longer matches its checksum is not brought back as if it were fine
                 continue
-            if not (os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)):
+            same = os.path.exists(d) and os.path.getsize(d) == os.path.getsize(s_)
+            if same and backup.is_cas_name(f) and backup._sha_file(d) != backup.cas_hash(f):
+                same = False                              # a photo of the same size but other content is damaged: replace it from the (checked) backup
+            if not same:
                 os.makedirs(out, exist_ok=True)
                 shutil.copy2(s_, d + '.part')
                 os.replace(d + '.part', d)
@@ -225,10 +266,23 @@ def cmd_restore_set(folder, name=None):
     print(f'Restored the backup {chosen} into {data}: business data, accounts, history (kept for reading) and {photos} photo file(s).')
     if bad:
         print(f'WARNING: {bad} damaged photo(s) were NOT restored: their copy in the backup does not match its checksum.')
+    inv_missing = sum(len(v) for v in (backup.attachment_problems(uploads, _inventory_of(db, chosen)),) for v in v)
+    incomplete = bool(bad or inv_missing or not bk_report['complete'])
+    if incomplete:
+        print(f'INCOMPLETE RESTORE: the data is back, but {inv_missing} photo file(s) the data refers to are missing or damaged in this PC after the restore'
+              f'{" (the backup could not prove its photos)" if not bk_report["complete"] else ""}. Copy the missing photos from another PC or another backup.')
     if moved:
         print(f'What was in the data folder before is kept in {aside}.')
     print('Now open Trip Orders. It starts as a new device of this PC; log in with the accounts of the backup and check the trips.')
-    return 0
+    return 3 if incomplete else 0
+
+
+def _inventory_of(db, name):
+    try:
+        with open(os.path.join(db, name[:-3] + '.json'), encoding='utf-8') as f:
+            return json.load(f).get('attachments', {}).get('files') or []
+    except (OSError, ValueError):
+        return []
 
 
 def cmd_reset_admin():

@@ -1,0 +1,3281 @@
+{
+ "when": "2026-10-11T09:53:56.316Z",
+ "cpu": 4,
+ "budgets": "ui-budgets/1 (2026-10-08)",
+ "results": [
+  {
+   "route": "overview",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2368,
+   "ttfb": 2,
+   "dcl": 356,
+   "fcp": 720,
+   "lcp": 720,
+   "cls": 0.005,
+   "shifts": [],
+   "tbt": 192,
+   "inp": 0,
+   "frame_frames": 120,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 376,
+   "heap_mb": 6,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 296,
+    "document": 1,
+    "fetch": 130,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "overview-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 720,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 720,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.005,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 192,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 376,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 6,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "trips",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2466,
+   "ttfb": 2,
+   "dcl": 320,
+   "fcp": 708,
+   "lcp": 708,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 257,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 1033,
+   "heap_mb": 11,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 74,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "trips-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 708,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 708,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 257,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1033,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 11,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "board",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2433,
+   "ttfb": 2,
+   "dcl": 335,
+   "fcp": 696,
+   "lcp": 696,
+   "cls": 0,
+   "shifts": [],
+   "tbt": 276,
+   "inp": 0,
+   "frame_frames": 120,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 1692,
+   "heap_mb": 21,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 74,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "board-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 696,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 696,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 276,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1692,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 21,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "review",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2048,
+   "ttfb": 3,
+   "dcl": 299,
+   "fcp": 476,
+   "lcp": 476,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 13,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 219,
+   "heap_mb": 13,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "review-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 476,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 476,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 13,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 219,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 13,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "vehicles",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2133,
+   "ttfb": 2,
+   "dcl": 294,
+   "fcp": 540,
+   "lcp": 540,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 45,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 558,
+   "heap_mb": 27,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "vehicles-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 540,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 540,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 45,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 558,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 27,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "drivers",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2144,
+   "ttfb": 3,
+   "dcl": 308,
+   "fcp": 532,
+   "lcp": 532,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 49,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 532,
+   "heap_mb": 31,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "drivers-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 532,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 532,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 49,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 532,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 31,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "people",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2342,
+   "ttfb": 2,
+   "dcl": 296,
+   "fcp": 616,
+   "lcp": 616,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 194,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 1016,
+   "heap_mb": 37,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "people-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 616,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 616,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 194,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1016,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 37,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "places",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2097,
+   "ttfb": 2,
+   "dcl": 299,
+   "fcp": 516,
+   "lcp": 516,
+   "cls": 0,
+   "shifts": [],
+   "tbt": 33,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 231,
+   "heap_mb": 20,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "places-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 516,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 516,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 33,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 231,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 20,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "reports",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2149,
+   "ttfb": 2,
+   "dcl": 325,
+   "fcp": 520,
+   "lcp": 520,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 10,
+   "inp": 0,
+   "frame_frames": 112,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0.018,
+   "frame_fps": 55.1,
+   "dom": 707,
+   "heap_mb": 6,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 90,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "reports-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 520,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 520,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 10,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0.018,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 707,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 6,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "excel",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2095,
+   "ttfb": 2,
+   "dcl": 302,
+   "fcp": 504,
+   "lcp": 504,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 29,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 259,
+   "heap_mb": 15,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "excel-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 504,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 504,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 29,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 259,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 15,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "activity",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2279,
+   "ttfb": 2,
+   "dcl": 318,
+   "fcp": 500,
+   "lcp": 500,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 101,
+   "inp": 0,
+   "frame_frames": 119,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0.017,
+   "frame_fps": 59,
+   "dom": 2025,
+   "heap_mb": 18,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 202,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "activity-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 500,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 500,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 101,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0.017,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 2025,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 18,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "settings",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2222,
+   "ttfb": 2,
+   "dcl": 310,
+   "fcp": 580,
+   "lcp": 580,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 106,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 363,
+   "heap_mb": 27,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 351,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "settings-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 580,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 580,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 106,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 363,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 27,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "help",
+   "viewport": "1366x768",
+   "cpu": 4,
+   "load_ms": 2090,
+   "ttfb": 2,
+   "dcl": 311,
+   "fcp": 504,
+   "lcp": 504,
+   "cls": 0,
+   "shifts": [],
+   "tbt": 28,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 252,
+   "heap_mb": 10,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "help-1366.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 504,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 504,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 28,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 252,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 10,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "overview",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2214,
+   "ttfb": 2,
+   "dcl": 330,
+   "fcp": 620,
+   "lcp": 708,
+   "cls": 0.002,
+   "shifts": [],
+   "tbt": 110,
+   "inp": 0,
+   "frame_frames": 120,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 376,
+   "heap_mb": 6,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 130,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "overview-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 620,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 708,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.002,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 110,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 376,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 6,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "trips",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2296,
+   "ttfb": 2,
+   "dcl": 309,
+   "fcp": 644,
+   "lcp": 644,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 183,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 1033,
+   "heap_mb": 12,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "trips-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 644,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 644,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 183,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1033,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 12,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "board",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2424,
+   "ttfb": 2,
+   "dcl": 401,
+   "fcp": 740,
+   "lcp": 740,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 164,
+   "inp": 0,
+   "frame_frames": 120,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0.008,
+   "frame_fps": 59.5,
+   "dom": 1692,
+   "heap_mb": 13,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "board-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 740,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 740,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 164,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0.008,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1692,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 13,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "review",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2021,
+   "ttfb": 2,
+   "dcl": 297,
+   "fcp": 472,
+   "lcp": 556,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 7,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 219,
+   "heap_mb": 12,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "review-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 472,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 556,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 7,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 219,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 12,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "vehicles",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2114,
+   "ttfb": 2,
+   "dcl": 296,
+   "fcp": 528,
+   "lcp": 528,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 60,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 558,
+   "heap_mb": 26,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "vehicles-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 528,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 528,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 60,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 558,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 26,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "drivers",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2118,
+   "ttfb": 3,
+   "dcl": 304,
+   "fcp": 516,
+   "lcp": 516,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 41,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 532,
+   "heap_mb": 32,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "drivers-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 516,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 516,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 41,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 532,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 32,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "people",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2305,
+   "ttfb": 2,
+   "dcl": 298,
+   "fcp": 620,
+   "lcp": 620,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 176,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 1016,
+   "heap_mb": 24,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "people-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 620,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 620,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 176,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 1016,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 24,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "places",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2049,
+   "ttfb": 2,
+   "dcl": 292,
+   "fcp": 476,
+   "lcp": 476,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 21,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 231,
+   "heap_mb": 19,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "places-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 476,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 476,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 21,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 231,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 19,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "reports",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2140,
+   "ttfb": 2,
+   "dcl": 312,
+   "fcp": 496,
+   "lcp": 580,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 15,
+   "inp": 0,
+   "frame_frames": 117,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0.017,
+   "frame_fps": 57.1,
+   "dom": 707,
+   "heap_mb": 6,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 90,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "reports-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 496,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 580,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 15,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0.017,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 707,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 6,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "excel",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2089,
+   "ttfb": 2,
+   "dcl": 316,
+   "fcp": 504,
+   "lcp": 504,
+   "cls": 0.005,
+   "shifts": [],
+   "tbt": 21,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 259,
+   "heap_mb": 16,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "excel-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 504,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 504,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.005,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 21,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 259,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 16,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "activity",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2265,
+   "ttfb": 2,
+   "dcl": 303,
+   "fcp": 468,
+   "lcp": 468,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 119,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.7,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 2025,
+   "heap_mb": 20,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 202,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "activity-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 468,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 468,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 119,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.7,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 2025,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 20,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "settings",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2220,
+   "ttfb": 2,
+   "dcl": 301,
+   "fcp": 576,
+   "lcp": 576,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 96,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 363,
+   "heap_mb": 21,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 351,
+    "document": 1,
+    "fetch": 73,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": [
+     "heading-order(moderate,1)"
+    ]
+   },
+   "errors": [],
+   "screenshot": "settings-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 576,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 576,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 96,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 363,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 21,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  },
+  {
+   "route": "help",
+   "viewport": "390x844",
+   "cpu": 4,
+   "load_ms": 2385,
+   "ttfb": 2,
+   "dcl": 608,
+   "fcp": 792,
+   "lcp": 792,
+   "cls": 0.001,
+   "shifts": [],
+   "tbt": 38,
+   "inp": 0,
+   "frame_frames": 121,
+   "frame_p50": 16.7,
+   "frame_p95": 16.8,
+   "frame_dropped": 0,
+   "frame_fps": 60,
+   "dom": 252,
+   "heap_mb": 44,
+   "kb": {
+    "script": 128,
+    "stylesheet": 14,
+    "font": 251,
+    "document": 1,
+    "fetch": 74,
+    "other": 0
+   },
+   "overflow": [],
+   "a11y": {
+    "skipped": false,
+    "serious": 0,
+    "critical": 0,
+    "ids": []
+   },
+   "errors": [],
+   "screenshot": "help-390.png",
+   "checks": [
+    {
+     "name": "FCP",
+     "value": 792,
+     "max": 1800,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "LCP",
+     "value": 792,
+     "max": 2500,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "CLS",
+     "value": 0.001,
+     "max": 0.1,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "TBT (CPU ×4)",
+     "value": 38,
+     "max": 300,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "INP",
+     "value": 0,
+     "max": 200,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "frame p95",
+     "value": 16.8,
+     "max": 34,
+     "unit": "ms",
+     "ok": true
+    },
+    {
+     "name": "dropped frames",
+     "value": 0,
+     "max": 0.35,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "DOM nodes",
+     "value": 252,
+     "max": 3000,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "JS heap",
+     "value": 44,
+     "max": 60,
+     "unit": "MB",
+     "ok": true
+    },
+    {
+     "name": "overflow",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "a11y serious+critical",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    },
+    {
+     "name": "console errors",
+     "value": 0,
+     "max": 0,
+     "unit": "",
+     "ok": true
+    }
+   ],
+   "pass": true
+  }
+ ]
+}

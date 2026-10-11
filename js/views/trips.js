@@ -59,8 +59,8 @@
     var fields = tripFields(true);
     var last = TO.data.list('tripCategories')[0];
     var el = TO.dialog({ title: TO.t('trip.new'), wide: true,
-      body: '<form id="nt-form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) + '</form><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
-      footer: '<span class="faint grow">' + TO.esc(TO.t('trip.new.hint')) + '</span><button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save>' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button>' });
+      body: '<form id="nt-form" data-guide="trips.form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) + '</form><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+      footer: '<span class="faint grow">' + TO.esc(TO.t('trip.new.hint')) + '</span><button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save data-guide="trips.save">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button>' });
     var form = el.querySelector('#nt-form'), err = el.querySelector('.err');
     // choosing a requester fills their department
     form.querySelector('[name="requesterId"]').addEventListener('change', function () {
@@ -104,7 +104,7 @@
     var el = TO.dialog({ title: TO.t('amend.title'),
       body: '<p class="muted">' + TO.esc(TO.t('amend.body')) + '</p><div class="field"><label for="am-f">' + TO.esc(TO.t('amend.field')) + '</label><select class="input" id="am-f">' +
         AMEND.map(function (a) { return '<option value="' + a[0] + '">' + TO.esc(TO.t(FIELD_KEY[a[0]])) + '</option>'; }).join('') + '</select></div><div id="am-v"></div>' +
-        '<div class="field"><label for="am-r">' + TO.esc(TO.t('amend.reason')) + ' <span class="faint">*</span></label><input class="input" id="am-r" autocomplete="off"></div><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+        '<div class="field"><label for="am-r">' + TO.esc(TO.t('amend.reason')) + ' <span class="faint">*</span></label><input class="input" id="am-r" data-guide="amend.reason" autocomplete="off"></div><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
       footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t('amend.save')) + '</button>' });
     var sel = el.querySelector('#am-f'), holder = el.querySelector('#am-v'), err = el.querySelector('.err'), current;
     function draw() {
@@ -143,7 +143,7 @@
       if (!ready) body += '<div class="tip">' + TO.icon('info') + '<span>' + TO.esc(TO.t('link.notset')) + '</span></div>';
       else {
         body += '<p class="muted">' + TO.esc(t.linkHash ? (t.boundDevice ? TO.t('link.bound') : TO.t('link.made')) : TO.t('link.none')) + '</p>' +
-          '<div class="row wrap" style="gap:.5rem"><button class="btn primary" data-a="wa">' + TO.icon('chat', 'sm') + TO.esc(TO.t('link.wa')) + '</button>' +
+          '<div class="row wrap" style="gap:.5rem"><button class="btn primary" data-a="wa" data-guide="trip.link">' + TO.icon('chat', 'sm') + TO.esc(TO.t('link.wa')) + '</button>' +
           '<button class="btn" data-a="copylink">' + TO.icon('copy', 'sm') + TO.esc(TO.t('link.copy')) + '</button>' +
           (t.linkHash ? '<button class="btn" data-a="newlink">' + TO.esc(TO.t('link.new')) + '</button>' : '') +
           (t.boundDevice && TO.can('trips.amend') ? '<button class="btn" data-a="release">' + TO.esc(TO.t('link.release')) + '</button>' : '') + '</div>';
@@ -168,7 +168,7 @@
     return TO.t('wa.msg', { no: t.no, date: U.day(t.date), plate: v.plate || '–', dest: t.destination || '–', link: r.url });
   }
   function sendLink(t, replace, sent, then) {
-    return TO.post('/api/trips/link', { id: t.id, replace: !!replace, sent: !!sent }).then(function (r) { return TO.data.load().then(function () { then(r); refreshPanel(t.id); TO.rerender(); }); },
+    return TO.post('/api/trips/link', { id: t.id, replace: !!replace, sent: !!sent }).then(function (r) { return TO.data.load().then(function () { then(r); refreshPanel(t.id); TO.rerender(); if (TO.guide) TO.guide.signal('trip.link'); }); },
       function (e) { TO.toast(U.errorText(e), 'bad', 6000); });
   }
 
@@ -205,8 +205,8 @@
     var b = '';
     if (t.status !== 'cancelled') {
       if (TO.can('trips.cancel')) b += '<button class="btn danger" data-a="cancel" style="margin-inline-end:auto">' + TO.esc(TO.t('trip.cancel')) + '</button>';
-      if (TO.can('trips.approve') && t.gaApproved !== 'yes') b += '<button class="btn" data-a="approve">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.approve')) + '</button>';
-      if (t.locked ? TO.can(['trips.amend', 'trips.review']) : TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="amend">' + TO.esc(TO.t('trip.amend')) + '</button>';
+      if (TO.can('trips.approve') && t.gaApproved !== 'yes') b += '<button class="btn" data-a="approve" data-guide="trip.approve">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.approve')) + '</button>';
+      if (t.locked ? TO.can(['trips.amend', 'trips.review']) : TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="amend" data-guide="trip.amend">' + TO.esc(TO.t('trip.amend')) + '</button>';
     }
     return b;
   }
@@ -224,7 +224,7 @@
           else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
           else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
           else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
-          else if (a.dataset.a === 'approve') U.run(TO.post('/api/trips/approve', { id: id, yes: true }), 'trip.approved').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
+          else if (a.dataset.a === 'approve') U.run(TO.post('/api/trips/approve', { id: id, yes: true }), 'trip.approved').then(function () { if (TO.guide) TO.guide.signal('trip.approve'); return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'cancel') U.confirm({ title: TO.t('trip.cancel'), body: TO.t('trip.cancel.body'), reason: TO.t('amend.reason'), danger: true, ok: TO.t('trip.cancel') }).then(function (reason) {
             if (reason) U.run(TO.post('/api/trips/cancel', { id: id, reason: reason }), 'trip.cancelled').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           });
@@ -267,9 +267,10 @@
       '<span class="badge">' + TO.esc(TO.t('sum.ot')) + ' <b class="num">' + Math.round(ot * 100) / 100 + '</b></span>' +
       ['green', 'yellow', 'red'].map(function (k) { return '<button class="badge ' + ({ green: 'ok', yellow: 'warn', red: 'bad' })[k] + '" data-trust="' + k + '" style="border:0;cursor:pointer" aria-pressed="' + (F.trust === k) + '"><i class="trust ' + k + '" style="width:.55rem;height:.55rem;box-shadow:none"></i> <b class="num">' + c[k] + '</b></button>'; }).join('') + '</div>';
   }
+  var LIMIT = 40;   // rows drawn at first (a long list is drawn in steps, so the page opens fast on an old PC)
   function tableRows(rows) {
     if (!rows.length) return U.empty('route', TO.t(TO.data.list('trips').length ? 'trips.none.filter' : 'trips.none.title'), TO.t(TO.data.list('trips').length ? 'trips.none.filter.b' : 'trips.none.body'),
-      TO.can('trips.create') && !TO.data.list('trips').length ? '<button class="btn primary" data-new>' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + '</button>' : '');
+      TO.can('trips.create') && !TO.data.list('trips').length ? '<button class="btn primary" data-new data-guide="trips.new">' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + '</button>' : '');
     return U.table([
       { h: 'f.trust', cell: function (t) { var i = TO.data.trust(t.id); return U.trust(i.trust, i.reasons); } },
       { h: 'f.no', cell: function (t) { return '<b class="num">' + TO.esc(t.no) + '</b>'; } },
@@ -281,27 +282,28 @@
       { h: 'f.destination', cell: function (t) { return '<span class="ellipsis" style="display:block;max-width:22rem">' + TO.esc(t.destination || '') + '</span>'; } },
       { h: 'f.km', cell: function (t) { var i = TO.data.trust(t.id); return U.num(i.km); } },
       { h: 'f.status', cell: function (t) { return U.status(t.status); } }
-    ], rows.slice(0, 400), { click: true, rowAttr: function (t) { return 'data-id="' + TO.esc(t.id) + '"'; } }) + (rows.length > 400 ? '<p class="muted" style="margin-top:.6rem">' + TO.esc(TO.t('trips.more', { n: rows.length - 400 })) + '</p>' : '');
+    ], rows.slice(0, LIMIT), { click: true, rowAttr: function (t) { return 'data-id="' + TO.esc(t.id) + '" data-guide="trips.row"'; } }) + (rows.length > LIMIT ? '<p class="muted trips-more">' + TO.esc(TO.t('trips.more', { n: rows.length - LIMIT })) + ' <button type="button" class="btn sm" data-more>' + TO.esc(TO.t('trips.showMore')) + '</button></p>' : '');
   }
 
   TO.views.trips = TO.withData({
     render: function () {
       var cats = TO.data.list('tripCategories');
       var opt = function (list, cur, lab) { return list.map(function (o) { return '<option value="' + TO.esc(o.v) + '"' + (cur === o.v ? ' selected' : '') + '>' + TO.esc(o.l) + '</option>'; }).join(''); };
-      return TO.pageHead('nav.trips', 'page.trips.d', TO.can('trips.create') ? '<button class="btn primary" data-new>' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + ' <i class="kbd">N</i></button>' : '') +
+      return TO.pageHead('nav.trips', 'page.trips.d', TO.can('trips.create') ? '<button class="btn primary" data-new data-guide="trips.new">' + TO.icon('plus', 'sm') + TO.esc(TO.t('trip.new')) + ' <i class="kbd">N</i></button>' : '') +
         '<div class="toolbar"><input class="input" data-f="q" type="search" value="' + TO.esc(F.q) + '" placeholder="' + TO.esc(TO.t('trips.search')) + '" style="max-width:20rem" aria-label="' + TO.esc(TO.t('trips.search')) + '">' +
-        '<select class="input" data-f="range" style="width:auto">' + opt(RANGES.map(function (r) { return { v: r, l: TO.t('range.' + r) }; }), F.range) + '</select>' +
-        '<select class="input" data-f="cat" style="width:auto"><option value="">' + TO.esc(TO.t('f.category')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(cats.map(function (c) { return { v: c.id, l: TO.data.catName(c.id) }; }), F.cat) + '</select>' +
-        '<select class="input" data-f="status" style="width:auto"><option value="">' + TO.esc(TO.t('f.status')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(['draft', 'sent', 'started', 'finished', 'closed', 'cancelled'].map(function (s) { return { v: s, l: TO.t('status.' + s) }; }), F.status) + '</select></div>' +
+        '<select class="input" data-f="range" style="width:auto" aria-label="' + TO.esc(TO.t('f.date')) + '">' + opt(RANGES.map(function (r) { return { v: r, l: TO.t('range.' + r) }; }), F.range) + '</select>' +
+        '<select class="input" data-f="cat" style="width:auto" aria-label="' + TO.esc(TO.t('f.category')) + '"><option value="">' + TO.esc(TO.t('f.category')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(cats.map(function (c) { return { v: c.id, l: TO.data.catName(c.id) }; }), F.cat) + '</select>' +
+        '<select class="input" data-f="status" style="width:auto" aria-label="' + TO.esc(TO.t('f.status')) + '"><option value="">' + TO.esc(TO.t('f.status')) + ': ' + TO.esc(TO.t('common.all')) + '</option>' + opt(['draft', 'sent', 'started', 'finished', 'closed', 'cancelled'].map(function (s) { return { v: s, l: TO.t('status.' + s) }; }), F.status) + '</select></div>' +
         '<div data-sum></div><div data-rows></div>';
     },
     mount: function (root, ctx) {
       function paint() { var rows = filtered(); root.querySelector('[data-sum]').innerHTML = summary(rows); root.querySelector('[data-rows]').innerHTML = tableRows(rows); }
       paint();
-      root.addEventListener('input', TO.debounce(function (e) { var f = e.target.dataset && e.target.dataset.f; if (f === 'q') { F.q = e.target.value; paint(); } }, 120));
-      root.addEventListener('change', function (e) { var f = e.target.dataset && e.target.dataset.f; if (f && f !== 'q') { F[f] = e.target.value; paint(); } });
+      root.addEventListener('input', TO.debounce(function (e) { var f = e.target.dataset && e.target.dataset.f; if (f === 'q') { F.q = e.target.value; LIMIT = 40; paint(); } }, 120));
+      root.addEventListener('change', function (e) { var f = e.target.dataset && e.target.dataset.f; if (f && f !== 'q') { F[f] = e.target.value; LIMIT = 40; paint(); } });
       root.addEventListener('click', function (e) {
         if (e.target.closest('[data-new]')) { newTrip(); return; }
+        if (e.target.closest('[data-more]')) { LIMIT += 200; paint(); return; }
         var tb = e.target.closest('[data-trust]'); if (tb) { F.trust = F.trust === tb.dataset.trust ? '' : tb.dataset.trust; paint(); return; }
         var tr = e.target.closest('tr[data-id]'); if (tr) openTrip(tr.dataset.id);
       });

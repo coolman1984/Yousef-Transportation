@@ -251,3 +251,25 @@
   :root:not([data-motion="on"]) *::before,
   :root:not([data-motion="on"]) *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
 }
+
+/* names the factory guide, consent and report pieces (css/af-*.css) use, mapped onto this program's own tokens */
+:root {
+  --ink-inverse: var(--brand-ink);
+  --overlay-scrim: var(--scrim);
+  --r-sm: var(--r-1);
+  --r-md: var(--r-2);
+  --r-lg: 1.1rem;
+  --r-pill: 62rem;
+  --fs-sm: .85rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.15rem;
+  --font-ui: inherit;
+}
+
+/* colours of the small theme samples shown in Settings -> Appearance: [menu, page, card, accent] of each theme */
+.sw[data-sample="daylight"]  { --s1: #13294b; --s2: #e8edf4; --s3: #ffffff; --s4: #f2a900; }
+.sw[data-sample="night"]     { --s1: #0d1524; --s2: #0a1120; --s3: #121a2c; --s4: #ffc23d; }
+.sw[data-sample="asphalt"]   { --s1: #101010; --s2: #161616; --s3: #202020; --s4: #ffc23d; }
+.sw[data-sample="highway"]   { --s1: #0b3d2e; --s2: #e4eee9; --s3: #ffffff; --s4: #f2a900; }
+.sw[data-sample="contrast"]  { --s1: #000000; --s2: #f2f2f2; --s3: #ffffff; --s4: #ffd000; }
+.sw[data-sample="auto"] { --s1: #13294b; --s2: #e8edf4; --s3: #0d1524; --s4: #0a1120; }

@@ -41,15 +41,31 @@ WizardStyle=modern
 CloseApplications=no
 
 [Languages]
+Name: "arabic"; MessagesFile: "compiler:Languages\Arabic.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
+[CustomMessages]
+arabic.DesktopIcon=ضع أيقونة على سطح المكتب
+english.DesktopIcon=Put an icon on the desktop
+arabic.AutoStart=التشغيل مع ويندوز (موصى به)
+english.AutoStart=Start with Windows (recommended)
+arabic.ThisPcOnly=هذا الجهاز فقط (أجهزة المكتب الأخرى لا تستطيع الدخول)
+english.ThisPcOnly=This PC only (other PCs of the office cannot connect)
+arabic.Firewall=ضبط حماية بيانات التشغيل...
+english.Firewall=Protecting the program data...
+arabic.OpenNow=افتح «أوامر التحرك» الآن
+english.OpenNow=Open Trip Orders now
+
 [Tasks]
-Name: "desktopicon"; Description: "Put an icon on the desktop"
-Name: "autostart"; Description: "Start with Windows (recommended - keeps this PC in sync with the others)"
+Name: "desktopicon"; Description: "{cm:DesktopIcon}"
+Name: "autostart"; Description: "{cm:AutoStart}"
+; by default every PC of the office LAN can connect (owner decision 6 Oct 2026, reconfirmed 11 Oct); ticking this box restricts the program to this PC
+Name: "thispconly"; Description: "{cm:ThisPcOnly}"; Flags: unchecked
 
 [Dirs]
-; data, backups and settings: writable for everybody who uses this PC, kept when the program is updated or removed
-Name: "{commonappdata}\TripOrders"; Permissions: users-modify; Flags: uninsneveruninstall
+; data, backups, signing keys and settings: kept when the program is updated or removed. Access is narrowed in [Run] below (icacls):
+; only SYSTEM, the administrators and ONE operator account (the person who installs, or /OPERATOR=DOMAIN\name) may read or write it.
+Name: "{commonappdata}\TripOrders"; Permissions: admins-full system-full; Flags: uninsneveruninstall
 
 [Files]
 Source: "..\build\to_main.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -60,9 +76,12 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\TripOrders.exe"; Tasks: des
 Name: "{commonstartup}\{#MyAppName}"; Filename: "{app}\TripOrders.exe"; Parameters: "--background"; Tasks: autostart
 
 [Run]
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; Flags: runhidden; StatusMsg: "Allowing the other PCs to connect..."
-Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\TripOrders.exe"" enable=yes profile=any"; Flags: runhidden
-Filename: "{app}\TripOrders.exe"; Description: "Open the {#MyAppName} now"; Flags: nowait postinstall skipifsilent runasoriginaluser
+; B2: the data tree is not shared with the other Windows accounts of this PC (databases and the raw signing keys live there)
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TripOrders"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" ""*S-1-5-32-544:(OI)(CI)F"" ""{param:OPERATOR|{username}}:(OI)(CI)M"" /remove:g ""*S-1-5-32-545"" ""*S-1-5-11"""; Flags: runhidden; StatusMsg: "{cm:Firewall}"
+; B3: the firewall rule is limited to private/domain networks (never a public Wi-Fi) and is not added when the office chose "this PC only"
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; Flags: runhidden
+Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\TripOrders.exe"" enable=yes profile=private,domain"; Flags: runhidden; Tasks: not thispconly
+Filename: "{app}\TripOrders.exe"; Description: "{cm:OpenNow}"; Flags: nowait postinstall skipifsilent runasoriginaluser
 Filename: "{app}\TripOrders.exe"; Parameters: "--background"; Flags: nowait runasoriginaluser; Check: WizardSilent
 
 [UninstallRun]
@@ -70,9 +89,24 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM TripOrders.exe"; Flags: runh
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; Flags: runhidden; RunOnceId: "FirewallRule"
 
 [Messages]
-FinishedLabel=The program is installed. Your data is kept in %ProgramData%\TripOrders (also after updates).
+arabic.FinishedLabel=تم تثبيت البرنامج. بياناتك محفوظة في %ProgramData%\TripOrders وبتفضل موجودة بعد التحديثات.%n%nيمكن لأجهزة المكتب الأخرى الدخول إلى البرنامج عبر شبكة المكتب. إذا أردت أن يعمل على هذا الجهاز فقط، أعد التثبيت واختر «هذا الجهاز فقط». اقرأ دليل الشبكة لمزيد من التفاصيل.
+english.FinishedLabel=The program is installed. Your data is kept in %ProgramData%\TripOrders (also after updates).%n%nThe other PCs of the office can connect over the office network. To keep the program on this PC only, run the installer again and tick "This PC only". Read the network guide for details.
 
 [Code]
+procedure CurStepChanged(CurStep: TSetupStep);
+var
+  Cfg: String;
+begin
+  { this PC only: listen on this PC alone, but only if the office asked for it and has no settings file yet (the program default is the office LAN); written before the program is started }
+  if (CurStep = ssInstall) and WizardIsTaskSelected('thispconly') then
+  begin
+    Cfg := ExpandConstant('{commonappdata}\TripOrders\config.json');
+    ForceDirectories(ExtractFilePath(Cfg));
+    if not FileExists(Cfg) then
+      SaveStringToFile(Cfg, '{"host": "127.0.0.1"}', False);
+  end;
+end;
+
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 var
   Code: Integer;

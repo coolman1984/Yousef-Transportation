@@ -119,6 +119,16 @@ class LanguageTest(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+class InlineStyleTest(unittest.TestCase):
+    CLEAN = ['views/settings.js', 'views/privacy.js', 'views/licence.js', 'guide.js']   # presentation lives in css/ and the tokens; this list only grows
+
+    def test_clean_pages_carry_no_inline_style_or_colour(self):
+        for f in self.CLEAN:
+            src = read('js', *f.split('/'))
+            self.assertNotIn('style=', src, f)
+            self.assertEqual(re.findall(r'#[0-9a-fA-F]{6}\b', src), [], f)
+
+
 class CssHygieneTest(unittest.TestCase):
     def test_only_logical_directions(self):
         """Left/right would break the Arabic (mirrored) layout; use start/end. Allowed: comments and the inline SVG transform rules."""

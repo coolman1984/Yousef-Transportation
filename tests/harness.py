@@ -164,9 +164,14 @@ class Server:
 ADMIN = ('boss', 'Strong-pass1')
 
 
-def make_authority(srv):
+def make_authority(srv, consent='decline'):
+    """The first administrator, logged in. consent: the office's answer to the remote-help card, given up front so the card does not cover
+    the page in screen tests ('agree', 'decline', or None to leave the question open)."""
     c = srv.client()
     c.post('/api/auth/setup', {'username': ADMIN[0], 'full_name': 'The Admin', 'password': ADMIN[1]})
+    if consent:
+        p = c.get('/api/consent/prompt?lang=en')
+        c.post('/api/consent/decide', {'decision': consent, 'text_id': p['text_id'], 'lang': p['lang'], 'scope': 'install'})
     return c
 
 

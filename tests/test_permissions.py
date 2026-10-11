@@ -204,6 +204,25 @@ class PermissionsTest(unittest.TestCase):
         self.assertNotIn('immutable', cache)
         self.assertEqual(self.ac.get(up['src']), img)
 
+    # ---------------------------------------------------------------- B1: reading /api/state directly
+    def test_l_a_user_with_no_permission_gets_an_empty_state(self):
+        self.new_trip('cat1')
+        c = self.login_as('zed.none', perms=[])
+        st = c.get('/api/state')
+        for k in ('trips', 'tripPassengers', 'tripPhotos', 'tripAmendments', 'tripEvents', 'tripCategories', 'vehicles', 'drivers',
+                  'departments', 'people', 'places', 'routes'):
+            self.assertEqual(st[k], [], k)
+        self.assertNotIn('Factory', str(st))
+        self.assertNotIn('Driver One', str(st))
+
+    def test_m_trips_need_a_trip_reading_permission(self):
+        self.new_trip('cat1')
+        fleet_only = self.login_as('fay.fleet', perms=['fleet.view']).get('/api/state')
+        self.assertEqual(fleet_only['trips'], [])                 # the Drivers page does not open the trip list
+        self.assertTrue(fleet_only['drivers'])                    # but it does need the drivers
+        viewer = self.login_as('vic.viewer', perms=['trips.view']).get('/api/state')
+        self.assertTrue(viewer['trips'])
+
 
 if __name__ == '__main__':
     unittest.main()

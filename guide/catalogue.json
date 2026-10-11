@@ -1,0 +1,897 @@
+{
+ "product": "trip-orders",
+ "format": 1,
+ "languages": [
+  "ar",
+  "en"
+ ],
+ "defaultLang": "ar",
+ "uiLanguages": [
+  "ar",
+  "en"
+ ],
+ "pages": [
+  "overview",
+  "trips",
+  "board",
+  "review",
+  "vehicles",
+  "drivers",
+  "people",
+  "places",
+  "reports",
+  "excel",
+  "activity",
+  "settings",
+  "help"
+ ],
+ "unguided": [
+  "help"
+ ],
+ "states": [
+  "signed.in",
+  "setup.done",
+  "trip.first",
+  "link.sent",
+  "trip.approved",
+  "person.second",
+  "backup.made",
+  "consent.answered"
+ ],
+ "checklist": [
+  "set-up-lists",
+  "create-trip",
+  "add-person"
+ ],
+ "targets": {
+  "trips.new": {
+   "page": "trips",
+   "sel": "[data-guide=\"trips.new\"]"
+  },
+  "trips.form": {
+   "page": "trips",
+   "sel": "[data-guide=\"trips.form\"]"
+  },
+  "trips.category": {
+   "page": "trips",
+   "sel": "#nt-form [name=\"categoryId\"]"
+  },
+  "trips.destination": {
+   "page": "trips",
+   "sel": "#nt-form [name=\"destination\"]"
+  },
+  "trips.save": {
+   "page": "trips",
+   "sel": "[data-guide=\"trips.save\"]"
+  },
+  "trips.row": {
+   "page": "trips",
+   "sel": "[data-guide=\"trips.row\"]"
+  },
+  "trip.link": {
+   "page": "trips",
+   "sel": "[data-guide=\"trip.link\"]"
+  },
+  "trip.approve": {
+   "page": "trips",
+   "sel": "[data-guide=\"trip.approve\"]"
+  },
+  "trip.amend": {
+   "page": "trips",
+   "sel": "[data-guide=\"trip.amend\"]"
+  },
+  "amend.reason": {
+   "page": "trips",
+   "sel": "[data-guide=\"amend.reason\"]"
+  },
+  "settings.tab.rules": {
+   "page": "settings",
+   "sel": "[data-tab=\"rules\"]"
+  },
+  "settings.tab.rules.on": {
+   "page": "settings",
+   "sel": "[data-tab=\"rules\"][aria-pressed=\"true\"]"
+  },
+  "settings.tab.access": {
+   "page": "settings",
+   "sel": "[data-tab=\"access\"]"
+  },
+  "settings.tab.access.on": {
+   "page": "settings",
+   "sel": "[data-tab=\"access\"][aria-pressed=\"true\"]"
+  },
+  "settings.tab.data": {
+   "page": "settings",
+   "sel": "[data-tab=\"data\"]"
+  },
+  "settings.tab.data.on": {
+   "page": "settings",
+   "sel": "[data-tab=\"data\"][aria-pressed=\"true\"]"
+  },
+  "settings.tab.privacy": {
+   "page": "settings",
+   "sel": "[data-tab=\"privacy\"]"
+  },
+  "settings.tab.privacy.on": {
+   "page": "settings",
+   "sel": "[data-tab=\"privacy\"][aria-pressed=\"true\"]"
+  },
+  "backup.make": {
+   "page": "settings",
+   "sel": "[data-guide=\"backup.make\"]"
+  }
+ },
+ "guides": [
+  {
+   "id": "first-look",
+   "cat": "start",
+   "perm": "overview.view",
+   "minutes": 1,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "overview",
+     "until": {
+      "route": "overview"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "create-trip",
+   "cat": "trips",
+   "perm": "trips.create",
+   "minutes": 3,
+   "requires": [],
+   "done": {
+    "state": "trip.first"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "trips",
+     "until": {
+      "route": "trips"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trips.new",
+     "until": {
+      "target": "trips.form"
+     }
+    },
+    {
+     "k": "choose",
+     "target": "trips.category",
+     "until": {
+      "filled": "trips.category"
+     }
+    },
+    {
+     "k": "type",
+     "target": "trips.destination",
+     "until": {
+      "filled": "trips.destination"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trips.save",
+     "until": {
+      "gone": "trips.form"
+     }
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "send-link",
+   "cat": "trips",
+   "perm": "trips.send",
+   "minutes": 3,
+   "requires": [
+    "create-trip"
+   ],
+   "done": {
+    "state": "link.sent"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "trips",
+     "until": {
+      "route": "trips"
+     }
+    },
+    {
+     "k": "warn"
+    },
+    {
+     "k": "click",
+     "target": "trips.row",
+     "until": {
+      "target": "trip.link"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trip.link",
+     "until": {
+      "event": "trip.link"
+     }
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "approve-trip",
+   "cat": "trips",
+   "perm": "trips.approve",
+   "minutes": 2,
+   "requires": [],
+   "done": {
+    "state": "trip.approved"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "trips",
+     "until": {
+      "route": "trips"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trips.row",
+     "until": {
+      "target": "trip.approve"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trip.approve",
+     "until": {
+      "event": "trip.approve"
+     }
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "read-board",
+   "cat": "daily",
+   "perm": "board.view",
+   "minutes": 1,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "board",
+     "until": {
+      "route": "board"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "review-queue",
+   "cat": "daily",
+   "perm": "review.view",
+   "minutes": 2,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "review",
+     "until": {
+      "route": "review"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "warn"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "fix-locked-trip",
+   "cat": "trips",
+   "perm": "trips.amend",
+   "minutes": 3,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "trips",
+     "until": {
+      "route": "trips"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trips.row",
+     "until": {
+      "target": "trip.amend"
+     }
+    },
+    {
+     "k": "click",
+     "target": "trip.amend",
+     "until": {
+      "target": "amend.reason"
+     }
+    },
+    {
+     "k": "type",
+     "target": "amend.reason",
+     "until": {
+      "filled": "amend.reason"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "read-reports",
+   "cat": "reports",
+   "perm": "reports.view",
+   "minutes": 2,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "reports",
+     "until": {
+      "route": "reports"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "export-month",
+   "cat": "reports",
+   "perm": "excel.export",
+   "minutes": 2,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "excel",
+     "until": {
+      "route": "excel"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "fleet-lists",
+   "cat": "lists",
+   "perm": "fleet.view",
+   "minutes": 3,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "vehicles",
+     "until": {
+      "route": "vehicles"
+     }
+    },
+    {
+     "k": "go",
+     "page": "drivers",
+     "until": {
+      "route": "drivers"
+     }
+    },
+    {
+     "k": "go",
+     "page": "people",
+     "until": {
+      "route": "people"
+     }
+    },
+    {
+     "k": "go",
+     "page": "places",
+     "until": {
+      "route": "places"
+     }
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "set-up-lists",
+   "cat": "setup",
+   "perm": "categories.manage",
+   "minutes": 3,
+   "requires": [],
+   "done": {
+    "state": "setup.done"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "settings",
+     "until": {
+      "route": "settings"
+     }
+    },
+    {
+     "k": "click",
+     "target": "settings.tab.rules",
+     "until": {
+      "target": "settings.tab.rules.on"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "add-person",
+   "cat": "setup",
+   "perm": "users.manage",
+   "minutes": 3,
+   "requires": [],
+   "done": {
+    "state": "person.second"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "settings",
+     "until": {
+      "route": "settings"
+     }
+    },
+    {
+     "k": "click",
+     "target": "settings.tab.access",
+     "until": {
+      "target": "settings.tab.access.on"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "make-backup",
+   "cat": "setup",
+   "perm": "backups.manage",
+   "minutes": 2,
+   "requires": [],
+   "done": {
+    "state": "backup.made"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "settings",
+     "until": {
+      "route": "settings"
+     }
+    },
+    {
+     "k": "click",
+     "target": "settings.tab.data",
+     "until": {
+      "target": "settings.tab.data.on"
+     }
+    },
+    {
+     "k": "click",
+     "target": "backup.make",
+     "until": {
+      "event": "backup.made"
+     }
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "read-activity",
+   "cat": "daily",
+   "perm": "logs.view",
+   "minutes": 2,
+   "requires": [],
+   "steps": [
+    {
+     "k": "go",
+     "page": "activity",
+     "until": {
+      "route": "activity"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  },
+  {
+   "id": "privacy-choice",
+   "cat": "privacy",
+   "perm": "*",
+   "minutes": 1,
+   "requires": [],
+   "done": {
+    "state": "consent.answered"
+   },
+   "steps": [
+    {
+     "k": "go",
+     "page": "settings",
+     "until": {
+      "route": "settings"
+     }
+    },
+    {
+     "k": "click",
+     "target": "settings.tab.privacy",
+     "until": {
+      "target": "settings.tab.privacy.on"
+     }
+    },
+    {
+     "k": "tip"
+    },
+    {
+     "k": "done"
+    }
+   ]
+  }
+ ],
+ "roles": [
+  {
+   "id": "administrator",
+   "profiles": [
+    "administrator"
+   ],
+   "path": [
+    "first-look",
+    "set-up-lists",
+    "fleet-lists",
+    "add-person",
+    "create-trip",
+    "send-link",
+    "make-backup",
+    "read-reports",
+    "read-activity",
+    "privacy-choice"
+   ]
+  },
+  {
+   "id": "dispatcher",
+   "profiles": [
+    "dispatcher",
+    "full-access"
+   ],
+   "path": [
+    "first-look",
+    "create-trip",
+    "send-link",
+    "read-board",
+    "fleet-lists",
+    "export-month",
+    "privacy-choice"
+   ]
+  },
+  {
+   "id": "ga-approver",
+   "profiles": [
+    "ga-approver"
+   ],
+   "path": [
+    "first-look",
+    "read-board",
+    "approve-trip",
+    "privacy-choice"
+   ]
+  },
+  {
+   "id": "reviewer",
+   "profiles": [
+    "reviewer"
+   ],
+   "path": [
+    "first-look",
+    "review-queue",
+    "fix-locked-trip",
+    "read-reports",
+    "export-month",
+    "privacy-choice"
+   ]
+  },
+  {
+   "id": "finance",
+   "profiles": [
+    "finance"
+   ],
+   "path": [
+    "first-look",
+    "read-reports",
+    "export-month",
+    "privacy-choice"
+   ]
+  },
+  {
+   "id": "viewer",
+   "profiles": [
+    "viewer"
+   ],
+   "path": [
+    "first-look",
+    "read-reports",
+    "privacy-choice"
+   ]
+  }
+ ],
+ "problems": [
+  {
+   "id": "login-failed",
+   "cat": "account",
+   "page": "settings",
+   "guide": "add-person",
+   "roles": [
+    "administrator",
+    "dispatcher",
+    "ga-approver",
+    "reviewer",
+    "finance",
+    "viewer"
+   ],
+   "errors": [
+    "autherr.wrong",
+    "autherr.locked",
+    "autherr.lockedNow",
+    "autherr.disabled",
+    "autherr.tooMany"
+   ]
+  },
+  {
+   "id": "password-rules",
+   "cat": "account",
+   "page": "settings",
+   "roles": [
+    "administrator",
+    "dispatcher",
+    "ga-approver",
+    "reviewer",
+    "finance",
+    "viewer"
+   ],
+   "errors": [
+    "autherr.pwShort",
+    "autherr.pwLong",
+    "autherr.pwEasy",
+    "autherr.pwContains",
+    "autherr.pwLetters",
+    "autherr.pwCurrentWrong",
+    "autherr.pwSame",
+    "autherr.pwOld",
+    "err.mustChange"
+   ]
+  },
+  {
+   "id": "user-accounts",
+   "cat": "account",
+   "page": "settings",
+   "guide": "add-person",
+   "roles": [
+    "administrator"
+   ],
+   "errors": [
+    "autherr.username",
+    "autherr.fullname",
+    "autherr.adminExists",
+    "autherr.noUser",
+    "autherr.userTaken",
+    "autherr.lastAdmin",
+    "autherr.self",
+    "autherr.linkAdmin",
+    "autherr.linkDead",
+    "err.firstAdminLocal"
+   ]
+  },
+  {
+   "id": "no-permission",
+   "cat": "account",
+   "page": "settings",
+   "roles": [
+    "administrator",
+    "dispatcher",
+    "ga-approver",
+    "reviewer",
+    "finance",
+    "viewer"
+   ],
+   "errors": [
+    "err.needPerm",
+    "err.notAllowedTo",
+    "err.adminOnly",
+    "err.categoryLimited",
+    "err.limitedPerm"
+   ]
+  },
+  {
+   "id": "sign-in-again",
+   "cat": "account",
+   "page": "overview",
+   "roles": [
+    "administrator",
+    "dispatcher",
+    "ga-approver",
+    "reviewer",
+    "finance",
+    "viewer"
+   ],
+   "errors": [
+    "err.signIn"
+   ]
+  },
+  {
+   "id": "trip-not-saved",
+   "cat": "trips",
+   "page": "trips",
+   "guide": "fix-locked-trip",
+   "roles": [
+    "dispatcher",
+    "reviewer",
+    "administrator"
+   ],
+   "errors": [
+    "err.tripNotFound",
+    "err.reason",
+    "err.chooseCategory",
+    "err.nothingToSave",
+    "err.nothingChanged",
+    "err.tripLocked"
+   ]
+  },
+  {
+   "id": "file-or-month",
+   "cat": "reports",
+   "page": "excel",
+   "roles": [
+    "dispatcher",
+    "reviewer",
+    "finance",
+    "administrator"
+   ],
+   "errors": [
+    "err.chooseMonth",
+    "err.tooLarge",
+    "err.notFound"
+   ]
+  },
+  {
+   "id": "office-network",
+   "cat": "network",
+   "page": "settings",
+   "roles": [
+    "administrator"
+   ],
+   "errors": [
+    "err.network",
+    "err.host",
+    "err.crossSite",
+    "err.localOnly"
+   ]
+  },
+  {
+   "id": "try-again-later",
+   "cat": "network",
+   "page": "help",
+   "roles": [
+    "administrator",
+    "dispatcher",
+    "ga-approver",
+    "reviewer",
+    "finance",
+    "viewer"
+   ],
+   "errors": [
+    "err.server",
+    "err.badRequest",
+    "err.busy",
+    "err.starting"
+   ]
+  },
+  {
+   "id": "pc-needs-decision",
+   "cat": "network",
+   "page": "settings",
+   "roles": [
+    "administrator"
+   ],
+   "errors": [
+    "err.moved"
+   ]
+  },
+  {
+   "id": "licence-locked",
+   "cat": "licence",
+   "page": "settings",
+   "roles": [
+    "administrator"
+   ],
+   "errors": [
+    "err.licence",
+    "lic.no_code",
+    "lic.other_device",
+    "lic.expired",
+    "lic.bad_signature",
+    "lic.wrong_length",
+    "lic.bad_character",
+    "lic.unknown_key",
+    "lic.wrong_product",
+    "lic.unknown_version",
+    "lic.invalid",
+    "lic.no_keys",
+    "lic.trial_off",
+    "lic.have_licence",
+    "lic.unbound_perpetual",
+    "lic.unknown_edition"
+   ]
+  }
+ ]
+}

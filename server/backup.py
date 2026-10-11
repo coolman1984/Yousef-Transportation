@@ -39,6 +39,7 @@ from datetime import datetime, timedelta
 from version import VERSION
 
 AUTO_KINDS = ('auto', 'startup')
+SNAPSHOT_TRIES = 5      # attempts to take data, history and accounts at the same moment before the run is abandoned
 VERIFY_PER_RUN = 300     # existing photo copies re-checked by their checksum in every backup run (a rolling slice)
 CAS_NAME = re.compile(r'^[0-9a-f]{64}$')
 DRIVE_REMOTE = 4  # Windows GetDriveTypeW: a mapped network drive
@@ -89,15 +90,61 @@ def _integrity_of(path):
         c.close()
 
 
+def _attachment_inventory(data_db):
+    """[[path under uploads/, sha256, size], ...] of every uploaded file the saved data needs (photos, documents, the logo), read from a
+    copy of the business database. The backup is only complete when all of them are in it."""
+    out, seen = [], set()
+    c = sqlite3.connect(f'file:{data_db}?mode=ro', uri=True)
+    try:
+        rows = [(r[0], r[1], r[2]) for r in c.execute('SELECT id, sha256, size_bytes FROM attachments WHERE deleted=0')]
+        rows += [(r[0], '', 0) for r in c.execute('SELECT src FROM trip_photos WHERE deleted=0')]
+        logo = c.execute("SELECT value FROM settings WHERE id='logoImage' AND deleted=0").fetchone()
+        if logo and isinstance(logo[0], str):
+            rows.append((logo[0].strip('"'), '', 0))
+    finally:
+        c.close()
+    for src, sha, size in rows:
+        if not isinstance(src, str) or not src.startswith('/files/') or src in seen:
+            continue
+        seen.add(src)
+        rel = src[len('/files/'):]
+        if '..' in rel.split('/') or rel.startswith('/'):
+            continue
+        if not sha and is_cas_name(os.path.basename(rel)):
+            sha = cas_hash(os.path.basename(rel))
+        out.append([rel, sha or '', int(size or 0)])
+    return sorted(out)
+
+
+def attachment_problems(uploads_dir, inventory):
+    """(missing, damaged) lists of paths: an inventory file that is not in `uploads_dir`, or is there with another size/checksum."""
+    missing, damaged = [], []
+    for rel, sha, size in inventory:
+        path = os.path.join(uploads_dir, *rel.split('/'))
+        if not os.path.isfile(path):
+            missing.append(rel)
+            continue
+        try:
+            if size and os.path.getsize(path) != size:
+                damaged.append(rel)
+            elif sha and _sha_file(path) != sha:
+                damaged.append(rel)
+        except OSError:
+            damaged.append(rel)
+    return missing, damaged
+
+
 def verify_set(folder, name):
-    """{'ok', 'legacy', 'problems'} for the set `name` in `folder` (the 'db' folder of a backup): it is complete and every file is the
-    one that was written (sizes and SHA-256 from the manifest). A set from before manifests (legacy) is checked by SQLite's integrity check only."""
+    """{'ok', 'restorable', 'complete', 'legacy', 'problems', 'attachments'} for the set `name` in `folder` (the 'db' folder of a backup).
+    restorable: the database parts are the files that were written (sizes and SHA-256 from the manifest, SQLite integrity check).
+    complete: and every photo/document the data needs is in the backup's uploads folder with its size and checksum. `ok` means both:
+    only a complete set is "verified". A set from before manifests (legacy) is checked by SQLite's integrity check only."""
     if not NAME_RE.match(name or ''):
-        return {'ok': False, 'legacy': False, 'problems': ['unknown backup']}
+        return {'ok': False, 'restorable': False, 'complete': False, 'legacy': False, 'problems': ['unknown backup'], 'attachments': None}
     mpath = os.path.join(folder, name[:-3] + '.json')
     problems = []
     if not os.path.exists(os.path.join(folder, name)):
-        return {'ok': False, 'legacy': False, 'problems': ['data: file not found']}
+        return {'ok': False, 'restorable': False, 'complete': False, 'legacy': False, 'problems': ['data: file not found'], 'attachments': None}
     manifest = None
     if os.path.exists(mpath):
         try:
@@ -122,7 +169,22 @@ def verify_set(folder, name):
             problems.append('data: ' + result)
     except sqlite3.DatabaseError as e:
         problems.append('data: ' + str(e))
-    return {'ok': not problems, 'legacy': not os.path.exists(mpath), 'problems': problems}
+    restorable = not problems
+    att, complete = None, True
+    inv = (manifest or {}).get('attachments', {}).get('files') if manifest else None
+    if inv is not None and restorable:
+        missing, damaged = attachment_problems(os.path.join(os.path.dirname(os.path.abspath(folder)), 'uploads'), inv)
+        att = {'required': len(inv), 'missing': len(missing), 'damaged': len(damaged), 'missingFiles': missing[:20], 'damagedFiles': damaged[:20]}
+        if missing:
+            problems.append(f'photos: {len(missing)} file(s) missing from the backup')
+        if damaged:
+            problems.append(f'photos: {len(damaged)} file(s) damaged in the backup')
+        complete = not (missing or damaged)
+    elif manifest is not None and inv is None:
+        complete = False                  # a manifest from before the photo inventory: the photos cannot be proven
+        att = {'required': None, 'missing': None, 'damaged': None, 'missingFiles': [], 'damagedFiles': []}
+    return {'ok': restorable and complete if manifest else restorable, 'restorable': restorable, 'complete': complete,
+            'legacy': not os.path.exists(mpath), 'problems': problems, 'attachments': att}
 
 
 def sets_in(folder):
@@ -211,8 +273,8 @@ class Backups:
         placed = []
         try:
             version, vv = None, {}
-            for _ in range(3):                  # a change during the copy would make data and history differ: copy again (rarely needed)
-                before = self.journal.vv() if self.journal else {}
+            for attempt in range(SNAPSHOT_TRIES):   # one moment for all three databases: if anything was saved meanwhile, copy again
+                before = (self.store.version(), self.journal.vv() if self.journal else {})
                 with self.store.lock:
                     version = self.store.version()
                     self._snapshot(self.store.conn, tmp['data'])
@@ -220,10 +282,15 @@ class Backups:
                     with self.journal.lock:
                         self._snapshot(self.journal.conn, tmp['journal'])
                         vv = self.journal.vv()
-                if not self.journal or vv == before:
+                if self.auth:
+                    self.auth.backup_to(tmp['auth'])
+                after = (self.store.version(), self.journal.vv() if self.journal else {})
+                if before == after and version == before[0] and (not self.journal or vv == before[1]):
                     break
-            if self.auth:
-                self.auth.backup_to(tmp['auth'])
+                time.sleep(0.05 * (attempt + 1))
+            else:                                # never publish three databases that show different moments
+                raise RuntimeError('The system was busy saving changes the whole time, so a consistent backup could not be taken. '
+                                   'Nothing was changed and the previous backup is untouched - try again in a minute.')
             parts = [k for k in ('data', 'auth', 'journal') if os.path.exists(tmp[k])]
             files = {}
             for k in parts:                      # every part is checked before the set becomes visible
@@ -232,8 +299,11 @@ class Backups:
                     raise RuntimeError(f'The copy of the {k} failed the integrity check: {result}')
                 files[k] = {'name': final[k], 'size': os.path.getsize(tmp[k]), 'sha256': self._sha(tmp[k])}
             up = self._mirror_uploads(os.path.join(self.dir, 'uploads'))
+            inventory = _attachment_inventory(tmp['data'])
+            missing, damaged = attachment_problems(os.path.join(self.dir, 'uploads'), inventory)
+            att = {'required': len(inventory), 'missing': len(missing), 'damaged': len(damaged), 'complete': not (missing or damaged), 'files': inventory}
             manifest = {'format': 1, 'name': name, 'kind': kind, 'createdAt': datetime.now().isoformat(timespec='seconds'), 'app': VERSION,
-                        'dataVersion': version, 'journal': {'vv': vv}, 'files': files, 'uploads': up}
+                        'dataVersion': version, 'journal': {'vv': vv}, 'files': files, 'uploads': up, 'attachments': att}
             with open(tmp['manifest'], 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=1)
             # the data file is renamed LAST: a set is visible (listed, restorable) only when everything else is already in place
@@ -256,9 +326,13 @@ class Backups:
         errors = []
         if up.get('failed'):
             errors.append(f'{up["failed"]} photo file(s) could not be copied to the backup or are damaged')
+        if att['missing'] or att['damaged']:
+            errors.append(f'{att["missing"] + att["damaged"]} photo file(s) the data needs are missing or damaged in this backup (it is marked incomplete)')
         for extra in self.extra:
             try:
-                self._copy_set(name, final, mname, extra)
+                extra_up = self._copy_set(name, final, mname, extra)
+                if extra_up.get('failed'):
+                    errors.append(f'{extra}: {extra_up["failed"]} photo file(s) could not be copied or are damaged')
             except OSError as e:
                 errors.append(f'{extra}: {e}')
         self.last_error = '; '.join(errors)
@@ -287,7 +361,7 @@ class Backups:
                 except OSError:
                     pass
             raise
-        self._mirror_uploads(os.path.join(extra, 'uploads'))
+        return self._mirror_uploads(os.path.join(extra, 'uploads'))
 
     def _mirror_uploads(self, target):
         """Photos are never changed by the app, so only missing (or cut-short) files are copied - each one whole, under a temporary name.
@@ -402,11 +476,13 @@ class Backups:
         src_path = os.path.join(self._folder(), name)
         if not os.path.exists(src_path):
             raise ValueError('Backup file not found')
-        if not self.verify(name)['ok']:
+        rep = self.verify(name)
+        if not rep['restorable']:
             raise ValueError('That backup file is damaged - choose another one')
         safety = self.create('pre-restore')
         when = datetime.strptime(name[3:18], '%Y%m%d_%H%M%S').strftime('%Y-%m-%d %H:%M')
         res = self.store.restore_from(src_path, user, ip, f'Restore backup of {when} ({name})', user_id)
+        res = dict(res, incomplete=not rep['complete'], photos=rep['attachments'])   # the data came back; missing photos are said, not hidden
         return safety, res
 
     # ------------------------------------------------------------ what changed since the last good set

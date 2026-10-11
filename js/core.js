@@ -105,13 +105,26 @@
       var p = opts.blob ? r.blob() : (ct.indexOf('json') >= 0 ? r.json() : r.text());
       return p.then(function (data) {
         if (!r.ok) {
-          var msg = (data && data.error) || (typeof data === 'string' && data) || ('HTTP ' + r.status);
+          var msg = TO.errMessage(data) || (data && data.error) || (typeof data === 'string' && data) || ('HTTP ' + r.status);
           if (r.status === 401 && url.indexOf('/api/auth/') !== 0) TO.emit('logged-out');
+          if (r.status === 402 && data && data.licence) TO.emit('licence', data.licence);
           throw new ApiError(r.status, msg, data);
         }
         return data;
       });
     });
+  };
+  /* The text of an error answer in the language of the screen: the server sends a stable key (and values) next to its English message. */
+  TO.errMessage = function (data) {
+    if (!data || typeof data !== 'object' || !data.key || !TO.has || !TO.has(data.key)) return '';
+    var v = {};
+    Object.keys(data.vars || {}).forEach(function (k) { v[k] = data.vars[k]; });
+    if (v.perm && TO.has('perm.' + v.perm)) v.perm = TO.t('perm.' + v.perm);
+    if (v.entity && TO.has('err.entity.' + v.entity)) v.entity = TO.t('err.entity.' + v.entity);
+    if (v.op && TO.has('err.op.' + v.op)) v.op = TO.t('err.op.' + v.op);
+    var text = TO.t(data.key, v);
+    if (data.incident && data.key !== 'err.server') text += ' (' + data.incident + ')';
+    return text;
   };
   TO.get = function (url) { return TO.api('GET', url); };
   TO.post = function (url, body) { return TO.api('POST', url, body === undefined ? {} : body); };

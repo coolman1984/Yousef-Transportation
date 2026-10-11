@@ -435,6 +435,46 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
 .tbl.matrix td.c, .tbl.matrix th.c { text-align: center; }
 .tbl.matrix .group-row th { background: var(--surface-2); font-weight: 700; }
 
+/* guide, privacy and licence pieces */
+.skeleton-block { min-height: 10rem; }
+.plain { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.lic-banner { margin: .6rem var(--gap) 0; align-items: center; }
+.lic-state { display: flex; align-items: center; gap: .8rem; margin-block-end: 1rem; }
+.lic-line { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-radius: var(--r-2); background: var(--surface-2); margin-block-end: .6rem; }
+.lic-line.good { background: var(--ok-soft); color: var(--ok); }
+.lic-line.warn { background: var(--warn-soft); color: var(--warn); }
+.lic-line.bad { background: var(--bad-soft); color: var(--bad); }
+.code-box { min-height: 6rem; font-family: ui-monospace, Consolas, monospace; }
+.report-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: .8rem; border-radius: var(--r-2); }
+/* the guide button sits under the side panels and dialogs (so it never covers their Save button); the coach and the help panel sit above the panels */
+body .afg-fab { z-index: 50; }
+body .afg-panel, body .afg-coach { z-index: 70; }
+.seg-scroll { max-width: 100%; overflow-x: auto; }
+.trips-more { margin-block-start: .6rem; }
+
+/* Settings -> Appearance (was inline styles) */
+.set-block { padding-block: 1.1rem; border-block-end: 1px solid var(--line-2); }
+.set-block-body { margin-block-start: .5rem; }
+.set-reset { padding-block-start: 1rem; }
+.set-h2 { margin-block-end: .8rem; }
+.sticky-card { position: sticky; inset-block-start: calc(var(--topbar-h) + 1rem); }
+.sw[data-sample] i { background: var(--s1); }
+.sw[data-sample] b { background: var(--s2); }
+.sw[data-sample] b em:first-child { background: var(--s3); height: .9rem; }
+.sw[data-sample] b em:last-child { background: var(--s4); inline-size: 60%; }
+.sw[data-sample="auto"] { grid-template-columns: 1fr 1fr; }
+.sw[data-sample="auto"] i { background: linear-gradient(90deg, var(--s1) 0 30%, var(--s2) 30% 100%) }
+.sw[data-sample="auto"] b { background: linear-gradient(90deg, var(--s3) 0 30%, var(--s4) 30% 100%) }
+.sw[data-sample="auto"] b em { display: none; }
+.swatch-font { inline-size: 8.6rem; }
+.font-sample { font-size: 1.5rem; padding: .4rem .2rem; line-height: 1.1; }
+.font-sample span { font-size: .95rem; }
+.font-sample[data-font-sample="plex"] { font-family: 'TO Plex Arabic', 'TO Plex'; }
+.font-sample[data-font-sample="cairo"] { font-family: 'TO Cairo'; }
+.font-sample[data-font-sample="tajawal"] { font-family: 'TO Tajawal'; }
+.font-sample[data-font-sample="kufi"] { font-family: 'TO Kufi'; }
+.font-sample[data-font-sample="system"] { font-family: 'Segoe UI', Tahoma, sans-serif; }
+
 /* ---------- learning path, step-by-step guides, "Guide me" coach (js/views/guides.js, ported from Hessa) ---------- */
 .tile-ic { width: 2.4rem; height: 2.4rem; border-radius: .7rem; display: grid; place-items: center; background: var(--brand-soft); color: var(--brand); flex: none; }
 .tip.ok { background: var(--ok-soft); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }

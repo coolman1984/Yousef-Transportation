@@ -4,6 +4,10 @@
 # Unreleased (next version)
 
 ## New
+- **A course for every job:** Help → «مساري / My path». The administrator starts by setting the office up, then each role has its own lessons (dispatcher, approver, reviewer, finance, viewer). The program sees what you already did and marks «أنت هنا / You are here»; the next lesson waits on the overview with «Guide me».
+- **Guide me:** 28 step-by-step guides that open the page and point at the button.
+- **Solve a problem:** 35 real situations (driver did not come, car broke down, wrong date, link does not open…), each with «Take me there» and «Guide me».
+- All help is written in simple, easy formal Arabic.
 - **Who can do what:** Settings → People & access → Profiles shows every permission against every profile in one table, and prints it.
 - The ready-made profiles show their names in Arabic on the Arabic screen.
 

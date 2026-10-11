@@ -232,3 +232,41 @@ def normalize_ops(store, ops, trusted=False):
                 if other:
                     raise BadRequest(f'Another {e[:-1]} already has this {label}: "{row.get(label) or row[js]}"')
     return ops
+
+
+# ---------------------------------------------------------------- the learning path (js/views/guides.js)
+# What the person asking (and the office) already did, so the Help page can say "You are here" without anybody ticking
+# boxes. Computed from the real rows every time (never stored), so it stays true after an import, a restore or on a second PC.
+# Setup facts (categoriesAdded...) are about the office; every daily-work fact (my...) counts only the PERSON's own rows, so a
+# new dispatcher still sees "make a trip order" as not done although the office has thousands. Per-person facts use the display name the rows carry ("created_by", "ga_by", amendments' "by", the history's "user").
+GUIDE_FACTS = ('passwordChanged', 'categoriesAdded', 'vehiclesAdded', 'driversAdded', 'peopleAdded', 'placesAdded', 'staffAdded',
+               'mailboxReady', 'backupFolder', 'myTripCreated', 'myLinkMade', 'myApproval', 'myAmendment', 'myTripClosed', 'myCancel',
+               'myWordForm', 'myExcelExport', 'myImport')
+
+
+def guide_facts(store, journal, user, must_change=False, users=1, backup_folders=0, mailbox=False):
+    """{fact id: True/False} for the person asking. `user` is the display name the records carry."""
+    def any_row(table, where='', args=()):
+        with store.lock:
+            return store.conn.execute(f'SELECT 1 FROM {table} WHERE deleted=0' + (' AND ' + where if where else '') + ' LIMIT 1',
+                                      args).fetchone() is not None
+
+    def logged(table, where, args):
+        with journal.lock:
+            return journal.conn.execute(f'SELECT 1 FROM {table} WHERE user=? AND {where} LIMIT 1', (user, *args)).fetchone() is not None
+
+    journal.flush_activity()  # exports are written to the history in batches; the person's last one counts at once
+    status_to = "field='status' AND by_user=? AND new_value IN (?, ?)"
+    return {
+        'passwordChanged': not must_change, 'categoriesAdded': any_row('trip_categories'), 'vehiclesAdded': any_row('vehicles'),
+        'driversAdded': any_row('drivers'), 'peopleAdded': any_row('people'), 'placesAdded': any_row('places'), 'staffAdded': users > 1,
+        'mailboxReady': bool(mailbox), 'backupFolder': backup_folders > 0,
+        'myTripCreated': any_row('trips', "created_by=? AND source='app'", (user,)),
+        'myLinkMade': logged('audit', 'label LIKE ?', ('Driver link for trip %',)),
+        'myApproval': any_row('trips', 'ga_by=?', (user,)),
+        'myAmendment': any_row('trip_amendments', "by_user=? AND field<>'status'", (user,)),
+        'myTripClosed': any_row('trip_amendments', status_to, (user, '"closed"', 'closed')),
+        'myCancel': any_row('trip_amendments', status_to, (user, '"cancelled"', 'cancelled')),
+        'myWordForm': logged('activity', "type='export' AND action='Word export' AND target LIKE 'Trip_order_%'", ()),  # the form, not the month report
+        'myExcelExport': logged('activity', "type='export' AND action='Excel export'", ()),
+        'myImport': any_row('trips', "created_by=? AND source IN ('excel', 'word')", (user,))}

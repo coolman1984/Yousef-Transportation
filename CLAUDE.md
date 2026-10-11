@@ -15,7 +15,8 @@ Project skill: `.claude/skills/trip-orders/SKILL.md`.
 2. Test before every push; regression test for every bug.
 3. Independent review for bigger changes; fix every verified finding.
 4. Simplicity: one clear action per screen, plain words. UI in **English and Arabic** (all strings via i18n keys,
-   RTL by logical CSS properties). Excel exports keep the original English headers.
+   RTL by logical CSS properties). Excel exports keep the original English headers. Help texts (`gd./sit./path./help./tour./slide.`)
+   in **simple formal Arabic** (العربية الميسّرة, owner 2026-10-09), checked by `tests/test_guide_gate.py` (factory af-guide release lint).
 5. Replies to the owner: simple Egyptian Arabic, conclusion first, then steps, then what he can decide next.
 
 ## Never

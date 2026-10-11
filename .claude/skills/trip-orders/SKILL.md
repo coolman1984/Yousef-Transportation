@@ -31,3 +31,9 @@ description: Working memory for the Trip Orders project (vehicle trip orders, dr
   `tests/test_access_gate.py` runs the factory gate (`server/afaccess.py`; update from Apps-Factory with `python scripts/vendor_access.py ../Yousef-Transportation`).
   Standard: `Apps-Factory/docs/ACCESS_AND_ADMINISTRATION_STANDARD.md`.
 See `docs/EXECUTION_PLAN.md` Part F and add new ones there and here.
+
+## Guides, courses and "Solve a problem" (2026-10-11)
+- `js/views/guides.js` (shared with Hessa): `GUIDES` (steps `S(kind, page, selector)`), `SITUATIONS` + `SIT_GUIDE`, `PATHS` (lessons = guide + fact).
+- Facts: `server/tripsvc.py` `GUIDE_FACTS` / `guide_facts()`, `GET /api/guide-facts`. Setup facts are office-wide; daily facts count the person's own rows. A new fact goes into both and into `test_guide_gate.GuideFactsApiTest`.
+- Words: `gd.<id>.*`, `sit.<id>.q/a`, `path.<id>.t/d` in both dictionaries. Each sentence has at most 18 Arabic / 22 English words. Each step has one action. No street or stiff office words. `tests/test_guide_gate.py` runs the factory release lint.
+- Update the checker with the factory's `scripts/vendor_guide.py`, copying only the server files (`afguide.py`, `afguide_ar_lexicon.json`).

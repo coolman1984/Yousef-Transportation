@@ -126,11 +126,13 @@ class Journal:
             CREATE INDEX IF NOT EXISTS ix_audit_ts ON audit(ts);
             CREATE INDEX IF NOT EXISTS ix_audit_scope ON audit(scope_id);
             CREATE INDEX IF NOT EXISTS ix_audit_oc ON audit(origin, cseq);
+            CREATE INDEX IF NOT EXISTS ix_audit_user ON audit(user);   -- the learning path's per-person facts
             CREATE TABLE IF NOT EXISTS activity (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, lsn INTEGER, origin TEXT, cseq INTEGER, node TEXT, ts TEXT, user TEXT,
                 ip TEXT, type TEXT, action TEXT, target TEXT, page TEXT, detail TEXT);
             CREATE INDEX IF NOT EXISTS ix_activity_ts ON activity(ts);
             CREATE INDEX IF NOT EXISTS ix_activity_oc ON activity(origin, cseq);
+            CREATE INDEX IF NOT EXISTS ix_activity_user ON activity(user, type);   -- the learning path's per-person facts
             CREATE TABLE IF NOT EXISTS security (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, lsn INTEGER, origin TEXT, cseq INTEGER, node TEXT, ts TEXT, user TEXT,
                 ip TEXT, event TEXT, target TEXT, detail TEXT);

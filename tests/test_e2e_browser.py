@@ -395,6 +395,54 @@ class ReportsPageTest(BrowserBase):
         self.assertEqual(errors, [])
 
 
+@SKIP
+class HelpPathTest(BrowserBase):
+    """Owner 2026-10-09: a new person learns alone - Help opens on "Your path" with "You are here", Start runs the coach."""
+    def test_my_path_you_are_here_and_the_coach(self):
+        pg = self.open({'lang': 'ar'})
+        pg.wait_for_selector('[data-pathcard] [data-guide]')            # the home card shows the next lesson
+        pg.goto(self.S.base + '/#/help')
+        here = pg.wait_for_selector('.path-list li[aria-current="step"]')
+        self.assertIn('أنت هنا', here.inner_text())
+        self.assertEqual(pg.evaluate("document.querySelector('.path').dataset.path"), 'admin')
+        self.assertEqual(pg.evaluate("document.querySelectorAll('.path-list li.ok').length"), 1)   # the password is already the person's own
+        here.query_selector('[data-guide]').click()
+        pg.wait_for_selector('#coach .coach-card')
+        self.assertIn('1', pg.inner_text('#coach .coach-n'))
+        pg.wait_for_url('**/#/settings?tab=rules')
+        pg.click('#coach [data-cnext]')
+        pg.wait_for_selector('[data-add].coach-hot')                     # step 2 outlines the real button
+        pg.keyboard.press('Escape')
+        pg.wait_for_function("!document.querySelector('#coach .coach-card')")
+        # Solve a problem: "Guide me" starts the guide that fixes it
+        pg.goto(self.S.base + '/#/help?view=situations')
+        pg.click('details[data-sid="driverNoShow"] summary')
+        pg.click('details[data-sid="driverNoShow"] [data-guide]')
+        pg.wait_for_selector('#coach .coach-card')
+        pg.click('#coach [data-cx]')
+        # the own-password dialog the first lesson walks through
+        pg.click('[data-act="account"]')
+        pg.click('#panels [data-pw]')
+        pg.wait_for_selector('#pw-old')
+        self.assertEqual(self.errors, [])
+
+    def test_phone_width_arabic_has_no_side_scroll(self):
+        pg = self.open({'lang': 'ar'}, width=360, height=740)
+        for view in ('path', 'guides', 'situations', 'faq'):
+            pg.goto(self.S.base + '/#/help?view=' + view)
+            pg.wait_for_selector('.help-views')
+            if view == 'path':
+                pg.wait_for_selector('.path-list')
+            pg.wait_for_timeout(200)
+            sw = pg.evaluate('document.documentElement.scrollWidth')
+            self.assertLessEqual(sw, 361, view)
+        pg.goto(self.S.base + '/#/help?view=guides')
+        pg.click('[data-guide="find"]')
+        pg.wait_for_selector('#coach .coach-card')
+        self.assertLessEqual(pg.evaluate("document.querySelector('#coach .coach-card').getBoundingClientRect().width"), 360)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == '__main__':
     unittest.main()
 

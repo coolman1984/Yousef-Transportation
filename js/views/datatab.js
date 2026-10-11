@@ -26,7 +26,7 @@
     var warn = st.lastError ? '<div class="tip bad" role="alert" data-bk-warn>' + TO.icon('alert') + '<div>' + TO.esc(TO.t('bk.failed')) + ' <span class="faint">' + TO.esc(st.lastError) + '</span></div></div>' :
       st.stale ? '<div class="tip warn" role="status" data-bk-warn>' + TO.icon('alert') + '<div>' + TO.esc(TO.t('bk.stale')) + '</div></div>' : '';
     return '<section class="card"><header><h3>' + TO.icon('lock') + ' ' + TO.esc(TO.t('bk.title')) + '</h3>' +
-      (TO.can('backups.manage') ? '<button class="btn primary sm" data-backup>' + TO.icon('plus', 'sm') + TO.esc(TO.t('bk.make')) + '</button>' : '') + '</header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('bk.sub')) + '</p>' + warn + (warn ? '<div style="height:1rem"></div>' : '') +
+      (TO.can('backups.manage') ? '<button class="btn primary sm" data-backup data-guide="backup.make">' + TO.icon('plus', 'sm') + TO.esc(TO.t('bk.make')) + '</button>' : '') + '</header><p class="muted" style="margin:-.4rem 0 1rem">' + TO.esc(TO.t('bk.sub')) + '</p>' + warn + (warn ? '<div style="height:1rem"></div>' : '') +
       (rows.length ? U.table([
         { h: 'f.time', cell: function (b) { return '<span class="num">' + U.dt(b.time) + '</span>'; } },
         { h: 'f.type', cell: function (b) { return '<span class="badge">' + TO.esc(b.kind || '') + '</span>'; } },
@@ -45,7 +45,7 @@
       root.addEventListener('click', function (e) {
         var r = e.target.closest('[data-restore]');
         if (r) { U.run(TO.post('/api/trash/restore', { txn: r.dataset.restore }), 'bin.restored', r).then(function () { state = null; return TO.data.load(); }).then(function () { TO.rerender(); }); return; }
-        if (e.target.closest('[data-backup]')) { U.run(TO.post('/api/backups'), 'bk.made').then(function () { state = null; TO.rerender(); }); return; }
+        if (e.target.closest('[data-backup]')) { U.run(TO.post('/api/backups'), 'bk.made').then(function () { state = null; TO.rerender(); if (TO.guide) TO.guide.signal('backup.made'); }); return; }
         var b = e.target.closest('[data-brestore]');
         if (b) U.confirm({ title: TO.t('bk.restore'), body: TO.t('bk.restore.body'), danger: true, ok: TO.t('bk.restore') }).then(function (ok) {
           if (ok) U.run(TO.post('/api/backups/restore', { name: b.dataset.brestore }), 'bk.restored').then(function () { state = null; return TO.data.load(); }).then(function () { TO.rerender(); });

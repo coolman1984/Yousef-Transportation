@@ -8,7 +8,7 @@
     highway: ['#0b3d2e', '#e4eee9', '#ffffff', '#f2a900'], contrast: ['#000000', '#f2f2f2', '#ffffff', '#ffd000']
   };
   var FONTS = { plex: "'TO Plex Arabic','TO Plex'", cairo: "'TO Cairo'", tajawal: "'TO Tajawal'", kufi: "'TO Kufi'", system: "'Segoe UI',Tahoma,sans-serif" };
-  var TABS = ['appearance', 'organisation', 'rules', 'money', 'gateway', 'access', 'data'];
+  var TABS = ['appearance', 'rules', 'gateway', 'access', 'data', 'privacy', 'licence'];   // the organisation and money tabs are not built yet and are not shown (N1)
 
   function sw(colors) {
     if (!colors) return '<div class="sw" style="grid-template-columns:1fr 1fr"><i style="background:linear-gradient(90deg,#13294b 0 30%,#e8edf4 30% 100%)"></i><i style="background:linear-gradient(90deg,#0d1524 0 30%,#0a1120 30% 100%)"></i></div>';
@@ -45,10 +45,6 @@
       '<div class="row wrap"><span class="plate"><b>ط و ي</b><i>6829</i></span><span class="grow"></span><span class="muted">' + TO.esc(TO.t('ap.preview.km')) + '</span><b class="num">291,382 → 291,747</b></div>' +
       '<div class="row wrap"><button class="btn primary sm" type="button">' + TO.icon('chat', 'sm') + TO.esc(TO.t('common.save')) + '</button><button class="btn sm" type="button">' + TO.esc(TO.t('common.cancel')) + '</button><span class="badge warn">' + TO.esc(TO.t('ov.trust.yellow')) + '</span><span class="badge bad">' + TO.esc(TO.t('ov.trust.red')) + '</span></div></div></aside>';
   }
-  function later(tab) {
-    return '<div class="empty"><div class="art">' + TO.icon('lock', 'lg') + '</div><h3>' + TO.esc(TO.t('set.tab.' + tab)) + '</h3><p>' + TO.esc(TO.t('set.later')) + ' · ' + TO.esc(TO.t('set.admin.only')) + '</p></div>';
-  }
-
   TO.views.settings = {
     render: function (ctx) {
       var tab = TABS.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : 'appearance';
@@ -61,12 +57,16 @@
           : tab === 'access' ? TO.accessTab.render()
           : tab === 'data' ? TO.dataTab.render()
           : tab === 'gateway' ? TO.mailboxTab.render()
+          : tab === 'privacy' ? TO.privacyTab.render()
+          : tab === 'licence' ? TO.licenceTab.render()
           : tab === 'rules' ? (TO.data.state ? '<h2 style="margin-bottom:.8rem">' + TO.esc(TO.t('set.cats')) + '</h2>' + TO.listPage(TO.lists.tripCategories) : '<div class="skeleton" style="height:10rem"></div>')
-          : '<section class="card">' + later(tab) + '</section>');
+          : '');
     },
     mount: function (root, ctx) {
       if (ctx.route.q.tab === 'data') TO.dataTab.mount(root);
       if (ctx.route.q.tab === 'gateway') TO.mailboxTab.mount(root);
+      if (ctx.route.q.tab === 'privacy') TO.privacyTab.mount(root);
+      if (ctx.route.q.tab === 'licence') TO.licenceTab.mount(root);
       if (ctx.route.q.tab === 'access') { TO.data.load().then(function () { TO.accessTab.mount(root); }); }
       if (ctx.route.q.tab === 'rules') { if (!TO.data.state) { TO.data.load().then(function () { TO.rerender(); }); return; } TO.mountList(root, TO.lists.tripCategories); }
       root.addEventListener('click', function (e) {

@@ -103,6 +103,7 @@
         if (!r.ok) {
           var msg = TO.errMessage(data) || (data && data.error) || (typeof data === 'string' && data) || ('HTTP ' + r.status);
           if (r.status === 401 && url.indexOf('/api/auth/') !== 0) TO.emit('logged-out');
+          if (r.status === 402 && data && data.licence) TO.emit('licence', data.licence);
           throw new ApiError(r.status, msg, data);
         }
         return data;

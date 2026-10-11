@@ -434,3 +434,15 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
 /* who can do what (factory access standard): every permission against every profile */
 .tbl.matrix td.c, .tbl.matrix th.c { text-align: center; }
 .tbl.matrix .group-row th { background: var(--surface-2); font-weight: 700; }
+
+/* guide, privacy and licence pieces */
+.skeleton-block { min-height: 10rem; }
+.plain { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+.lic-banner { margin: .6rem var(--gap) 0; align-items: center; }
+.lic-state { display: flex; align-items: center; gap: .8rem; margin-block-end: 1rem; }
+.lic-line { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-radius: var(--r-2); background: var(--surface-2); margin-block-end: .6rem; }
+.lic-line.good { background: var(--ok-soft); color: var(--ok); }
+.lic-line.warn { background: var(--warn-soft); color: var(--warn); }
+.lic-line.bad { background: var(--bad-soft); color: var(--bad); }
+.code-box { min-height: 6rem; font-family: ui-monospace, Consolas, monospace; }
+.report-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: .8rem; border-radius: var(--r-2); }

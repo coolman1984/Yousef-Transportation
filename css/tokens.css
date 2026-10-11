@@ -251,3 +251,17 @@
   :root:not([data-motion="on"]) *::before,
   :root:not([data-motion="on"]) *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
 }
+
+/* names the factory guide, consent and report pieces (css/af-*.css) use, mapped onto this program's own tokens */
+:root {
+  --ink-inverse: var(--brand-ink);
+  --overlay-scrim: var(--scrim);
+  --r-sm: var(--r-1);
+  --r-md: var(--r-2);
+  --r-lg: 1.1rem;
+  --r-pill: 62rem;
+  --fs-sm: .85rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.15rem;
+  --font-ui: inherit;
+}

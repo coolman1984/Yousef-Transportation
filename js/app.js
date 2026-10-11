@@ -10,7 +10,7 @@
       if (s.me) {
         TO.me = s.me;
         if (s.me.must_change) { TO.views.auth.mustChange(); return; }
-        TO.data.load().then(function () { TO.shell.start(); TO.data.startPolling(); }, function () { TO.shell.start(); });
+        TO.data.load().then(function () { TO.shell.start(); TO.data.startPolling(); TO.guide.mount(); }, function () { TO.shell.start(); TO.guide.mount(); });
         clearInterval(keepAlive);
         keepAlive = setInterval(function () { TO.get('/api/version').catch(function () { /* a 401 signs out through TO.api */ }); }, 45000);
       } else {
@@ -25,7 +25,7 @@
     });
   }
   TO.on('logged-in', start);
-  TO.on('logged-out', function () { TO.shell.stop(); TO.data.stopPolling(); TO.data.state = null; start(); });
+  TO.on('logged-out', function () { TO.guide.unmount(); TO.shell.stop(); TO.data.stopPolling(); TO.data.state = null; start(); });
   TO.on('auth-rerender', function () { if (TO.status) TO.views.auth.show(TO.status); });
 
   document.addEventListener('DOMContentLoaded', function () {

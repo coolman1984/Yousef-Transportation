@@ -5,6 +5,7 @@
 
 Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
 
+- [x] One-command Cloudflare deploy (2026-10-11): `gateway/deploy.mjs|bat`, `.github/workflows/deploy-gateway.yml`, `docs/GATEWAY_DEPLOY.md`. Real deploy = owner field test
 - [x] Learning path per role + guide coach + "Solve a problem" (2026-10-11): 28 guides, 35 situations, 7 courses, `/api/guide-facts` (per-person daily facts, `test_guide_gate.GuideFactsApiTest`), all help in simple formal Arabic, factory af-guide 0.1.4 release lint (`tests/test_guide_gate.py`)
 - [x] Factory access standard (2026-10-09): `tests/test_access_gate.py` (factory gate `server/afaccess.py`); Arabic profile names; new person starts as Viewer with the matching name; "Money" moved out of Pages; "Who can do what" matrix (browser `test_who_can_do_what_and_a_new_person_starts_as_viewer`)
 

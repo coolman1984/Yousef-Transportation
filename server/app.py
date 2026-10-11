@@ -51,7 +51,7 @@ except ImportError:
 from version import COPYRIGHT, DEVELOPER, LICENSE_NOTE, PRODUCT, VERSION  # noqa: E402
 DEFAULT_CONFIG = {
     'port': 8090,
-    'host': '0.0.0.0',
+    'host': '127.0.0.1',            # this PC only (one-PC pilot). Other PCs of the office: set "0.0.0.0" on purpose, see docs/NETWORK.md
     'data_dir': 'data',
     'backup_dir': 'backups',
     'extra_backup_dirs': [],
@@ -72,6 +72,7 @@ DEFAULT_CONFIG = {
     'sync_port': 8453,
     'sync_interval_seconds': 5,
     'peer_addresses': {},
+    'secure_cookie': False,         # true only behind HTTPS (a TLS front); on plain http the browser would drop the cookie
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/')
@@ -322,7 +323,8 @@ def policy():
         for b in bad:
             log.warning('config.json allowed_networks: "%s" is not a network (example: 192.168.1.0/24) and is ignored', b)
         if CFG.get('allowed_networks') and not nets:
-            nets = None                          # a list with nothing usable in it falls back to the private ranges instead of locking everybody out
+            log.error('config.json allowed_networks has no usable network - only this PC is allowed until it is corrected')
+            nets = []                            # a list with nothing usable in it never widens access: this PC only (fail closed)
         _POLICY.update(names=netpolicy.own_names(CFG.get('allowed_hosts') or []), nets=nets)
     return _POLICY
 
@@ -488,7 +490,7 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200 if ok else 404, page, 'text/html; charset=utf-8', {'Cache-Control': 'no-store'})
 
     def set_session(self, token):
-        return {'Set-Cookie': f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict'}
+        return {'Set-Cookie': f'{COOKIE}={token}; Path=/; HttpOnly; SameSite=Strict' + ('; Secure' if CFG.get('secure_cookie') else '')}
 
     def clear_session(self):
         return {'Set-Cookie': f'{COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'}
@@ -1229,6 +1231,8 @@ def main(background=False):
             BACKUPS.create('startup')
     except Exception as e:
         say('Startup backup failed: ' + str(e))
+    if CFG['host'] not in ('127.0.0.1', 'localhost', '::1'):
+        say(f'WARNING: the web port listens on {CFG["host"]} over plain http - passwords cross the network unencrypted. See docs/NETWORK.md.')
     BACKUPS.start()
     SYNC.start()
     GATE.start()

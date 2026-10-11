@@ -133,8 +133,36 @@ class PeerServerTest(unittest.TestCase):
         self.assertEqual(raw(self.narrow, 'GET', '/api/auth/status', 'localhost')[0], 200, 'this PC itself always gets in')
         self.assertFalse(self.narrow.client().get('/api/auth/status')['hasUsers'])
 
-    def test_e_a_list_with_nothing_usable_does_not_lock_everybody_out(self):
-        self.assertEqual(raw(self.junk, 'GET', '/api/auth/status', 'localhost', source='127.0.0.2')[0], 200)
+    def test_e_a_list_with_nothing_usable_never_widens_access(self):
+        st, _ = raw(self.junk, 'GET', '/api/auth/status', 'localhost', source='127.0.0.2')
+        self.assertEqual(st, 403, 'an invalid allowlist must not fall back to every private network')
+        self.assertEqual(raw(self.junk, 'GET', '/api/auth/status', 'localhost')[0], 200, 'this PC itself still works')
+
+    def test_e2_a_fresh_install_listens_on_this_pc_only(self):
+        import ast
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        tree = ast.parse(open(os.path.join(root, 'server', 'app.py'), encoding='utf-8').read())
+        default = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG')
+        self.assertEqual(default['host'], '127.0.0.1')
+        self.assertEqual(json.load(open(os.path.join(root, 'config.json')))['host'], '127.0.0.1')
+        self.assertFalse(default['secure_cookie'])
+
+    def test_e3_the_installer_opens_the_firewall_only_for_private_networks_and_only_on_request(self):
+        iss = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'installer', 'trip-orders.iss'), encoding='utf-8').read()
+        self.assertNotIn('profile=any', iss)
+        self.assertIn('profile=private,domain', iss)
+        add = next(l for l in iss.splitlines() if 'firewall add rule' in l)
+        self.assertIn('Tasks: lanaccess', add)
+
+    def test_e4_the_data_folder_is_not_open_to_every_windows_user(self):
+        """B2: no 'users-modify' over the data tree (databases, raw signing keys); icacls narrows it to system, administrators and one operator."""
+        iss = open(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'installer', 'trip-orders.iss'), encoding='utf-8').read()
+        self.assertNotIn('users-modify', iss)
+        self.assertNotIn('authusers', iss)
+        icacls = next(l for l in iss.splitlines() if 'icacls.exe' in l)
+        for needle in ('/inheritance:r', '*S-1-5-18', '*S-1-5-32-544', '/remove:g', '*S-1-5-32-545', '*S-1-5-11', 'OPERATOR'):
+            self.assertIn(needle, icacls)
+        self.assertIn('Name: "arabic"', iss)                    # I7: the installer speaks Arabic too
 
 
 class ConnectionLimitTest(unittest.TestCase):

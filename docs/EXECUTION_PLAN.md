@@ -82,6 +82,7 @@ need them are skipped with a clear message, and the synthetic sample (C3.6) is u
 ### B2. Tools
 
 - Python 3.11+ (CI uses 3.11, the Windows build uses the portable 3.12 like BAMS). Standard library only at runtime.
+- Optional: `pip install sqlcipher3-binary` provides the `sqlcipher3` module for at-rest encryption. The program does not import it unless `TRIPORDERS_ENCRYPT=1`. With the flag unset (the default) the app works when this package is missing. See `docs/OFFLINE_SECURITY_AND_RECOVERY.md`.
 - For checks only: `pip install openpyxl` (to cross-check our xlsx reader/writer in tests — optional, skipped if
   missing), Playwright with the pre-installed Chromium (`executablePath: '/opt/pw-browsers/chromium'`), Node 20+ and
   `wrangler` for the gateway (Phase 4).

@@ -27,6 +27,7 @@ failed-login counters and lockouts stay on the PC where they happen.
 Run  python server/auth.py reset-admin  on the administrator PC to regain access when the
 administrator password is lost.
 """
+import atrest
 import base64
 import hashlib
 import hmac
@@ -223,7 +224,7 @@ class Auth:
         self.lock_minutes = max(1, int(cfg.get('lockout_minutes', 15)))
         self.min_len = max(8, int(cfg.get('min_password_length', 8)))
         self.lock = threading.RLock()
-        self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        self.conn = atrest.connect(self.path, check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=FULL')
@@ -987,12 +988,7 @@ class Auth:
 
     def backup_to(self, path):
         with self.lock:
-            target = sqlite3.connect(path)
-            try:
-                self.conn.backup(target)
-                target.execute('PRAGMA journal_mode=DELETE')    # a plain single file (no -wal/-shm next to the copy)
-            finally:
-                target.close()
+            atrest.snapshot_plain(self.conn, path)
 
 
 class UserFolder:

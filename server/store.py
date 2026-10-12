@@ -21,6 +21,7 @@ import sqlite3
 import threading
 from datetime import datetime
 
+import atrest
 import replica
 from journal import canonical
 
@@ -167,7 +168,7 @@ class Store:
 
     # ------------------------------------------------------------ setup
     def _open(self):
-        conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        conn = atrest.connect(self.path, check_same_thread=False, isolation_level=None)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA journal_mode=WAL')
         conn.execute('PRAGMA synchronous=FULL')
@@ -476,7 +477,7 @@ class Store:
     def restore_from(self, path, user, ip, label, user_id='', kind='restore'):
         """Brings the data back to the state of a backup file WITHOUT rolling back history: the differences
         become one 'restore' changeset. It is weak: real changes made at the same time on other PCs win over it."""
-        src = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+        src, close_src = atrest.open_reader(f'file:{path}?mode=ro')
         src.row_factory = sqlite3.Row
         ops = []
         try:
@@ -501,7 +502,7 @@ class Store:
                         else:
                             ops.append({'e': e, 'id': rid, 'op': 'del'})
         finally:
-            src.close()
+            close_src()
         if not ops:
             return {'txn': None, 'changes': 0, 'version': self.version()}
         return self.commit(user, ip, label, ops, force=True, user_id=user_id, kind=kind)

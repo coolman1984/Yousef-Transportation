@@ -27,6 +27,7 @@ import time
 import uuid
 from datetime import datetime
 
+import atrest
 import ed25519
 
 ZERO = '0' * 64
@@ -89,7 +90,7 @@ class Journal:
         self.business = set(business)
         self.log = log or (lambda msg: None)
         self.lock = threading.RLock()
-        self.conn = sqlite3.connect(self.path, check_same_thread=False, isolation_level=None)
+        self.conn = atrest.connect(self.path, check_same_thread=False, isolation_level=None)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute('PRAGMA journal_mode=WAL')
         self.conn.execute('PRAGMA synchronous=FULL')

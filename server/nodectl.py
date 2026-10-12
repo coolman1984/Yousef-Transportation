@@ -144,7 +144,8 @@ def cmd_rebuild():
     if os.path.exists(old):
         try:  # keep labels of recycle-bin groups made before the upgrade
             # sqlite3's own context manager only ends a transaction; the handle must be closed before the rename (Windows).
-            with closing(sqlite3.connect(old)) as db:
+            import atrest
+            with closing(atrest.connect(old)) as db:
                 legacy = db.execute('SELECT * FROM transactions').fetchall()
         except sqlite3.Error:
             pass

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## At-rest encryption stays off unless TRIPORDERS_ENCRYPT=1 (2026-10-12)
+
+**What:** Opt-in SQLCipher / backup-archive encryption was already behind `TRIPORDERS_ENCRYPT=1`. Tests that opened archives or the live journal with raw `sqlite3` now go through `atrest` (`open_reader` / `connect`), so the same tests pass with the flag unset and set to `1`. Multi-PC crash and restore tests use a fresh temp directory per class and clean it up even when setup fails; the restore test cuts both sync directions before the offline trip. With the flag on, a missing `sqlcipher3` or `TRIPORDERS_ENCRYPT_BACKEND=file` refuses to start and does not write a plaintext work file. Docs state that recovery-key export, plaintext-to-encrypted migration, and second-PC restore are not implemented; the two-verified-backup procedure is labeled as planned. The flag must not be enabled for a real office until those exist. No vendor key and no silent plaintext fallback.
+**Not changed on purpose:** the flag's default remains off. Plaintext databases are still refused when the flag is on (no in-place migration).
+**Checks:** non-e2e suite in both modes; `test_backup` and `test_multinode` twice in each mode.
+
 ## PR #21 review fixes: CI installer isolation, fail-closed policy, upgrade grace (2026-10-12)
 
 **What:** CI-test Inno Setup channel now has its own AppId, Program Files folder, ProgramData folder, and start-menu name so silent CI installs cannot upgrade over a customer install. Missing `_release_policy` on frozen/non-python executables fails closed as commercial with no keys. Offices upgrading from contract to commercial get a one-time 30-day edit grace (stored in data, not renewable; clock-back ends it; CI-test excluded). Runbook: `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`. Tests: `test_commercial_licence`.

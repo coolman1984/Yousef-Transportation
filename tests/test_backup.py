@@ -1,11 +1,11 @@
 """F13: a backup set (data + accounts + history + photos) is created one at a time, never overwrites another, is complete and
 verifiable (manifest with sizes, checksums and the history watermark), a failed run leaves the last good set untouched, and a
 set can be turned into a working program on a clean PC. Uses the engine directly (no web server): fast and deterministic."""
+import builtins
 import hashlib
 import json
 import os
 import shutil
-import sqlite3
 import sys
 import tempfile
 import threading
@@ -20,7 +20,17 @@ except ImportError:  # pragma: no cover
 CHROMIUM = os.environ.get('TO_CHROMIUM', '/opt/pw-browsers/chromium')
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server'))
+import atrest  # noqa: E402
 from system import System  # noqa: E402
+
+
+def open_db(path):
+    """Open a backup archive or a database through atrest.
+
+    Encryption off: ordinary sqlite3. Encryption on: unseal an archive (the file is not
+    rewritten) or open a live SQLCipher database. The caller must call the returned closer.
+    """
+    return atrest.open_reader(path)
 
 
 def put(e, i, **row):
@@ -97,11 +107,11 @@ class CreateTest(BackupBase):
             with open(p, 'rb') as f:
                 self.assertEqual(hashlib.sha256(f.read()).hexdigest(), info['sha256'], part)
         self.assertEqual(m['journal']['vv'], self.sy.journal.vv(), 'the watermark names exactly the history this set contains')
-        c = sqlite3.connect(os.path.join(folder, m['files']['journal']['name']))
+        c, close = open_db(os.path.join(folder, m['files']['journal']['name']))
         try:
             self.assertGreater(c.execute('SELECT COUNT(*) FROM changes').fetchone()[0], 0)
         finally:
-            c.close()
+            close()
 
     def test_d_a_failed_run_leaves_the_last_good_set_and_no_half_set(self):
         good = self.b.create('manual')
@@ -261,11 +271,11 @@ class CoherenceTest(BackupBase):
             self.sy.auth.backup_to = real
         m = self.manifest(n)
         self.assertEqual(m['journal']['vv'], self.sy.journal.vv(), 'the set holds the state after the late change, in all three databases')
-        c = sqlite3.connect(os.path.join(self.bk, 'db', n))
+        c, close = open_db(os.path.join(self.bk, 'db', n))
         try:
             self.assertEqual(c.execute("SELECT COUNT(*) FROM vehicles WHERE id='v2'").fetchone()[0], 1)
         finally:
-            c.close()
+            close()
 
 
 class AttachmentTest(BackupBase):
@@ -398,11 +408,11 @@ class RestoreTest(BackupBase):
             self.assertTrue(sy2.journal.verify(True)['ok'], 'the new history is sound')
             kept = [x for x in os.listdir(os.path.join(clean, 'data')) if x.startswith('journal.incomplete-') and x.endswith('.db')]
             self.assertEqual(len(kept), 1, 'the old history is kept, not deleted')
-            c = sqlite3.connect(os.path.join(clean, 'data', kept[0]))
+            c, close = open_db(os.path.join(clean, 'data', kept[0]))
             try:
                 self.assertEqual(c.execute('SELECT COUNT(*) FROM changes').fetchone()[0], history)
             finally:
-                c.close()
+                close()
             sy2.store.commit('u', 'ip', 'work continues', [put('vehicles', 'v9', plate='NEW 1', plateKey='new1', active=True)])
         finally:
             sy2.close()
@@ -624,6 +634,145 @@ class ScreenTest(unittest.TestCase):
         pg = self.page('en')
         self.assertEqual(pg.locator('[data-bk-warn]').count(), 0)
         self.assertEqual(self.errors, [])
+
+
+class EncryptOffTest(unittest.TestCase):
+    """The flag is off unless it is exactly 1. Ordinary SQLite must work with sqlcipher3 missing."""
+
+    def test_flag_off_opens_plain_sqlite_without_sqlcipher(self):
+        saved_flag = os.environ.get('TRIPORDERS_ENCRYPT')
+        saved_backend = os.environ.get('TRIPORDERS_ENCRYPT_BACKEND')
+        tried, driver = atrest._DRIVER_TRIED, atrest._DRIVER
+        real_import = builtins.__import__
+
+        def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'sqlcipher3' or (isinstance(name, str) and name.startswith('sqlcipher3.')):
+                raise ImportError('sqlcipher3 hidden')
+            return real_import(name, globals, locals, fromlist, level)
+
+        folder = tempfile.mkdtemp(prefix='to-off-')
+        try:
+            os.environ.pop('TRIPORDERS_ENCRYPT', None)
+            os.environ.pop('TRIPORDERS_ENCRYPT_BACKEND', None)
+            atrest._DRIVER_TRIED = False
+            atrest._DRIVER = None
+            builtins.__import__ = guarded
+            for value in (None, '', '0', 'false', 'yes'):
+                if value is None:
+                    os.environ.pop('TRIPORDERS_ENCRYPT', None)
+                else:
+                    os.environ['TRIPORDERS_ENCRYPT'] = value
+                self.assertFalse(atrest.enabled(), repr(value))
+                self.assertEqual(atrest.backend(), 'off', repr(value))
+            os.environ.pop('TRIPORDERS_ENCRYPT', None)
+            path = os.path.join(folder, 'trips.db')
+            conn = atrest.connect(path)
+            try:
+                conn.execute('CREATE TABLE t(id INTEGER PRIMARY KEY, v TEXT)')
+                conn.execute("INSERT INTO t(v) VALUES ('plain')")
+                conn.commit()
+                self.assertEqual(conn.execute("SELECT v FROM t").fetchone()[0], 'plain')
+            finally:
+                conn.close()
+            with open(path, 'rb') as f:
+                self.assertEqual(f.read(16), b'SQLite format 3\x00')
+            self.assertFalse(os.path.exists(os.path.join(folder, 'atrest.key')))
+        finally:
+            builtins.__import__ = real_import
+            atrest._DRIVER_TRIED = tried
+            atrest._DRIVER = driver
+            if saved_flag is None:
+                os.environ.pop('TRIPORDERS_ENCRYPT', None)
+            else:
+                os.environ['TRIPORDERS_ENCRYPT'] = saved_flag
+            if saved_backend is None:
+                os.environ.pop('TRIPORDERS_ENCRYPT_BACKEND', None)
+            else:
+                os.environ['TRIPORDERS_ENCRYPT_BACKEND'] = saved_backend
+            shutil.rmtree(folder, ignore_errors=True)
+
+    def test_flag_on_refuses_without_sqlcipher_and_refuses_file_backend(self):
+        """No whole-file fallback. Missing sqlcipher3, or BACKEND=file, refuses before any work file."""
+        saved_flag = os.environ.get('TRIPORDERS_ENCRYPT')
+        saved_backend = os.environ.get('TRIPORDERS_ENCRYPT_BACKEND')
+        tried, driver = atrest._DRIVER_TRIED, atrest._DRIVER
+        real_import = builtins.__import__
+
+        def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == 'sqlcipher3' or (isinstance(name, str) and name.startswith('sqlcipher3.')):
+                raise ImportError('sqlcipher3 hidden')
+            return real_import(name, globals, locals, fromlist, level)
+
+        folder = tempfile.mkdtemp(prefix='to-enc-refuse-')
+        path = os.path.join(folder, 'trips.db')
+        try:
+            import sqlite3
+            raw = sqlite3.connect(path)
+            raw.execute('CREATE TABLE t(id INTEGER PRIMARY KEY)')
+            raw.commit()
+            raw.close()
+            with open(path, 'rb') as fh:
+                original = fh.read()
+            names = set(os.listdir(folder))
+
+            def assert_untouched():
+                with open(path, 'rb') as fh:
+                    self.assertEqual(fh.read(), original)
+                self.assertEqual(set(os.listdir(folder)), names)
+                self.assertFalse(os.path.exists(path + '.work'))
+                self.assertFalse(os.path.exists(os.path.join(folder, 'atrest.key')))
+
+            os.environ['TRIPORDERS_ENCRYPT'] = '1'
+            os.environ.pop('TRIPORDERS_ENCRYPT_BACKEND', None)
+            atrest._DRIVER_TRIED = False
+            atrest._DRIVER = None
+            builtins.__import__ = guarded
+            with self.assertRaises(RuntimeError) as cm:
+                atrest.backend()
+            self.assertIn('sqlcipher3', str(cm.exception))
+            self.assertIn('will not start', str(cm.exception))
+            self.assertIn('plaintext', str(cm.exception))
+            with self.assertRaises(RuntimeError) as cm:
+                atrest.connect(path)
+            self.assertIn('will not start', str(cm.exception))
+            self.assertIn('plaintext', str(cm.exception))
+            assert_untouched()
+
+            os.environ['TRIPORDERS_ENCRYPT_BACKEND'] = 'sqlcipher'
+            atrest._DRIVER_TRIED = False
+            atrest._DRIVER = None
+            with self.assertRaises(RuntimeError) as cm:
+                atrest.connect(path)
+            self.assertIn('sqlcipher3 module is not installed', str(cm.exception))
+            self.assertIn('will not start', str(cm.exception))
+            assert_untouched()
+
+            builtins.__import__ = real_import
+            atrest._DRIVER_TRIED = False
+            atrest._DRIVER = None
+            os.environ['TRIPORDERS_ENCRYPT_BACKEND'] = 'file'
+            with self.assertRaises(RuntimeError) as cm:
+                atrest.backend()
+            self.assertIn('TRIPORDERS_ENCRYPT_BACKEND=file', str(cm.exception))
+            self.assertIn('will not start', str(cm.exception))
+            self.assertIn('plaintext work file', str(cm.exception))
+            with self.assertRaises(RuntimeError) as cm:
+                atrest.connect(path)
+            self.assertIn('plaintext work file', str(cm.exception))
+            assert_untouched()
+        finally:
+            builtins.__import__ = real_import
+            atrest._DRIVER_TRIED = tried
+            atrest._DRIVER = driver
+            if saved_flag is None:
+                os.environ.pop('TRIPORDERS_ENCRYPT', None)
+            else:
+                os.environ['TRIPORDERS_ENCRYPT'] = saved_flag
+            if saved_backend is None:
+                os.environ.pop('TRIPORDERS_ENCRYPT_BACKEND', None)
+            else:
+                os.environ['TRIPORDERS_ENCRYPT_BACKEND'] = saved_backend
+            shutil.rmtree(folder, ignore_errors=True)
 
 
 if __name__ == '__main__':

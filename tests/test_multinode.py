@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import shutil
-import sqlite3
 import tempfile
 import time
 import unittest
@@ -65,37 +64,70 @@ class Base(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
-        cls.servers = [Server(n).start() for n in ['admin', 'pc1', 'pc2', 'pc3'][:cls.N]]
-        cls.proxies = [TcpProxy(s.sync_port) for s in cls.servers]
-        # every PC reaches every other PC only through that PC's proxy (so a PC can be "unplugged")
-        cls.A = cls.servers[0]
-        cls.ac = make_authority(cls.A)
-        cls.clients = [cls.ac]
-        for s in cls.servers[1:]:
-            pair(cls.ac, cls.A, s)
-        roster = cls.ac.get('/api/devices')['nodes']
-        ids = {n['name']: n['id'] for n in roster}
-        for i, s in enumerate(cls.servers):
-            s.node_id = ids[s.name]
-        overrides = {s.node_id: cls.proxies[i].address for i, s in enumerate(cls.servers)}
-        for s in cls.servers:
-            s.stop()
-            s.set_cfg(peer_addresses=overrides)
-            s.start()
+        # One fresh directory per class. Servers live under it and are removed even when
+        # setUpClass fails (tearDownClass is not called in that case; addClassCleanup is).
+        cls._home = tempfile.mkdtemp(prefix=f'to-{cls.__name__}-{os.getpid()}-')
+        cls.servers = []
+        cls.proxies = []
         cls.clients = []
-        for s in cls.servers:
-            c = s.client()
-            c.login(*ADMIN)
-            cls.clients.append(c)
-        cls.ac = cls.clients[0]
-        cls.converged()
+        cls.addClassCleanup(cls._cleanup_cluster)
+        try:
+            for n in ['admin', 'pc1', 'pc2', 'pc3'][:cls.N]:
+                root = tempfile.mkdtemp(prefix=f'to-{n}-', dir=cls._home)
+                srv = Server(n, root=root)
+                cls.servers.append(srv)
+                srv.start()
+            cls.proxies = []
+            for s in cls.servers:
+                cls.proxies.append(TcpProxy(s.sync_port))
+            # every PC reaches every other PC only through that PC's proxy (so a PC can be "unplugged")
+            cls.A = cls.servers[0]
+            cls.ac = make_authority(cls.A)
+            cls.clients = [cls.ac]
+            for s in cls.servers[1:]:
+                pair(cls.ac, cls.A, s)
+            roster = cls.ac.get('/api/devices')['nodes']
+            ids = {n['name']: n['id'] for n in roster}
+            for i, s in enumerate(cls.servers):
+                s.node_id = ids[s.name]
+            overrides = {s.node_id: cls.proxies[i].address for i, s in enumerate(cls.servers)}
+            for s in cls.servers:
+                s.stop()
+                s.set_cfg(peer_addresses=overrides)
+                s.start()
+            cls.clients = []
+            for s in cls.servers:
+                c = s.client()
+                c.login(*ADMIN)
+                cls.clients.append(c)
+            cls.ac = cls.clients[0]
+            cls.converged()
+        except Exception:
+            cls._cleanup_cluster()
+            raise
+
+    @classmethod
+    def _cleanup_cluster(cls):
+        for p in list(getattr(cls, 'proxies', None) or []):
+            try:
+                p.close()
+            except Exception:
+                pass
+        cls.proxies = []
+        for s in list(getattr(cls, 'servers', None) or []):
+            try:
+                s.cleanup()
+            except Exception:
+                pass
+        cls.servers = []
+        home = getattr(cls, '_home', None)
+        if home:
+            shutil.rmtree(home, ignore_errors=True)
+            cls._home = None
 
     @classmethod
     def tearDownClass(cls):
-        for p in cls.proxies:
-            p.close()
-        for s in cls.servers:
-            s.cleanup()
+        cls._cleanup_cluster()
 
     @classmethod
     def relogin(cls, i):
@@ -576,12 +608,15 @@ class T29_Tamper(Base):
         self.converged()
         s = self.servers[1]
         s.stop()
-        db = sqlite3.connect(os.path.join(s.data_dir, 'journal.db'))
-        db.execute("UPDATE audit SET user='somebody else' WHERE label='evidence'")
-        row = db.execute("SELECT lsn, body FROM changes WHERE body LIKE '%evidence%'").fetchone()
-        db.execute('UPDATE changes SET body=? WHERE lsn=?', (row[1].replace('Evidence', 'Changed'), row[0]))
-        db.commit()
-        db.close()
+        import atrest
+        db = atrest.connect(os.path.join(s.data_dir, 'journal.db'))
+        try:
+            db.execute("UPDATE audit SET user='somebody else' WHERE label='evidence'")
+            row = db.execute("SELECT lsn, body FROM changes WHERE body LIKE '%evidence%'").fetchone()
+            db.execute('UPDATE changes SET body=? WHERE lsn=?', (row[1].replace('Evidence', 'Changed'), row[0]))
+            db.commit()
+        finally:
+            db.close()
         s.start()
         c = self.relogin(1)
         rep = c.post('/api/devices/verify', {'all': True})
@@ -606,14 +641,26 @@ class T30_Restore(Base):
         a = get_area(ac, 'R2')
         ac.post('/api/commit', {'label': 'oops', 'ops': [{'e': 'trips', 'id': 'R2', 'op': 'del', 'ver': a['ver']}]})
         self.converged()
+        # Cut both directions. Unplugging only pc1 still lets pc1 push to the administrator
+        # through the administrator's proxy; a trip that arrives before the restore is then
+        # deleted as "not in the backup" and is gone after the cable is put back.
+        self.unplug(0)
         self.unplug(1)
+        ac.post('/api/commit', {'label': 'cut check', 'ops': [area_op('Rcut', 'After cut')]})
+        time.sleep(2.2)  # longer than the one-second sync interval
+        self.assertIsNone(get_area(c1, 'Rcut'), 'pc1 is offline: an administrator change must not arrive')
+        self.assertIsNotNone(get_area(ac, 'Rcut'))
         edit(c1, 'R2', capacity=77) if get_area(c1, 'R2') else None
         c1.post('/api/commit', {'label': 'offline work', 'ops': [area_op('R3', 'Made on pc1 meanwhile')]})
+        self.assertIsNotNone(get_area(c1, 'R3'))
+        self.assertIsNone(get_area(ac, 'R3'), 'work saved on the offline PC has not reached the administrator')
         audit_before = ac.get('/api/audit?limit=1000')['total']
         r = ac.post('/api/backups/restore', {'name': name})
         self.assertTrue(r['safety'].endswith('pre-restore.db'))
+        self.plug(0)
         self.plug(1)
         self.converged()
+        wait_until(lambda: all(get_area(c, 'R3') for c in self.clients), 60, what='offline trip on every PC')
         for c in self.clients:
             self.assertEqual(get_area(c, 'R1')['description'], 'good')
             self.assertIsNotNone(get_area(c, 'R2'))

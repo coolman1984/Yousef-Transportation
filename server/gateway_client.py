@@ -86,7 +86,12 @@ class Secrets:
 
     @property
     def configured(self):
-        return bool(self.url and self.data.get('officeSecret') and self.data.get('linkSecret'))
+        return bool(self.url and self.has_secrets)
+
+    @property
+    def has_secrets(self):
+        """The secrets exist on this PC, even before the gateway address is saved (the address comes after the deploy)."""
+        return bool(self.data.get('officeSecret') and self.data.get('linkSecret'))
 
     def set_url(self, url):
         url = str(url or '').strip().rstrip('/')
@@ -101,7 +106,7 @@ class Secrets:
         self.save()
 
     def setup_code(self):
-        if not self.configured:
+        if not self.has_secrets:
             raise GatewayError('The mailbox is not set up yet.')
         return b64url(json.dumps({'v': 1, 'u': self.url, 'o': self.data['officeSecret'], 'l': self.data['linkSecret']}).encode())
 
@@ -306,7 +311,7 @@ class GatewaySync:
                 delay = min(max(delay * 2, 10), 600)
 
     def status(self):
-        return {'configured': self.secrets.configured, 'url': self.secrets.url, 'pollSeconds': int(self.secrets.data.get('pollSeconds') or 60), **self.stat}
+        return {'configured': self.secrets.configured, 'hasSecrets': self.secrets.has_secrets, 'url': self.secrets.url, 'pollSeconds': int(self.secrets.data.get('pollSeconds') or 60), **self.stat}
 
     # -- one round
     def cycle(self):

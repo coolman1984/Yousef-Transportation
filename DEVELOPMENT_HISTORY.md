@@ -1,6 +1,26 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Mailbox secrets appear right after "Create the secrets" (2026-10-12)
+
+**Gate:** supports the later-release lane "driver phone link / internet mailbox"; no change to the office-only first-pilot core.
+**Bug (owner report):** as administrator, Settings → Mailbox → «اعمل الأسرار» showed «الأسرار اتعملت.» but the office secret and the
+setup code never appeared, and «اعرض / اخفي الأسرار» never showed up while the gateway address was still empty.
+**Root cause:** the secrets were created, but `GET /api/gateway/secrets` (and the setup code) required `SECRETS.configured`, which also
+needs the address. The address only exists after the deploy, and the deploy needs the office secret: a circle. The 400 answer was then
+lost in an unhandled promise, so the screen only showed the success toast. The show button depended on `configured` too.
+**Fix:** `Secrets.has_secrets` (secrets exist, address or not). `/api/gateway/secrets`, the setup code and the "replace needs consent"
+check use it; `GET /api/gateway` reports `hasSecrets`. The screen shows the secrets right after generating (the success toast now waits
+for them), shows «اعرض / اخفي» whenever secrets exist, keeps «اعمل أسرار جديدة» as its own button with a confirmation before replacing,
+adds Copy buttons for the office secret and the setup code, and says to copy the setup code again once the address is saved.
+**Mistake / lesson:** a readiness flag that mixes two steps (secrets + address) blocked the first of them. Gate each action on exactly
+what it needs. A promise chain after `U.run` must end in a handler, or an error disappears behind a success toast.
+**Review (Codex, same day):** (1) the replace confirmation claimed every driver link stops - false, the gateway checks only each link's own hash, so the text now says links already sent keep working and how to cancel one (new link for that trip); revoking all links on rotation would be a separate feature. (2) Saving the address while the secrets were on screen left a stale setup code - the screen now reads the secrets again after every action (browser test covers it).
+**Release:** version 1.1.1 (owner asked for the release on 2026-10-12); it also ships the one-command Cloudflare deploy, merged after 1.1.0.
+**Checks:** regression tests `test_gateway_client.SecretsBeforeAddressTest` (API: no address, setup code to a second PC, replace needs
+consent, secrets not in server output or activity log) and `test_e2e_link_ui` test 0 (real Chrome, Arabic: generate, fields visible,
+copy, hide/show, cancel and confirm replace); both fail on the old code. Full suite and gateway tests run before the push.
+
 ## One-command Cloudflare deploy for the gateway (2026-10-11)
 
 **Gate:** supports the later-release lane "driver phone link / internet mailbox"; no change to the office-only first-pilot core.

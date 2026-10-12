@@ -75,6 +75,50 @@ class LinkUiTest(BrowserBase):
         pg.keyboard.press('Escape')
         self.assertEqual(self.errors, [])
 
+    def test_0_secrets_show_before_the_address(self):
+        """Regression (2026-10-12): after "اعمل الأسرار" the office secret and setup code did not appear and there was no show button
+        while the gateway address was still empty. Runs first (0 < a): this server has no secrets yet."""
+        pg = self.open({'lang': 'ar'})
+        pg.context.grant_permissions(['clipboard-read', 'clipboard-write'], origin=self.S.base)
+        pg.goto(self.S.base + '/#/settings?tab=gateway')
+        pg.wait_for_selector('[data-gw="generate"]')
+        self.assertEqual(pg.query_selector_all('[data-gw="show"]'), [], 'no secrets yet: nothing to show')
+        self.assertEqual(pg.input_value('#gw-url'), '')
+        pg.click('[data-gw="generate"]')
+        pg.wait_for_selector('#gw-office')
+        server = self.ac.get('/api/gateway/secrets')
+        self.assertEqual(pg.input_value('#gw-office'), server['officeSecret'])
+        self.assertEqual(pg.input_value('#gw-setup'), server['setupCode'])
+        pg.wait_for_selector('[data-gw="show"]')
+        # copy puts the office secret on the clipboard
+        pg.click('[data-gw="copy"][data-copy="#gw-office"]')
+        pg.wait_for_function('() => document.querySelector("#toasts") && document.querySelector("#toasts").textContent.includes("اتنسخ")')
+        self.assertEqual(pg.evaluate('navigator.clipboard.readText()'), server['officeSecret'])
+        # hide, then show again: still the same secrets
+        pg.click('[data-gw="show"]')
+        pg.wait_for_selector('#gw-office', state='detached')
+        pg.click('[data-gw="show"]')
+        pg.wait_for_selector('#gw-office')
+        self.assertEqual(pg.input_value('#gw-office'), server['officeSecret'])
+        # saving the address while the secrets are on screen refreshes the setup code (it carries the address)
+        before = pg.input_value('#gw-setup')
+        pg.fill('#gw-url', 'https://mailbox.example.workers.dev')
+        pg.click('[data-gw="save"]')
+        pg.wait_for_function('s => document.querySelector("#gw-setup") && document.querySelector("#gw-setup").value !== s', arg=before)
+        self.assertEqual(pg.input_value('#gw-setup'), self.ac.get('/api/gateway/secrets')['setupCode'])
+        # making new ones asks first; cancel changes nothing
+        pg.click('[data-gw="generate"]')
+        pg.wait_for_selector('[data-ok]')
+        pg.click('[data-close]')
+        pg.wait_for_selector('[data-ok]', state='detached')
+        self.assertEqual(self.ac.get('/api/gateway/secrets')['officeSecret'], server['officeSecret'])
+        pg.click('[data-gw="generate"]')
+        pg.click('[data-ok]')
+        pg.wait_for_function('s => { var e = document.querySelector("#gw-office"); return e && e.value && e.value !== s; }', arg=server['officeSecret'])
+        self.assertEqual(pg.input_value('#gw-office'), self.ac.get('/api/gateway/secrets')['officeSecret'])
+        self.ac.post('/api/gateway/save', {'url': '', 'pollSeconds': 60})  # leave "not connected" for the next test
+        self.assertEqual(self.errors, [])
+
     def test_b_print_sheet(self):
         pg = self.open({'lang': 'ar'})
         pg.goto(self.S.base + '/#/trips')

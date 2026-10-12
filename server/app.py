@@ -769,7 +769,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, GATE.status())
         if p == '/api/gateway/secrets':
             self.need('gateway.manage')
-            if not SECRETS.configured:
+            if not SECRETS.has_secrets:  # the address may still be empty: the secrets come first, the deploy and its address after
                 raise BadRequest('The mailbox is not set up yet.')
             STORE.log_activity(self.user, self.ip, [{'type': 'security', 'action': 'Mailbox secret viewed', 'target': 'gateway'}])
             return self.send(200, {'officeSecret': SECRETS.data['officeSecret'], 'setupCode': SECRETS.setup_code()})
@@ -1033,7 +1033,7 @@ class Handler(BaseHTTPRequestHandler):
                     SECRETS.data['pollSeconds'] = min(600, max(15, poll))
                     SECRETS.save()
                 elif action == 'generate':
-                    if SECRETS.configured and not d.get('replace'):
+                    if SECRETS.has_secrets and not d.get('replace'):
                         raise BadRequest('Secrets already exist. Replacing them stops every existing driver link until the gateway is updated.')
                     SECRETS.generate()
                     GATE.pushed.clear()

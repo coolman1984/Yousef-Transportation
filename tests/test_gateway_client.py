@@ -150,6 +150,61 @@ class UnitTest(unittest.TestCase):
         self.assertEqual(h['X-TO-Sig'], hmac.new(b'k', msg.encode(), hashlib.sha256).hexdigest())
 
 
+class SecretsBeforeAddressTest(unittest.TestCase):
+    """Regression (2026-10-12): "Create the secrets" said done but nothing showed, because the secrets could only be read once a
+    gateway address was saved - and the address only exists after the deploy that needs the office secret."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('gwsecrets').start()
+        cls.ac = make_authority(cls.S)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def test_secrets_shown_without_address_and_replace_needs_consent(self):
+        ac = self.ac
+        st = ac.get('/api/gateway')
+        self.assertFalse(st['hasSecrets'])
+        with self.assertRaises(ApiError) as e:
+            ac.get('/api/gateway/secrets')
+        self.assertEqual(e.exception.code, 400)
+        ac.post('/api/gateway/save', {'url': '', 'pollSeconds': 60})
+        st = ac.post('/api/gateway/generate', {})
+        self.assertTrue(st['hasSecrets'])
+        self.assertFalse(st['configured'], 'no address yet: not connected, but the secrets exist')
+        first = ac.get('/api/gateway/secrets')
+        self.assertGreaterEqual(len(first['officeSecret']), 32)
+        self.assertTrue(first['setupCode'])
+        # the setup code made before the address still moves the secrets to another PC
+        other = Server('gwsecrets2').start()
+        try:
+            oc = make_authority(other)
+            self.assertTrue(oc.post('/api/gateway/code', {'code': first['setupCode']})['hasSecrets'])
+            self.assertEqual(oc.get('/api/gateway/secrets')['officeSecret'], first['officeSecret'])
+        finally:
+            other.cleanup()
+        # making them again needs an explicit "replace" (the screen asks first), even without an address
+        with self.assertRaises(ApiError) as e:
+            ac.post('/api/gateway/generate', {})
+        self.assertEqual(e.exception.code, 400)
+        self.assertEqual(ac.get('/api/gateway/secrets')['officeSecret'], first['officeSecret'], 'a refused replace changes nothing')
+        ac.post('/api/gateway/generate', {'replace': True})
+        second = ac.get('/api/gateway/secrets')
+        self.assertNotEqual(second['officeSecret'], first['officeSecret'])
+        # saving the address later keeps the secrets and puts the address into the setup code
+        ac.post('/api/gateway/save', {'url': 'https://mailbox.example.workers.dev', 'pollSeconds': 60})
+        third = ac.get('/api/gateway/secrets')
+        self.assertEqual(third['officeSecret'], second['officeSecret'])
+        self.assertNotEqual(third['setupCode'], second['setupCode'])
+        # the secrets never reach the server output or the activity log
+        log = ''.join(self.S.out) + json.dumps(ac.get('/api/activity'))
+        for v in (first, second):
+            self.assertNotIn(v['officeSecret'], log)
+            self.assertNotIn(v['setupCode'], log)
+
+
 @unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
 class IntegrationTest(unittest.TestCase):
     @classmethod

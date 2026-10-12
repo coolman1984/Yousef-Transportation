@@ -47,8 +47,9 @@ def main():
     policy = os.path.join(ROOT, 'server', '_release_policy.py')
     # Fail before building if the vendor has not supplied a real Ed25519 PUBLIC
     # signing key. Never use a developer/demo key for a customer release.
-    key_count = create_release_policy(policy, os.environ.get('TO_RELEASE_PUBLIC_KEYS', ''))
-    print(f'Customer licence enforcement: {key_count} pinned PUBLIC key(s)')
+    channel = os.environ.get('TO_BUILD_CHANNEL', 'commercial')
+    key_count = create_release_policy(policy, os.environ.get('TO_RELEASE_PUBLIC_KEYS', ''), channel=channel)
+    print(f'{channel} licence enforcement: {key_count} pinned PUBLIC key(s)')
     try:
         run([sys.executable, 'tools/make_assets.py', assets])
         run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'triporders.ico')])
@@ -71,6 +72,9 @@ def main():
     for src in ('gateway/dist/trip-orders-gateway.js', 'gateway/dist/schema.sql', 'docs/GATEWAY_SETUP.md'):
         shutil.copy(os.path.join(ROOT, src), gw)
     run([iscc(), f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'trip-orders.iss')])
+    if channel == 'ci-test':
+        with open(os.path.join(ROOT, 'dist', 'CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt'), 'w', encoding='utf-8') as f:
+            f.write('TEST ONLY. Ephemeral signing keys. Never sell or publish this installer.\\n')
     print('Done:', glob.glob(os.path.join(ROOT, 'dist', f'TripOrders-Setup-{VERSION}.exe')))
 
 

@@ -202,4 +202,4 @@ jobs:
           fi
           gh release create "v$v" dist/TripOrders-Setup-*.exe --target "$GITHUB_SHA" \
             --title "Trip Orders $v" --notes-file docs/RELEASE_NOTES.md
-          gh release upload "v$v" gateway/dist/trip-orders-gateway.js gateway/dist/schema.sql docs/GATEWAY_SETUP.md --clobber
+          gh release upload "v$v" gateway/dist/trip-orders-gateway.js gateway/dist/schema.sql gateway/deploy.mjs gateway/deploy.bat docs/GATEWAY_SETUP.md docs/GATEWAY_DEPLOY.md --clobber

@@ -1,6 +1,21 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## One-command Cloudflare deploy for the gateway (2026-10-11)
+
+**Gate:** supports the later-release lane "driver phone link / internet mailbox"; no change to the office-only first-pilot core.
+**Why:** the owner wants to take the repo and go live himself. The old guide had 9 manual dashboard steps (about 20 minutes, easy to get wrong).
+**What:** `gateway/deploy.mjs` (+ `deploy.bat`): builds the single file, finds or creates the D1 database `trip-orders`, writes its id
+in `wrangler.toml`, applies `schema.sql` (idempotent), deploys, then sets `OFFICE_SECRET` through stdin (never a file or a log).
+Every step is safe to repeat. `.github/workflows/deploy-gateway.yml`: manual run from GitHub using three repository secrets, runs
+the gateway tests first. `docs/GATEWAY_DEPLOY.md` (simple Arabic). The release now also carries the deploy files.
+**Decisions (researched):** wrangler pinned to 4.45.0 (first version with D1 auto-provisioning, still beta) but the script creates the
+database explicitly instead of relying on the beta feature; API token with "Edit Cloudflare Workers" + D1 Edit only; secrets only in
+GitHub Secrets / Cloudflare, never in the public repo.
+**Checks:** gateway tests 24/24; `node --check deploy.mjs`. **Not run:** a real deploy (no Cloudflare account in this sandbox); the
+first run by the owner is the field test, `GATEWAY_SETUP.md` step 9 is the acceptance.
+**Next:** owner runs `deploy.bat`, then the phone smoke test.
+
 ## Learning path per role, guide coach and simple formal Arabic help (2026-10-11)
 
 **Why:** the owner's request (2026-10-09): every product has the same capabilities. A brand-new person learns alone and in

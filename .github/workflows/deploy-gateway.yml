@@ -1,0 +1,35 @@
+# Puts the gateway (Worker + D1 mailbox) on the owner's Cloudflare account. Manual only: Actions -> Deploy gateway -> Run.
+# One-time setup in the repository: Settings -> Secrets and variables -> Actions:
+#   CLOUDFLARE_API_TOKEN   (template "Edit Cloudflare Workers" + permission D1: Edit)
+#   CLOUDFLARE_ACCOUNT_ID
+#   OFFICE_SECRET          (copied from the program: Settings -> Mailbox -> Make the secrets)
+# See docs/GATEWAY_DEPLOY.md.
+name: Deploy gateway
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-gateway
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '^22.13.0'
+      - name: Gateway tests first
+        working-directory: gateway
+        run: node --test --no-warnings test/gateway.test.js
+      - name: Deploy (database, tables, worker, secret)
+        working-directory: gateway
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          OFFICE_SECRET: ${{ secrets.OFFICE_SECRET }}
+        run: |
+          test -n "$CLOUDFLARE_API_TOKEN" -a -n "$CLOUDFLARE_ACCOUNT_ID" -a -n "$OFFICE_SECRET" || { echo "Add the three secrets first (docs/GATEWAY_DEPLOY.md)"; exit 1; }
+          node deploy.mjs

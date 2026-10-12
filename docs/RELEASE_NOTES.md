@@ -21,6 +21,7 @@
 - **Licence** (Settings): device-bound trial / monthly / permanent codes checked offline with public keys; ask the company from the screen (the code arrives by itself) or paste it. Without a working code you can still read, print, export and back up. A build without public keys says "licence by contract" and works fully (the assisted pilot). Setup: `docs/HUB_SETUP.md`.
 
 ## New
+- **Mailbox on Cloudflare in one step:** double-click `deploy.bat` (or run "Deploy gateway" on GitHub). It makes the database, tables, gateway and secret by itself and can be repeated safely. Guide: `GATEWAY_DEPLOY.md`.
 - **A course for every job:** Help → «مساري / My path». The administrator starts by setting the office up, then each role has its own lessons (dispatcher, approver, reviewer, finance, viewer). The program sees what you already did and marks «أنت هنا / You are here»; the next lesson waits on the overview with «Guide me».
 - **Guide me:** 28 step-by-step guides that open the page and point at the button.
 - **Solve a problem:** 35 real situations (driver did not come, car broke down, wrong date, link does not open…), each with «Take me there» and «Guide me».

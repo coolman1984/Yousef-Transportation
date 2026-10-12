@@ -3,8 +3,12 @@
 What is enforced and what never is
 - Only the vendor's public keys are inside the program (licence_keys.txt, TO_LICENCE_KEYS, or `licence_keys` in config.json). They cannot
   make codes. The trusted Licence Studio on the owner's PC signs a code for THIS PC's device code; the relay Worker only carries it.
-- Enforcement is on only when the build carries public keys. Without keys the program says "licence by contract" and works fully: that
-  is the assisted pilot (LAUNCH_SCOPE.md, manual licensing). Nothing in this file is a kill switch.
+- A COMMERCIAL installer pins its trusted public keys in the compiled binary. A customer's
+  config file, environment or filesystem cannot replace them. A commercial build with no keys
+  fails at BUILD time, and a corrupt/missing embedded policy fails closed at runtime.
+- Source development without a compiled release policy retains the historical contract-mode
+  assisted pilot (LAUNCH_SCOPE.md). This must NEVER be distributed as the paid installer.
+  Nothing in this file is a remote kill switch.
 - Without a working code (none, expired, other PC, clock moved back) the program keeps opening, reading, printing, exporting and backing up:
   only actions that change business data are refused (HTTP 402), with the device code to send to the vendor. Data is never deleted,
   hidden or encrypted (BIZ-03).
@@ -31,6 +35,16 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import afcodes
+
+# In installed customer builds this generated module is compiled into TripOrders.exe.
+# Never load commercial trust anchors from writable user configuration.
+try:
+    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS
+except ImportError:
+    # Compiled binaries must never silently drop into contract mode if a release
+    # policy module is missing due to a damaged build.
+    _COMMERCIAL_BUILD = bool(globals().get('__compiled__', False))
+    _RELEASE_KEYS = ()
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -96,6 +110,8 @@ class Licence:
 
     # ---------------------------------------------------------------- keys, device, state
     def trusted_keys(self):
+        if _COMMERCIAL_BUILD:
+            return list(_RELEASE_KEYS)  # pinned in the compiled program; customer config/env ignored
         keys = [k.strip() for k in os.environ.get('TO_LICENCE_KEYS', '').split(',') if k.strip()]
         keys += [str(k).split(':', 1)[-1].strip() for k in (self.cfg.get('licence_keys') or []) if str(k).strip()]
         for folder in (self.home, self.root):
@@ -113,12 +129,12 @@ class Licence:
         return bool(self.trusted_keys())
 
     def device(self):
-        override = os.environ.get('TO_DEVICE_ID')                    # tests only: a fixed identity for a fake PC
+        override = os.environ.get('TO_DEVICE_ID') if not _COMMERCIAL_BUILD else None  # tests only; never in sold binaries
         return afcodes.device_code(override or _machine_id(), self.a.kv('install_id'), PRODUCT_ID)
 
     def machine_tag(self):
         """A hash of this PC for the one-trial-per-PC rule; the PC's own identity never leaves it."""
-        ident = os.environ.get('TO_DEVICE_ID') or _machine_id()
+        ident = (os.environ.get('TO_DEVICE_ID') if not _COMMERCIAL_BUILD else None) or _machine_id()
         return hashlib.sha256(f'AF-MACHINE/1|{ident}|{PRODUCT_ID}'.encode('utf-8')).hexdigest()
 
     def _seen_now(self):
@@ -138,7 +154,10 @@ class Licence:
         dev = self.device()
         today = date.today()
         if not keys:
-            return {'state': 'contract', 'full': True, 'enforced': False, 'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
+            # A broken commercial key policy must NOT unlock edits.
+            return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
+                    'full': not _COMMERCIAL_BUILD, 'enforced': bool(_COMMERCIAL_BUILD),
+                    'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
                     'days_left': None, 'serial': None, 'reason': 'no_keys'}
         clock_back = self._seen_now()
         key = (code, dev, today, tuple(keys))

@@ -15,6 +15,7 @@ for them), shows «اعرض / اخفي» whenever secrets exist, keeps «اعم�
 adds Copy buttons for the office secret and the setup code, and says to copy the setup code again once the address is saved.
 **Mistake / lesson:** a readiness flag that mixes two steps (secrets + address) blocked the first of them. Gate each action on exactly
 what it needs. A promise chain after `U.run` must end in a handler, or an error disappears behind a success toast.
+**Release:** version 1.1.1 (owner asked for the release on 2026-10-12); it also ships the one-command Cloudflare deploy, merged after 1.1.0.
 **Checks:** regression tests `test_gateway_client.SecretsBeforeAddressTest` (API: no address, setup code to a second PC, replace needs
 consent, secrets not in server output or activity log) and `test_e2e_link_ui` test 0 (real Chrome, Arabic: generate, fields visible,
 copy, hide/show, cancel and confirm replace); both fail on the old code. Full suite and gateway tests run before the push.

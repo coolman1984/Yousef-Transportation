@@ -1,0 +1,32 @@
+# Offline commercial security and recoverable storage
+
+**Owner decision (12 October 2026):** Trip Orders must still work when the office is offline. A suspected attempt to modify, inspect or reverse-engineer the application MUST NEVER delete, corrupt, encrypt again, or ransom the customer's data. Treat detected tampering as a **recoverable security incident**, not as proof of malicious intent. This document is a design and a staged acceptance plan, **not a claim that database encryption or cloud backup exists yet**.
+
+## Current verified code (security branch)
+
+- Customer Windows build fails unless `TO_RELEASE_PUBLIC_KEYS` contains a valid Ed25519 public verification key. The generated `_release_policy` is compiled into the executable; config/env/file overrides cannot replace it.
+- The vendor's PRIVATE Ed25519 signing key is never included in the binary, source, installer or customer configuration. Codes are signed on the vendor's own trusted machine, including offline codes.
+- Trial/monthly/perpetual signed licences already support binding to a machine and checking offline. When the code is missing, expired, for a different machine, or the clock has moved back too far, writes are blocked; reading, reporting, exporting and backing up remain available. No data gets deleted.
+- CI generates an ephemeral signing key, exercises the customer-style build and labels it **CI TEST / NOT FOR CUSTOMERS**. CI must not publish this as a commercial release. The owner must provision a separate, genuine public verification key and test a controlled customer build.
+- Existing protected storage: local SQLite databases and uploaded attachments, access-controlled Windows data folder, backups with SHA-256 checks. **The database files are NOT encrypted at rest by this phase.** Current `sqlite3` standard-library storage and backups remain readable to a party who can access the raw files.
+
+## Mandatory phased design for real encryption
+
+1. **Inventory and threat model.** Enumerate `trips.db`, `auth.db`, `journal.db`, `assist.db`, other SQLite files, WAL/SHM/temp copies, photos and exports. Audit exact access from all source files and all Windows user accounts. Identify the legitimate office owner and consent / contract rights to restore their business data.
+2. **Encryption at rest.** Evaluate a supported audited SQLite encryption engine (SQLCipher with 256-bit AES and page authentication) for **every** database connection, including migrations, tests, backup, restore and multi-PC replicas. For attachments and backup archives use authenticated encryption with independent random nonces, and authenticate metadata. Never fake encryption by compressing/obfuscating files.
+3. **Offline keys and recovery.** Generate a random data-encryption key per installation. Protect the local key using Windows DPAPI / supported hardware protection, with an explicit recoverable wrapped copy encrypted for the owner-approved recovery workflow. Never store a decryption key or reusable passphrase in the executable or source repository. Document how a legitimate customer recovers on a new PC with owner consent. A device compromise with local running-app privileges can still expose decrypted data: never promise impossible resistance.
+4. **Safe migration.** Stop all writers; make and VERIFY two independent readable backups; encrypt a separate copy; check full row/entity counts, hashes, photos, histories, licensing and permissions; open/restart/recover on a second clean Windows PC; only then atomically switch. Roll back to the original good data if the test fails. Never migrate in place or delete the sole readable copy.
+5. **Detect but do not destroy.** On a failed authentication/integrity check: stop writes, capture a sanitized local incident record and checksums, show a clear recovery screen, and preserve original files. Ordinary power failures, corruption and unsupported version upgrades must not falsely mark an employee as a hacker. Never lock the customer out of their data as punishment for inspection.
+6. **R2 off-site backup.** Back up encrypted, versioned snapshots when the connection returns, plus a second local/offline backup for the time without internet. Use Cloudflare R2 bucket-lock retention on the backup prefix and a write-only upload gateway; never store R2 delete/admin credentials on customer PCs. Separate customer namespaces, rate limits, quotas, signed manifests, scheduled restore drills and retention agreed in the contract. R2 retention rules are configurable by an authorized account operator: this is not infallible, irremovable storage.
+7. **Offline reality.** If internet disappears before the latest backup uploads, the server does NOT have the unsent changes. Queue encrypted uploads without stopping office operations; show the exact timestamp of the last server-confirmed backup and offline outstanding count. Do not describe backup as complete until server receipt and restore verification.
+8. **Privacy and consent.** Customer trips and personal records belong to the customer. Disclose where backups are stored, encryption/access policies, restore approvals, retention/deletion, and who can see data. Do not quietly collect company records merely to deter reverse engineering.
+
+## Before a commercial handoff
+
+- Make the **currently public GitHub repository private** (requires the owner's GitHub administrative action; this branch cannot change visibility). Assume any previously cloned source is already disclosed.
+- Produce a genuinely customer-signed installer from the release process, not the ephemeral CI artifact.
+- Verify offline licence activation and renewal, hardware change/recovery, upgrade from no-key installations, expired licence read/export/backup, negative-role tests and unauthorised access.
+- Validate SQLCipher and offsite backup migration on an identical Windows installation with a real disaster-recovery drill. Until this gate passes, do not advertise encrypted on-disk databases or protected cloud restores.
+- Perform an independent security review of application and network permissions and simulate an ordinary power cut and an unclean shutdown; neither scenario may erase data.
+
+**Key distinction:** tamper-detection may help identify an integrity incident. It cannot reliably prove who inspected, copied, modified or reverse-engineered an executable on a fully controlled offline PC. A fully offline application necessarily has enough information to operate locally and can be patched by a sufficiently capable local administrator.

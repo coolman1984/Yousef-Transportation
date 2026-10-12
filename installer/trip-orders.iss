@@ -3,6 +3,16 @@
 ; only the program in Program Files is replaced, the data in %ProgramData%\TripOrders is never touched.
 
 #define MyAppName "Trip Orders"
+#ifndef AppChannel
+  #define AppChannel "commercial"
+#endif
+#if AppChannel == "ci-test"
+  #define AppDisplayName "Trip Orders - CI TEST - NOT FOR CUSTOMERS"
+  #define AppFileSuffix "-CI-TEST-NOT-FOR-CUSTOMERS"
+#else
+  #define AppDisplayName "Trip Orders"
+  #define AppFileSuffix ""
+#endif
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
@@ -15,9 +25,9 @@
 
 [Setup]
 AppId={{51A5FF77-EE7F-474F-9A55-53DEEF2A4B7A}
-AppName={#MyAppName}
+AppName={#AppDisplayName}
 AppVersion={#AppVersion}
-AppVerName={#MyAppName} {#AppVersion}
+AppVerName={#AppDisplayName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppCopyright={#AppCopyright}
 VersionInfoVersion={#AppVersion}
@@ -30,10 +40,10 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
-OutputBaseFilename=TripOrders-Setup-{#AppVersion}
+OutputBaseFilename=TripOrders-Setup-{#AppVersion}{#AppFileSuffix}
 SetupIconFile=..\build\triporders.ico
 UninstallDisplayIcon={app}\TripOrders.exe
-UninstallDisplayName={#MyAppName}
+UninstallDisplayName={#AppDisplayName}
 LicenseFile=..\LICENSE.txt
 Compression=lzma2/max
 SolidCompression=yes

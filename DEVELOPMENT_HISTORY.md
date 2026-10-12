@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Offline commercial licence and Windows executable hardening (2026-10-12, PR #21)
+
+**Gate:** protect the paid installer without requiring internet and without intentionally harming customer data. **Branch:** security/offline-commercial-licensing-20261012, based on main c766f7ab. **What:** fail-closed commercial key policy embedded into Nuitka code, ignore writable key overrides in commercial builds, Windows CI uses ephemeral test-only keys and no automatic publication. The EXE removes docstrings, verifies no Python/debug artifacts ship, and moves optional gateway deployment materials outside the installer. The existing offline signed codes and read/export/backup during expiry are preserved. Licence title corrected. Documented a separate future storage-encryption/R2 restore project, **not yet implemented**.
+**Risks & constraints:** Cannot encrypt a fully offline executable in a way that makes reverse engineering impossible; browser-delivered JS remains inspectable. No Windows commercial signing certificates or owner's real Ed25519 key embedded in CI. The currently public GitHub repository requires a separate visibility action. Never erase, corrupt or re-encrypt customer data as a tamper penalty.
+**Acceptance:** full GitHub CI including Windows installed-product journey and independent review; do not merge with red/unknown status. Commercial release additionally requires real offline signing key, clean PC acceptance, upgrade and disaster-recovery checks.
+**Lesson:** distinguish executable deterrence, licence enforcement and database confidentiality. They solve different problems and need different tests.
+
 ## QA report of 12 October 2026: office-only correctness (2026-10-12)
 
 **Gate:** L2 core journey (create trip → office start/end → review/approve/correct with history → matching report). Source: Grok's hands-on report in the Inbox repository; every item and its decision is in `docs/QA_2026-10-12_STATUS.md`.

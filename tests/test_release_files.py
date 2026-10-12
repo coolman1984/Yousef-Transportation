@@ -34,6 +34,20 @@ class WorkflowTest(unittest.TestCase):
         build = open(os.path.join(ROOT, 'tools', 'build_windows.py'), encoding='utf-8').read()
         self.assertIn('aftelemetry_events.json', build)
 
+    def test_customer_exe_hides_docstrings_and_operator_gateway_sources(self):
+        build = open(os.path.join(ROOT, 'tools', 'build_windows.py'), encoding='utf-8').read()
+        self.assertIn('--python-flag=no_docstrings', build)
+        self.assertIn('--lto=auto', build)
+        self.assertIn("operator-only-gateway", build)
+        self.assertIn("os.path.exists(os.path.join(dist, 'gateway'))", build)
+        self.assertIn("'.pyc'", build)
+        self.assertIn("'.pdb'", build)
+        self.assertIn("'.map'", build)
+        self.assertIn("raise RuntimeError('Customer package contains", build)
+        installer = open(os.path.join(ROOT, 'installer', 'trip-orders.iss'), encoding='utf-8').read()
+        self.assertIn(r'Source: "..\\build\\to_main.dist\\*"', installer)
+        self.assertNotIn('operator-only-gateway', installer)
+
     def test_vendored_factory_parts_carry_their_header(self):
         for name in ('afguide.py', 'afconsent.py', 'aftelemetry.py', 'afcodes.py'):
             head = open(os.path.join(ROOT, 'server', name), encoding='utf-8').read(400)

@@ -3,6 +3,8 @@
 
 # Next (not released yet)
 
+# Trip Orders 1.1.2
+
 ## Fixed - from the 12 October 2026 test
 - **Trips recorded only at the office are no longer all red.** They show "needs review" (yellow) until a person presses **Reviewed**; a later change brings the mark back.
 - **The program refuses impossible values:** a wrong date, text in the kilometres, an end before the start, an unknown status; a cancelled or closed trip cannot be reopened.

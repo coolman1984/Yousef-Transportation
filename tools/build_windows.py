@@ -16,6 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'build')
 sys.path.insert(0, os.path.join(ROOT, 'server'))
 from version import COPYRIGHT, DEVELOPER, PRODUCT, VERSION  # noqa: E402
+from release_policy import create_release_policy  # noqa: E402
 
 
 def run(cmd):
@@ -34,7 +35,7 @@ def compile_program(v4):
     run([sys.executable, '-m', 'nuitka', '--standalone', '--assume-yes-for-downloads', '--windows-console-mode=attach',
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
-         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets',
+         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets', '--include-module=_release_policy',
          '--include-data-files=' + os.path.join('server', 'aftelemetry_events.json') + '=aftelemetry_events.json',
          '--include-data-files=' + os.path.join('server', 'afguide_ar_lexicon.json') + '=afguide_ar_lexicon.json',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'to_main.py')])
@@ -43,14 +44,22 @@ def compile_program(v4):
 def main():
     os.makedirs(BUILD, exist_ok=True)
     assets = os.path.join(ROOT, 'server', '_assets.py')
-    run([sys.executable, 'tools/make_assets.py', assets])
-    run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'triporders.ico')])
-    v4 = '.'.join((VERSION.split('.') + ['0', '0', '0'])[:4])
+    policy = os.path.join(ROOT, 'server', '_release_policy.py')
+    # Fail before building if the vendor has not supplied a real Ed25519 PUBLIC
+    # signing key. Never use a developer/demo key for a customer release.
+    key_count = create_release_policy(policy, os.environ.get('TO_RELEASE_PUBLIC_KEYS', ''))
+    print(f'Customer licence enforcement: {key_count} pinned PUBLIC key(s)')
     try:
+        run([sys.executable, 'tools/make_assets.py', assets])
+        run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'triporders.ico')])
+        v4 = '.'.join((VERSION.split('.') + ['0', '0', '0'])[:4])
         compile_program(v4)
-    finally:  # never leave the packed pages next to the source: the portable version would serve them instead
-        if os.path.exists(assets):
-            os.remove(assets)
+    finally:
+        # Generated sources contain UI assets and the release trust anchor; they
+        # belong in the compiled binary, never in the source checkout.
+        for path in (assets, policy):
+            if os.path.exists(path):
+                os.remove(path)
     dist = os.path.join(BUILD, 'to_main.dist')
     assert os.path.exists(os.path.join(dist, 'TripOrders.exe')), 'TripOrders.exe was not built'
     leaks = [p for p in glob.glob(os.path.join(dist, '**', '*.py'), recursive=True)]

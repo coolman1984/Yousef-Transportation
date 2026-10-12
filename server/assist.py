@@ -29,6 +29,7 @@ from urllib.parse import urlsplit
 import afconsent
 import afguide
 import aftelemetry
+import atrest
 from version import DEVELOPER, VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -108,15 +109,24 @@ class Assist:
         self.closed = False
         self.errors = []              # times of recent server errors (for the diagnostics count)
         self.catalogue, self.texts = self._load_guide(root, assets)
-        self.db = sqlite3.connect(os.path.join(data_dir, 'assist.db'), check_same_thread=False, isolation_level=None)
+        self.db = atrest.connect(os.path.join(data_dir, 'assist.db'), check_same_thread=False, isolation_level=None)
         self.db.execute(KV_SQL)
         self.db.executescript(afconsent.SQL)
         self.db.execute(afguide.SQL)
         self._ensure_identity()
         self.consent = afconsent.Consent(self.db, on_change=self._on_consent)
-        self.tel = aftelemetry.Telemetry(os.path.join(data_dir, 'telemetry.db'), self.kv('install_id'), node='office', product=PRODUCT_ID,
-                                         version=VERSION, env='practice' if practice else 'real', secret=self.kv('secret'),
-                                         consent=self.consent)
+        # aftelemetry is vendored and opens telemetry.db itself. Patch only for this call so the
+        # module's sqlite3.connect is unchanged for the rest of the process when encryption is off,
+        # and so the vendored file does not grow a product dependency.
+        real_connect = sqlite3.connect
+        try:
+            if atrest.enabled():
+                sqlite3.connect = atrest.connect
+            self.tel = aftelemetry.Telemetry(os.path.join(data_dir, 'telemetry.db'), self.kv('install_id'), node='office', product=PRODUCT_ID,
+                                             version=VERSION, env='practice' if practice else 'real', secret=self.kv('secret'),
+                                             consent=self.consent)
+        finally:
+            sqlite3.connect = real_connect
         self._prune_pending()
         self.thread = None
 

@@ -5,6 +5,8 @@ Steps: pack the web pages into server/_assets.py, draw the icon, compile the pro
 (Python translated to C, no readable source files), then wrap it in the Inno Setup installer.
 
     python tools/build_windows.py            needs: pip install nuitka ordered-set zstandard cryptography, and Inno Setup 6
+    sqlcipher3 (pip install sqlcipher3-binary) is optional. Omit it unless the build is meant to run with TRIPORDERS_ENCRYPT=1.
+    A build without that package still runs when the flag is unset.
 """
 import glob
 import pathlib

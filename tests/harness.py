@@ -88,7 +88,9 @@ class Client:
 class Server:
     def __init__(self, name, root=None, data_dir=None, extra_cfg=None):
         self.name = name
-        self.root = root or tempfile.mkdtemp(prefix=f'to-{name}-')
+        # A new directory for every server. The prefix includes the pid so a crashed
+        # run cannot be picked up by the next one (mkdtemp never reuses a name).
+        self.root = root or tempfile.mkdtemp(prefix=f'to-{name}-{os.getpid()}-')
         self.port, self.sync_port = free_port(), free_port()
         self.data_dir = data_dir or os.path.join(self.root, 'data')
         self.cfg_path = os.path.join(self.root, 'config.json')
@@ -117,8 +119,14 @@ class Server:
             json.dump(cfg, f)
 
     def start(self, wait=True):
+        if self.proc and self.proc.poll() is None:
+            self.kill()
+        self.out = []
         env = dict(os.environ, TO_CONFIG=self.cfg_path, PYTHONUNBUFFERED='1')
-        self.proc = subprocess.Popen([sys.executable, APP], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # Own session so stop/kill can signal this server without touching the test process,
+        # and so a crashed test does not leave the server in the test's process group.
+        self.proc = subprocess.Popen([sys.executable, APP], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                                     text=True, start_new_session=True)
         threading.Thread(target=self._drain, args=(self.proc,), daemon=True).start()
         if wait:
             wait_until(lambda: self.status(), 60, what=f'{self.name} to start: ' + ''.join(self.out[-20:]))
@@ -136,21 +144,36 @@ class Server:
                 raise RuntimeError(f'{self.name} exited: ' + ''.join(self.out[-40:]))
             return None
 
+    def _signal_group(self, sig):
+        proc = self.proc
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            os.killpg(proc.pid, sig)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                proc.send_signal(sig)
+            except OSError:
+                pass
+
     def stop(self):
         if self.proc and self.proc.poll() is None:
-            self.proc.send_signal(signal.SIGINT)
+            self._signal_group(signal.SIGINT)
             try:
                 self.proc.wait(10)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
+                self._signal_group(signal.SIGKILL)
                 self.proc.wait()
         self.proc = None
 
     def kill(self):
         """Hard crash (like pulling the power cable)."""
         if self.proc and self.proc.poll() is None:
-            self.proc.kill()
-            self.proc.wait()
+            self._signal_group(signal.SIGKILL)
+            try:
+                self.proc.wait(5)
+            except subprocess.TimeoutExpired:
+                self.proc.wait()
         self.proc = None
 
     def client(self):
@@ -158,7 +181,8 @@ class Server:
 
     def cleanup(self):
         self.kill()
-        shutil.rmtree(self.root, ignore_errors=True)
+        if self.root:
+            shutil.rmtree(self.root, ignore_errors=True)
 
 
 ADMIN = ('boss', 'Strong-pass1')

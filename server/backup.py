@@ -19,6 +19,8 @@
     that fails leaves nothing behind and the last good set untouched; the failure is shown to the administrator.
   * What a set contains: business data, user accounts, the change history and the photos. It does NOT contain the secret keys of
     this PC (data/node) or the mailbox secrets (gateway.json) - a plain copy of those on a USB drive would be a key leak.
+  * When TRIPORDERS_ENCRYPT=1, each database file in the set is a ChaCha20-Poly1305 archive (random nonce, header authenticated
+    as additional data). The raw data key is not in the set. The header carries only the DPAPI-style wrapped key.
 
 Restoring never rolls anything back: the differences between the current data and
 the backup are saved as one new "restore" change (Store.restore_from). History,
@@ -36,6 +38,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 
+import atrest
 from version import VERSION
 
 AUTO_KINDS = ('auto', 'startup')
@@ -83,18 +86,18 @@ def _sha_file(path):
 
 
 def _integrity_of(path):
-    c = sqlite3.connect(f'file:{path}?mode=ro', uri=True)
+    c, close = atrest.open_reader(f'file:{path}?mode=ro')
     try:
         return c.execute('PRAGMA integrity_check').fetchone()[0]
     finally:
-        c.close()
+        close()
 
 
 def _attachment_inventory(data_db):
     """[[path under uploads/, sha256, size], ...] of every uploaded file the saved data needs (photos, documents, the logo), read from a
     copy of the business database. The backup is only complete when all of them are in it."""
     out, seen = [], set()
-    c = sqlite3.connect(f'file:{data_db}?mode=ro', uri=True)
+    c, close = atrest.open_reader(f'file:{data_db}?mode=ro')
     try:
         rows = [(r[0], r[1], r[2]) for r in c.execute('SELECT id, sha256, size_bytes FROM attachments WHERE deleted=0')]
         rows += [(r[0], '', 0) for r in c.execute('SELECT src FROM trip_photos WHERE deleted=0')]
@@ -102,7 +105,7 @@ def _attachment_inventory(data_db):
         if logo and isinstance(logo[0], str):
             rows.append((logo[0].strip('"'), '', 0))
     finally:
-        c.close()
+        close()
     for src, sha, size in rows:
         if not isinstance(src, str) or not src.startswith('/files/') or src in seen:
             continue
@@ -163,6 +166,13 @@ def verify_set(folder, name):
                 problems.append(f'{part}: size differs from the manifest')
             elif _sha_file(p) != info.get('sha256'):
                 problems.append(f'{part}: checksum differs from the manifest')
+        mac = (manifest.get('atrest') or {}).get('mac')
+        if mac:
+            try:
+                if not atrest.manifest_mac_ok(manifest, atrest.key_from_sealed(os.path.join(folder, name))):
+                    problems.append('manifest: authentication failed')
+            except (OSError, ValueError, sqlite3.DatabaseError) as e:
+                problems.append('manifest: ' + str(e))
     try:
         result = _integrity_of(os.path.join(folder, name))
         if result != 'ok':
@@ -251,12 +261,7 @@ class Backups:
 
     @staticmethod
     def _snapshot(conn, path):
-        target = sqlite3.connect(path)
-        try:
-            conn.backup(target)
-            target.execute('PRAGMA journal_mode=DELETE')    # a plain single file: no -wal/-shm files left next to the copy
-        finally:
-            target.close()
+        atrest.snapshot_plain(conn, path)
 
     _integrity = staticmethod(_integrity_of)
     _sha = staticmethod(_sha_file)
@@ -292,18 +297,26 @@ class Backups:
                 raise RuntimeError('The system was busy saving changes the whole time, so a consistent backup could not be taken. '
                                    'Nothing was changed and the previous backup is untouched - try again in a minute.')
             parts = [k for k in ('data', 'auth', 'journal') if os.path.exists(tmp[k])]
-            files = {}
             for k in parts:                      # every part is checked before the set becomes visible
                 result = self._integrity(tmp[k])
                 if result != 'ok':
                     raise RuntimeError(f'The copy of the {k} failed the integrity check: {result}')
-                files[k] = {'name': final[k], 'size': os.path.getsize(tmp[k]), 'sha256': self._sha(tmp[k])}
             up = self._mirror_uploads(os.path.join(self.dir, 'uploads'))
             inventory = _attachment_inventory(tmp['data'])
             missing, damaged = attachment_problems(os.path.join(self.dir, 'uploads'), inventory)
             att = {'required': len(inventory), 'missing': len(missing), 'damaged': len(damaged), 'complete': not (missing or damaged), 'files': inventory}
+            if atrest.enabled():
+                data_dir = os.path.dirname(os.path.abspath(self.store.path))
+                for k in parts:
+                    atrest.seal_sqlite_file(tmp[k], data_dir, {'part': k, 'name': final[k], 'kind': kind})
+            files = {}
+            for k in parts:
+                files[k] = {'name': final[k], 'size': os.path.getsize(tmp[k]), 'sha256': self._sha(tmp[k])}
             manifest = {'format': 1, 'name': name, 'kind': kind, 'createdAt': datetime.now().isoformat(timespec='seconds'), 'app': VERSION,
                         'dataVersion': version, 'journal': {'vv': vv}, 'files': files, 'uploads': up, 'attachments': att}
+            if atrest.enabled():
+                manifest['atrest'] = {'v': 1, 'aead': 'chacha20poly1305', 'wrap': 'dpapi-standin'}
+                manifest['atrest']['mac'] = atrest.manifest_mac(manifest, atrest.data_key(os.path.dirname(os.path.abspath(self.store.path))))
             with open(tmp['manifest'], 'w', encoding='utf-8') as f:
                 json.dump(manifest, f, indent=1)
             # the data file is renamed LAST: a set is visible (listed, restorable) only when everything else is already in place

@@ -36,7 +36,7 @@ class JunkBodyTest(unittest.TestCase):
         cls.S.cleanup()
 
     POSTS = ['/api/auth/login', '/api/auth/password', '/api/log', '/api/commit', '/api/trips/new', '/api/trips/amend', '/api/trips/cancel',
-             '/api/trips/link', '/api/trips/approve', '/api/users/save', '/api/users/reset', '/api/profiles/save', '/api/backups/restore',
+             '/api/trips/link', '/api/trips/approve', '/api/trips/close', '/api/trips/start', '/api/trips/review', '/api/users/save', '/api/users/reset', '/api/profiles/save', '/api/backups/restore',
              '/api/backups/folder', '/api/gateway/save', '/api/xlsx', '/api/excel/commit', '/api/trash/restore', '/api/conflicts/resolve',
              '/api/quick-links/set', '/api/devices/decide', '/api/devices/export-key']
 

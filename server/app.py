@@ -1064,6 +1064,15 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'amend':
                 self.need('trips.amend', 'trips.review')
                 return self.send(200, tripsvc.amend(*args, str(d.get('id')), d.get('field'), d.get('value'), d.get('reason'), guard=g))
+            if action == 'start':
+                self.need('trips.edit', 'trips.amend', 'trips.review')
+                return self.send(200, tripsvc.start_trip(*args, str(d.get('id')), guard=g))
+            if action == 'close':
+                self.need('trips.amend', 'trips.review', 'trips.edit')
+                row = tripsvc._row(STORE, 'trips', str(d.get('id')))
+                if row and row.get('locked'):   # correcting a closed trip needs the correction permissions, like "Change this trip"
+                    self.need('trips.amend', 'trips.review')
+                return self.send(200, tripsvc.close_trip(*args, str(d.get('id')), d, guard=g))
             if action == 'cancel':
                 self.need('trips.cancel')
                 row = tripsvc._row(STORE, 'trips', str(d.get('id')))

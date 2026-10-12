@@ -149,11 +149,13 @@ async function driver(request, env, url, parts) {
 async function officeAuth(request, env, url, bodyBytes) {
   if (!env.OFFICE_SECRET) throw new Fail(503, 'The gateway has no office secret yet');
   const t = Number(request.headers.get('X-TO-Time')), nonce = request.headers.get('X-TO-Nonce') || '', sig = (request.headers.get('X-TO-Sig') || '').toLowerCase();
-  if (!t || Math.abs(now() - t) > 300 || !/^[0-9a-f]{16,64}$/.test(nonce) || !sig) throw new Fail(401, 'Unauthorised');
+  if (!t || !/^[0-9a-f]{16,64}$/.test(nonce) || !sig) throw new Fail(401, 'Unauthorised', { reason: 'secret' });
+  // A clock that is off is told apart from a wrong secret, so the office is not sent chasing the secret (the skew is not a secret).
+  if (Math.abs(now() - t) > 300) throw new Fail(401, 'Clock is off', { reason: 'clock', skewSeconds: t - now(), serverTime: iso(now()) });
   const expected = await hmacHex(env.OFFICE_SECRET, [request.method, url.pathname + url.search, String(t), nonce, await sha256Hex(bodyBytes)].join('\n'));
-  if (!same(expected, sig)) throw new Fail(401, 'Unauthorised');
+  if (!same(expected, sig)) throw new Fail(401, 'Unauthorised', { reason: 'secret' });
   const r = await env.DB.prepare('INSERT OR IGNORE INTO nonces(nonce, at) VALUES(?, ?)').bind(nonce, now()).run();
-  if (!(r.meta ? r.meta.changes : r.changes)) throw new Fail(401, 'Replayed request');
+  if (!(r.meta ? r.meta.changes : r.changes)) throw new Fail(401, 'Replayed request', { reason: 'replay' });
 }
 
 // Links the office replaced. A removed card is remembered here so a PC that still has the old link in its data cannot publish it again.

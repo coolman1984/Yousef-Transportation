@@ -138,6 +138,15 @@ class Client:
                 return data if raw else json.loads(data or b'{}')
         except urllib.error.HTTPError as e:
             if e.code == 401:
+                try:
+                    info = json.loads(e.read() or b'{}')
+                except (ValueError, OSError):
+                    info = {}
+                if info.get('reason') == 'clock':   # the gateway says it is the clock, not the secret
+                    mins = max(1, round(abs(float(info.get('skewSeconds') or 0)) / 60))
+                    raise GatewayError(f'The clock of this PC is off by {mins} minutes compared with the mailbox. Correct the date and time of this PC, then try again.')
+                if info.get('reason') == 'replay':
+                    raise GatewayError('The mailbox saw this request twice. Try again.')
                 raise GatewayError('The mailbox refused this PC. The secret does not match the one set on the gateway.')
             if e.code == 503:
                 raise GatewayError('The mailbox is running but has no secret yet. Set OFFICE_SECRET on it (see the setup guide).')

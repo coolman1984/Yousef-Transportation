@@ -225,6 +225,30 @@ class TripsApiTest(unittest.TestCase):
         self.assertIn('Y_DRIVER_LONG_DAY', ins[x['id']]['reasons'])
         self.assertNotIn('Y_DRIVER_OVERLAP', ins[x['id']]['reasons'])
 
+    def test_p_start_then_close_in_one_step(self):
+        t = self.trip()
+        self.ac.post('/api/trips/start', {'id': t['id']})
+        x = self.get_trip(t['id'])
+        self.assertEqual(x['status'], 'started')
+        self.assertTrue(x['startAt'])
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/start', {'id': t['id']})
+        today = date.today().isoformat()
+        with self.assertRaises(ApiError):   # a missing value
+            self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 180})
+        with self.assertRaises(ApiError):   # end before start
+            self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 90, 'startAt': today + 'T08:00', 'endAt': today + 'T09:00'})
+        self.assertEqual(self.get_trip(t['id'])['status'], 'started')
+        self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 180, 'startAt': today + 'T08:00', 'endAt': today + 'T11:30'})
+        x = self.get_trip(t['id'])
+        self.assertEqual((x['status'], x['locked'], x['startKm'], x['endKm']), ('closed', True, 100, 180))
+        fields = sorted(a['field'] for a in self.ac.get('/api/state')['tripAmendments'] if a['tripId'] == t['id'])
+        self.assertEqual(fields, ['endAt', 'endKm', 'startAt', 'startKm', 'status'])   # one record per value that changed (startAt: "now" became 08:00)
+        with self.assertRaises(ApiError):   # correcting a closed trip needs a reason
+            self.ac.post('/api/trips/close', {'id': t['id'], 'endKm': 200})
+        self.ac.post('/api/trips/close', {'id': t['id'], 'endKm': 200, 'reason': 'Paper says 200'})
+        self.assertEqual(self.get_trip(t['id'])['endKm'], 200)
+
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()
         for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):

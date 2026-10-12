@@ -121,10 +121,18 @@ test('office requests must be signed, fresh, unrepeated and untampered', async (
   const env = newEnv();
   assert.equal((await call(env, 'GET', '/office/status')).status, 401, 'no signature');
   assert.equal((await office(env, 'GET', '/office/status', undefined, { secret: 'wrong-secret' })).status, 401);
-  assert.equal((await office(env, 'GET', '/office/status', undefined, { time: Math.floor(Date.now() / 1000) - 600 })).status, 401, 'too old');
+  const wrong = await office(env, 'GET', '/office/status', undefined, { secret: 'wrong-secret' });
+  assert.equal((await wrong.json()).reason, 'secret');
+  const old = await office(env, 'GET', '/office/status', undefined, { time: Math.floor(Date.now() / 1000) - 600 });
+  assert.equal(old.status, 401, 'too old');
+  const oldBody = await old.json();
+  assert.equal(oldBody.reason, 'clock', 'a clock that is off is not reported as a wrong secret');
+  assert.ok(Math.abs(oldBody.skewSeconds + 600) < 5 && oldBody.serverTime);
   const nonce = 'ab'.repeat(16);
   assert.equal((await office(env, 'GET', '/office/status', undefined, { nonce })).status, 200);
-  assert.equal((await office(env, 'GET', '/office/status', undefined, { nonce })).status, 401, 'replayed');
+  const again = await office(env, 'GET', '/office/status', undefined, { nonce });
+  assert.equal(again.status, 401, 'replayed');
+  assert.equal((await again.json()).reason, 'replay');
   // a valid signature for one body does not cover another
   const good = { cards: [] };
   const bytes = new TextEncoder().encode(JSON.stringify(good));

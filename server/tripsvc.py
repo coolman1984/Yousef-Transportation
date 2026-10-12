@@ -167,6 +167,58 @@ def amend(store, user, ip, user_id, trip_id, field, value, reason, guard=None):
     return {'ok': True}
 
 
+def start_trip(store, user, ip, user_id, trip_id, guard=None):
+    """The trip left: status "started" and the start time now (Cairo time) unless the office already wrote one."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') not in ('draft', 'sent'):
+        raise BadRequest('Only a trip that has not left yet can be started')
+    ver = t.pop('ver')
+    row = {**t, 'status': 'started', 'startAt': t.get('startAt') or _now()}
+    store.commit(user, ip, f'Started trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}], guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
+CLOSE_FIELDS = ('startKm', 'endKm', 'startAt', 'endAt')
+
+
+def close_trip(store, user, ip, user_id, trip_id, data, guard=None):
+    """The office writes the whole result of a trip in ONE step: both odometer readings, both times, and the trip is closed.
+    Every changed value still gets its own amendment record (old value kept) with the same reason. The reason is only required when the
+    trip was already closed before (then it is a correction); the first entry is plain data entry."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') == 'cancelled':
+        raise BadRequest('A cancelled trip cannot be closed')
+    reason = str(data.get('reason') or '').strip()
+    if t.get('locked') and len(reason) < 3:
+        raise BadRequest('Write the reason for the change')
+    reason = reason or 'Entered at the office'
+    ver = t.pop('ver')
+    row = dict(t)
+    for f in CLOSE_FIELDS:
+        v = data.get(f)
+        if v not in (None, ''):
+            row[f] = str(v).strip() + (':00' if f.endswith('At') and len(str(v).strip()) == 16 else '')
+    missing = [f for f in CLOSE_FIELDS if row.get(f) in (None, '')]
+    if missing:
+        raise BadRequest('Write both odometer readings and both times: ' + ', '.join(missing))
+    row['status'], row['locked'] = 'closed', True
+    check_trip(row, t)
+    ops = [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}]
+    at = _now()
+    for f in (*CLOSE_FIELDS, 'status'):
+        if row.get(f) != t.get(f):
+            ops.append({'e': 'tripAmendments', 'id': new_id('am'), 'op': 'put',
+                        'row': {'tripId': trip_id, 'field': f, 'old': t.get(f), 'new': row.get(f), 'reason': reason[:400], 'by': user, 'at': at}})
+    if len(ops) == 1:
+        raise BadRequest('Nothing changed')
+    store.commit(user, ip, f'Closed trip {t.get("no")}', ops, guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
 def cancel(store, user, ip, user_id, trip_id, reason, guard=None):
     t = _row(store, 'trips', trip_id)
     if not t:

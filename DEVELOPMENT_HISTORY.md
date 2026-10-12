@@ -13,6 +13,14 @@
 **Acceptance:** full GitHub CI including Windows installed-product journey and independent review; do not merge with red/unknown status. Commercial release additionally requires real offline signing key, clean PC acceptance, upgrade and disaster-recovery checks.
 **Lesson:** distinguish executable deterrence, licence enforcement and database confidentiality. They solve different problems and need different tests.
 
+## Owner standards for every agent (2026-10-12)
+
+**Gate:** none. Agent instructions only. The pilot promise, version, and application code are unchanged.
+**What:** `.cursor/rules/owner-standards.mdc` (`alwaysApply: true`). It collects how to talk to the owner, the product bar (finished screens, personalization, Arabic RTL, offline-first, cheap tools), the stops that need the owner (secrets, customer data, money, deletion, a release), the branch-and-PR workflow, and the review checks (inputs, regression tests, both dictionaries, the Windows installer).
+**Why:** those rules were already in `LAUNCH_SCOPE.md`, `CLAUDE.md`, `docs/EXECUTION_PLAN.md`, `docs/DESIGN.md`, and `docs/BUILD_AND_RELEASE.md`, but a new agent could miss them. The rule points back at the first-sale contract so a polished screen does not widen the pilot.
+**Checks:** no product code, so the full suite was not run. The pull request is labeled `do-not-merge` so the hourly auto-finish does not merge it.
+**Not touched:** branch `security/offline-commercial-licensing-20261012` and pull request #21.
+
 ## QA report of 12 October 2026: office-only correctness (2026-10-12)
 
 **Gate:** L2 core journey (create trip → office start/end → review/approve/correct with history → matching report). Source: Grok's hands-on report in the Inbox repository; every item and its decision is in `docs/QA_2026-10-12_STATUS.md`.

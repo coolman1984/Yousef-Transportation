@@ -8,6 +8,7 @@
 
 Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
 
+- [x] Owner standards for agents (2026-10-12): `.cursor/rules/owner-standards.mdc` (alwaysApply). No product code. Test map: none (docs only). Not released, not merged.
 - [x] QA report of 2026-10-12 (Grok): every item decided in `docs/QA_2026-10-12_STATUS.md`. Test map: `test_trips_api` (i-p: validation, in-use delete, duplicates, department, overlaps, close form), `test_domain` (office-only trust, reviewed, overlap, plate), `gateway.test.js` + `test_gateway_client.test_0` (clock, bind, limits). Open: owner decisions on overtime per day and admin lock-out; later: mobile cards, small texts. Not released, not merged.
 - [x] Factory parity (2026-10-11): review `docs/YOUSEF_REVIEW.md` closed in code - status per item in `docs/YOUSEF_REVIEW_STATUS.md`. Test map: `test_permissions` (B1), `test_network` (B2/B3, gzip), `test_pricing` (B4), `test_backup` (B5/I6), `test_errors` (I7-I9), `test_guide` + `test_e2e_guide` (I1), `test_assist` (I2-I5), `test_release_files` (B6), `test_crypto` (I10), `test_design` + `docs/ui-lab` (I11). Still open: Windows installer evidence, live hub round trip, Arabic reading pass, remaining inline styles.
 - [x] One-command Cloudflare deploy (2026-10-11): `gateway/deploy.mjs|bat`, `.github/workflows/deploy-gateway.yml`, `docs/GATEWAY_DEPLOY.md`. Real deploy = owner field test

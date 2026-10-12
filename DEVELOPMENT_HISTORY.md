@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Cloud Agent environment notes (2026-10-12)
+
+**What:** `AGENTS.md` now records how a Cloud Agent runs this repo: `python` is 3.11, screen tests use Chromium at `/opt/pw-browsers/chromium`, and the boot server keeps its data in `TO_HOME` (`$HOME/trip-orders-home`) on port 8090.
+**Why:** the image's `python3` is 3.12, and CI pins 3.11 plus Playwright. A boot server that wrote into the checkout would dirty `data/` and fight a second `python server/app.py` on port 8090.
+**Not a product change:** no office or gateway behavior changed.
+
 ## QA report of 12 October 2026: office-only correctness (2026-10-12)
 
 **Gate:** L2 core journey (create trip → office start/end → review/approve/correct with history → matching report). Source: Grok's hands-on report in the Inbox repository; every item and its decision is in `docs/QA_2026-10-12_STATUS.md`.

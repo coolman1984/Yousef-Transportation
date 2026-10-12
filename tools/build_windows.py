@@ -81,7 +81,7 @@ def main():
     run([iscc(), f'/DAppChannel={channel}', f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'trip-orders.iss')])
     if channel == 'ci-test':
         with open(os.path.join(ROOT, 'dist', 'CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt'), 'w', encoding='utf-8') as f:
-            f.write('TEST ONLY. Ephemeral signing keys. Never sell or publish this installer.\\n')
+            f.write('TEST ONLY. Ephemeral signing keys. Never sell or publish this installer.\n')
     print('Done:', glob.glob(os.path.join(ROOT, 'dist', f'TripOrders-Setup-{VERSION}*.exe')))
 
 

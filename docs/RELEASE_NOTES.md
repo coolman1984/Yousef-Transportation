@@ -3,6 +3,8 @@
 
 # Next (not released yet)
 
+- **Commercial upgrade:** offices moving from the contract build get about 30 days of full editing while device-bound licence codes are prepared (`upgrade_grace` in licence status). See `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`.
+
 # Trip Orders 1.1.2
 
 ## Fixed - from the 12 October 2026 test

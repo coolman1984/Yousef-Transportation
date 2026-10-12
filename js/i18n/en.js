@@ -198,6 +198,7 @@
     'lic.ciTest': 'CI TEST BUILD ONLY. Never sell or deliver this copy to customers.',
     'lic.banner': 'There is no working licence, so changes are paused. You can still read, print, export and back up.',
     'lic.state.contract': 'Licence by contract',
+    'lic.state.upgrade_grace': 'Commercial upgrade grace (get a code soon)',
     'lic.state.none': 'No licence code yet',
     'lic.state.trial': 'Trial',
     'lic.state.active': 'Licensed',

@@ -25,8 +25,11 @@ The hub address is public configuration: FACTORY_HUB_URL, `hub_url` in config.js
 import hashlib
 import json
 import os
+import pathlib
 import platform
+import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -36,6 +39,17 @@ from datetime import date, datetime, timedelta, timezone
 
 import afcodes
 
+
+def _distributed_runtime():
+    """True when this process is a shipped binary, not a plain python source run."""
+    if getattr(sys, 'frozen', False):
+        return True
+    if globals().get('__compiled__'):
+        return True
+    exe = os.path.basename(sys.executable or '').lower()
+    return bool(exe) and not exe.startswith('python')
+
+
 # In installed customer builds this generated module is compiled into TripOrders.exe.
 # Never load commercial trust anchors from writable user configuration.
 try:
@@ -43,9 +57,9 @@ try:
 except ImportError:
     # Compiled binaries must never silently drop into contract mode if a release
     # policy module is missing due to a damaged build.
-    _COMMERCIAL_BUILD = bool(globals().get('__compiled__', False))
+    _COMMERCIAL_BUILD = _distributed_runtime()
     _RELEASE_KEYS = ()
-    _BUILD_CHANNEL = 'source'
+    _BUILD_CHANNEL = 'commercial' if _COMMERCIAL_BUILD else 'source'
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -55,6 +69,12 @@ POLL = ((600, 20), (3600, 120), (10 ** 9, 600))
 SENT_FIELDS = ('product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version')
 ACTIVE = ('sending', 'waiting', 'failed')
 CLOCK_TOLERANCE_HOURS = 24
+UPGRADE_GRACE_DAYS = 30
+UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
+UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
+UPGRADE_GRACE_META_KEY = 'commercial_upgrade_grace_at'
+UPGRADE_GRACE_CONSUMED_META = 'commercial_upgrade_grace_consumed'
+UPGRADE_GRACE_EVER_META = 'commercial_upgrade_grace_ever'
 _cache = {}
 _lock = threading.RLock()
 
@@ -148,6 +168,136 @@ class Licence:
             return False
         return now < last - timedelta(hours=CLOCK_TOLERANCE_HOURS)
 
+    def _data_dir(self):
+        return getattr(self.a, 'data_dir', None) or self.home
+
+    def _trips_db_path(self):
+        return os.path.join(self._data_dir(), 'trips.db')
+
+    def _has_prior_office_data(self):
+        path = self._trips_db_path()
+        if not os.path.exists(path):
+            return False
+        try:
+            conn = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
+            try:
+                # A fresh install also gets 'initialized' and sample trips on its first boot, so only an
+                # office whose database was initialised well before this commercial build first ran counts.
+                if not conn.execute('SELECT 1 FROM trips LIMIT 1').fetchone():
+                    return False
+                row = conn.execute("SELECT value FROM meta WHERE key='initialized'").fetchone()
+                if not row:
+                    return False
+                try:
+                    initialised = datetime.fromisoformat(str(row[0]).rstrip('Z')).replace(tzinfo=None)
+                except ValueError:
+                    return False
+                return initialised < datetime.now() - timedelta(hours=UPGRADE_PRIOR_DATA_MIN_AGE_HOURS)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+
+    def _trips_meta(self, key):
+        trips = self._trips_db_path()
+        if not os.path.exists(trips):
+            return None
+        try:
+            conn = sqlite3.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
+            try:
+                row = conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+
+    def _set_trips_meta(self, key, value):
+        trips = self._trips_db_path()
+        if not os.path.exists(trips):
+            return
+        try:
+            conn = sqlite3.connect(trips, isolation_level=None)
+            conn.execute(
+                'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
+                (key, value))
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+    def _upgrade_grace_consumed(self):
+        if self.a.kv('upgrade_grace_consumed'):
+            return True
+        return self._trips_meta(UPGRADE_GRACE_CONSUMED_META) == '1'
+
+    def _mark_upgrade_grace_consumed(self):
+        self.a.kv('upgrade_grace_consumed', '1')
+        self._set_trips_meta(UPGRADE_GRACE_CONSUMED_META, '1')
+
+    def _read_grace_started(self):
+        started = parse(self.a.kv('upgrade_grace_started_at'))
+        path = os.path.join(self._data_dir(), UPGRADE_GRACE_FILE)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    file_started = parse((json.load(f) or {}).get('started_at'))
+                    if file_started and (not started or file_started < started):
+                        started = file_started
+            except (OSError, ValueError, TypeError):
+                pass
+        meta_started = parse(self._trips_meta(UPGRADE_GRACE_META_KEY))
+        if meta_started and (not started or meta_started < started):
+            started = meta_started
+        return started
+
+    def _write_grace_started(self, when):
+        if self.a.kv('upgrade_grace_started_at'):
+            return parse(self.a.kv('upgrade_grace_started_at')) or when
+        payload = {'started_at': iso(when)}
+        self.a.kv('upgrade_grace_started_at', payload['started_at'])
+        path = os.path.join(self._data_dir(), UPGRADE_GRACE_FILE)
+        os.makedirs(self._data_dir(), exist_ok=True)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        self._set_trips_meta(UPGRADE_GRACE_META_KEY, payload['started_at'])
+        self._set_trips_meta(UPGRADE_GRACE_EVER_META, '1')
+        return when
+
+    def _commercial_upgrade_grace(self):
+        """One-time edit grace after upgrading a contract office to commercial (not CI-test, not fresh installs)."""
+        if not _COMMERCIAL_BUILD or _BUILD_CHANNEL == 'ci-test' or not self.trusted_keys():
+            return None
+        if self.a.kv('licence_code'):
+            return None
+        if self._seen_now():
+            self._mark_upgrade_grace_consumed()
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        if self._upgrade_grace_consumed():
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        started = self._read_grace_started()
+        if started is None:
+            if self._trips_meta(UPGRADE_GRACE_EVER_META) == '1' or self.a.kv('upgrade_grace_started_at'):
+                self._mark_upgrade_grace_consumed()
+                return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+            if not self._has_prior_office_data():
+                # decided once, on first sight: a fresh install never becomes eligible later
+                self._mark_upgrade_grace_consumed()
+                return None
+            started = self._write_grace_started(utcnow())
+        end = started + timedelta(days=UPGRADE_GRACE_DAYS)
+        now = utcnow()
+        if now < started or now >= end:
+            self._mark_upgrade_grace_consumed()
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        days_left = max(0, (end.date() - now.date()).days)
+        if end.date() == now.date():
+            days_left = 0
+        return {'upgrade_grace': True, 'upgrade_grace_days_left': days_left, 'reason': 'upgrade_grace'}
+
     def status(self):
         """{'state', 'full', 'enforced', 'device', 'edition', 'first_day', 'last_day', 'days_left', 'reason'}."""
         keys = self.trusted_keys()
@@ -159,7 +309,15 @@ class Licence:
             return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
                     'full': not _COMMERCIAL_BUILD, 'enforced': bool(_COMMERCIAL_BUILD),
                     'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
-                    'days_left': None, 'serial': None, 'reason': 'no_keys', 'build_channel': _BUILD_CHANNEL}
+                    'days_left': None, 'serial': None, 'reason': 'no_keys', 'build_channel': _BUILD_CHANNEL,
+                    'upgrade_grace': False, 'upgrade_grace_days_left': None}
+        grace = self._commercial_upgrade_grace()
+        if grace and grace.get('upgrade_grace_days_left', 0) > 0:
+            return {'state': 'upgrade_grace', 'full': True, 'enforced': True, 'device': dev,
+                    'edition': None, 'first_day': None, 'last_day': None,
+                    'days_left': grace['upgrade_grace_days_left'], 'serial': None,
+                    'reason': grace['reason'], 'build_channel': _BUILD_CHANNEL,
+                    'upgrade_grace': True, 'upgrade_grace_days_left': grace['upgrade_grace_days_left']}
         clock_back = self._seen_now()
         key = (code, dev, today, tuple(keys))
         with _lock:
@@ -173,6 +331,8 @@ class Licence:
         result['build_channel'] = _BUILD_CHANNEL
         if clock_back and result['full']:
             result.update(state='clock_back', full=False, reason='clock_back')
+        result.setdefault('upgrade_grace', False)
+        result.setdefault('upgrade_grace_days_left', None)
         return result
 
     @staticmethod

@@ -10,6 +10,13 @@
 - CI generates an ephemeral signing key, exercises the customer-style build and labels it **CI TEST / NOT FOR CUSTOMERS**. CI must not publish this as a commercial release. The owner must provision a separate, genuine public verification key and test a controlled customer build.
 - Existing protected storage: local SQLite databases and uploaded attachments, access-controlled Windows data folder, backups with SHA-256 checks. **The database files are NOT encrypted at rest by this phase.** Current `sqlite3` standard-library storage and backups remain readable to a party who can access the raw files.
 
+## Desktop executable anti-reverse-engineering (implemented in build tools)
+- The Python backend is compiled with Nuitka standalone; the build requests `no_docstrings` and supported automatic link-time optimization (LTO). The executable ships no readable Python source, bytecode, C source or common debug/map symbols: the build fails if those are found.
+- Gateway deployment JavaScript and schema are placed in a separate `dist/operator-only-gateway` folder, **outside** the installer's source directory. Do not share that operator folder with customers.
+- The browser user interface contains JavaScript that **must be delivered to the browser**, so it is still inspectable. No executable encryption, compression, obfuscation or packing can make a fully offline client impossible to reverse-engineer. Keep security-critical checks on the compiled server, with signed device licences and no private signing keys in any client artifact.
+- Prefer ordinary code signing from the owner's trusted signing process for authenticity and antivirus reputation after commercial signing credentials are arranged. **Not implemented in this phase.** Avoid third-party executable packers, runtime self-decryptors and destructive anti-debug traps: they can produce antivirus warnings, slow startup and create misleading security guarantees.
+- Commercial reverse-engineering deterrence additionally requires a **private GitHub repo**; existing public copies cannot be recalled. Any signed commercial installer must pass clean Windows builds and a user-focused smoke test.
+
 ## Mandatory phased design for real encryption
 
 1. **Inventory and threat model.** Enumerate `trips.db`, `auth.db`, `journal.db`, `assist.db`, other SQLite files, WAL/SHM/temp copies, photos and exports. Audit exact access from all source files and all Windows user accounts. Identify the legitimate office owner and consent / contract rights to restore their business data.

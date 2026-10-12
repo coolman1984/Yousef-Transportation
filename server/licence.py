@@ -3,8 +3,12 @@
 What is enforced and what never is
 - Only the vendor's public keys are inside the program (licence_keys.txt, TO_LICENCE_KEYS, or `licence_keys` in config.json). They cannot
   make codes. The trusted Licence Studio on the owner's PC signs a code for THIS PC's device code; the relay Worker only carries it.
-- Enforcement is on only when the build carries public keys. Without keys the program says "licence by contract" and works fully: that
-  is the assisted pilot (LAUNCH_SCOPE.md, manual licensing). Nothing in this file is a kill switch.
+- A COMMERCIAL installer pins its trusted public keys in the compiled binary. A customer's
+  config file, environment or filesystem cannot replace them. A commercial build with no keys
+  fails at BUILD time, and a corrupt/missing embedded policy fails closed at runtime.
+- Source development without a compiled release policy retains the historical contract-mode
+  assisted pilot (LAUNCH_SCOPE.md). This must NEVER be distributed as the paid installer.
+  Nothing in this file is a remote kill switch.
 - Without a working code (none, expired, other PC, clock moved back) the program keeps opening, reading, printing, exporting and backing up:
   only actions that change business data are refused (HTTP 402), with the device code to send to the vendor. Data is never deleted,
   hidden or encrypted (BIZ-03).
@@ -21,8 +25,11 @@ The hub address is public configuration: FACTORY_HUB_URL, `hub_url` in config.js
 import hashlib
 import json
 import os
+import pathlib
 import platform
+import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
@@ -31,6 +38,28 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import afcodes
+
+
+def _distributed_runtime():
+    """True when this process is a shipped binary, not a plain python source run."""
+    if getattr(sys, 'frozen', False):
+        return True
+    if globals().get('__compiled__'):
+        return True
+    exe = os.path.basename(sys.executable or '').lower()
+    return bool(exe) and not exe.startswith('python')
+
+
+# In installed customer builds this generated module is compiled into TripOrders.exe.
+# Never load commercial trust anchors from writable user configuration.
+try:
+    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS, BUILD_CHANNEL as _BUILD_CHANNEL
+except ImportError:
+    # Compiled binaries must never silently drop into contract mode if a release
+    # policy module is missing due to a damaged build.
+    _COMMERCIAL_BUILD = _distributed_runtime()
+    _RELEASE_KEYS = ()
+    _BUILD_CHANNEL = 'commercial' if _COMMERCIAL_BUILD else 'source'
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -40,6 +69,12 @@ POLL = ((600, 20), (3600, 120), (10 ** 9, 600))
 SENT_FIELDS = ('product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version')
 ACTIVE = ('sending', 'waiting', 'failed')
 CLOCK_TOLERANCE_HOURS = 24
+UPGRADE_GRACE_DAYS = 30
+UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
+UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
+UPGRADE_GRACE_META_KEY = 'commercial_upgrade_grace_at'
+UPGRADE_GRACE_CONSUMED_META = 'commercial_upgrade_grace_consumed'
+UPGRADE_GRACE_EVER_META = 'commercial_upgrade_grace_ever'
 _cache = {}
 _lock = threading.RLock()
 
@@ -96,6 +131,8 @@ class Licence:
 
     # ---------------------------------------------------------------- keys, device, state
     def trusted_keys(self):
+        if _COMMERCIAL_BUILD:
+            return list(_RELEASE_KEYS)  # pinned in the compiled program; customer config/env ignored
         keys = [k.strip() for k in os.environ.get('TO_LICENCE_KEYS', '').split(',') if k.strip()]
         keys += [str(k).split(':', 1)[-1].strip() for k in (self.cfg.get('licence_keys') or []) if str(k).strip()]
         for folder in (self.home, self.root):
@@ -113,12 +150,12 @@ class Licence:
         return bool(self.trusted_keys())
 
     def device(self):
-        override = os.environ.get('TO_DEVICE_ID')                    # tests only: a fixed identity for a fake PC
+        override = os.environ.get('TO_DEVICE_ID') if not _COMMERCIAL_BUILD else None  # tests only; never in sold binaries
         return afcodes.device_code(override or _machine_id(), self.a.kv('install_id'), PRODUCT_ID)
 
     def machine_tag(self):
         """A hash of this PC for the one-trial-per-PC rule; the PC's own identity never leaves it."""
-        ident = os.environ.get('TO_DEVICE_ID') or _machine_id()
+        ident = (os.environ.get('TO_DEVICE_ID') if not _COMMERCIAL_BUILD else None) or _machine_id()
         return hashlib.sha256(f'AF-MACHINE/1|{ident}|{PRODUCT_ID}'.encode('utf-8')).hexdigest()
 
     def _seen_now(self):
@@ -131,6 +168,136 @@ class Licence:
             return False
         return now < last - timedelta(hours=CLOCK_TOLERANCE_HOURS)
 
+    def _data_dir(self):
+        return getattr(self.a, 'data_dir', None) or self.home
+
+    def _trips_db_path(self):
+        return os.path.join(self._data_dir(), 'trips.db')
+
+    def _has_prior_office_data(self):
+        path = self._trips_db_path()
+        if not os.path.exists(path):
+            return False
+        try:
+            conn = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
+            try:
+                # A fresh install also gets 'initialized' and sample trips on its first boot, so only an
+                # office whose database was initialised well before this commercial build first ran counts.
+                if not conn.execute('SELECT 1 FROM trips LIMIT 1').fetchone():
+                    return False
+                row = conn.execute("SELECT value FROM meta WHERE key='initialized'").fetchone()
+                if not row:
+                    return False
+                try:
+                    initialised = datetime.fromisoformat(str(row[0]).rstrip('Z')).replace(tzinfo=None)
+                except ValueError:
+                    return False
+                return initialised < datetime.now() - timedelta(hours=UPGRADE_PRIOR_DATA_MIN_AGE_HOURS)
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return False
+
+    def _trips_meta(self, key):
+        trips = self._trips_db_path()
+        if not os.path.exists(trips):
+            return None
+        try:
+            conn = sqlite3.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
+            try:
+                row = conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
+                return row[0] if row else None
+            finally:
+                conn.close()
+        except sqlite3.Error:
+            return None
+
+    def _set_trips_meta(self, key, value):
+        trips = self._trips_db_path()
+        if not os.path.exists(trips):
+            return
+        try:
+            conn = sqlite3.connect(trips, isolation_level=None)
+            conn.execute(
+                'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
+                (key, value))
+            conn.close()
+        except sqlite3.Error:
+            pass
+
+    def _upgrade_grace_consumed(self):
+        if self.a.kv('upgrade_grace_consumed'):
+            return True
+        return self._trips_meta(UPGRADE_GRACE_CONSUMED_META) == '1'
+
+    def _mark_upgrade_grace_consumed(self):
+        self.a.kv('upgrade_grace_consumed', '1')
+        self._set_trips_meta(UPGRADE_GRACE_CONSUMED_META, '1')
+
+    def _read_grace_started(self):
+        started = parse(self.a.kv('upgrade_grace_started_at'))
+        path = os.path.join(self._data_dir(), UPGRADE_GRACE_FILE)
+        if os.path.exists(path):
+            try:
+                with open(path, encoding='utf-8') as f:
+                    file_started = parse((json.load(f) or {}).get('started_at'))
+                    if file_started and (not started or file_started < started):
+                        started = file_started
+            except (OSError, ValueError, TypeError):
+                pass
+        meta_started = parse(self._trips_meta(UPGRADE_GRACE_META_KEY))
+        if meta_started and (not started or meta_started < started):
+            started = meta_started
+        return started
+
+    def _write_grace_started(self, when):
+        if self.a.kv('upgrade_grace_started_at'):
+            return parse(self.a.kv('upgrade_grace_started_at')) or when
+        payload = {'started_at': iso(when)}
+        self.a.kv('upgrade_grace_started_at', payload['started_at'])
+        path = os.path.join(self._data_dir(), UPGRADE_GRACE_FILE)
+        os.makedirs(self._data_dir(), exist_ok=True)
+        tmp = path + '.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(payload, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+        self._set_trips_meta(UPGRADE_GRACE_META_KEY, payload['started_at'])
+        self._set_trips_meta(UPGRADE_GRACE_EVER_META, '1')
+        return when
+
+    def _commercial_upgrade_grace(self):
+        """One-time edit grace after upgrading a contract office to commercial (not CI-test, not fresh installs)."""
+        if not _COMMERCIAL_BUILD or _BUILD_CHANNEL == 'ci-test' or not self.trusted_keys():
+            return None
+        if self.a.kv('licence_code'):
+            return None
+        if self._seen_now():
+            self._mark_upgrade_grace_consumed()
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        if self._upgrade_grace_consumed():
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        started = self._read_grace_started()
+        if started is None:
+            if self._trips_meta(UPGRADE_GRACE_EVER_META) == '1' or self.a.kv('upgrade_grace_started_at'):
+                self._mark_upgrade_grace_consumed()
+                return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+            if not self._has_prior_office_data():
+                # decided once, on first sight: a fresh install never becomes eligible later
+                self._mark_upgrade_grace_consumed()
+                return None
+            started = self._write_grace_started(utcnow())
+        end = started + timedelta(days=UPGRADE_GRACE_DAYS)
+        now = utcnow()
+        if now < started or now >= end:
+            self._mark_upgrade_grace_consumed()
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+        days_left = max(0, (end.date() - now.date()).days)
+        if end.date() == now.date():
+            days_left = 0
+        return {'upgrade_grace': True, 'upgrade_grace_days_left': days_left, 'reason': 'upgrade_grace'}
+
     def status(self):
         """{'state', 'full', 'enforced', 'device', 'edition', 'first_day', 'last_day', 'days_left', 'reason'}."""
         keys = self.trusted_keys()
@@ -138,8 +305,19 @@ class Licence:
         dev = self.device()
         today = date.today()
         if not keys:
-            return {'state': 'contract', 'full': True, 'enforced': False, 'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
-                    'days_left': None, 'serial': None, 'reason': 'no_keys'}
+            # A broken commercial key policy must NOT unlock edits.
+            return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
+                    'full': not _COMMERCIAL_BUILD, 'enforced': bool(_COMMERCIAL_BUILD),
+                    'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
+                    'days_left': None, 'serial': None, 'reason': 'no_keys', 'build_channel': _BUILD_CHANNEL,
+                    'upgrade_grace': False, 'upgrade_grace_days_left': None}
+        grace = self._commercial_upgrade_grace()
+        if grace and grace.get('upgrade_grace_days_left', 0) > 0:
+            return {'state': 'upgrade_grace', 'full': True, 'enforced': True, 'device': dev,
+                    'edition': None, 'first_day': None, 'last_day': None,
+                    'days_left': grace['upgrade_grace_days_left'], 'serial': None,
+                    'reason': grace['reason'], 'build_channel': _BUILD_CHANNEL,
+                    'upgrade_grace': True, 'upgrade_grace_days_left': grace['upgrade_grace_days_left']}
         clock_back = self._seen_now()
         key = (code, dev, today, tuple(keys))
         with _lock:
@@ -150,8 +328,11 @@ class Licence:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
         result['enforced'] = True
+        result['build_channel'] = _BUILD_CHANNEL
         if clock_back and result['full']:
             result.update(state='clock_back', full=False, reason='clock_back')
+        result.setdefault('upgrade_grace', False)
+        result.setdefault('upgrade_grace_days_left', None)
         return result
 
     @staticmethod
@@ -160,6 +341,10 @@ class Licence:
         if not code:
             return {**base, 'state': 'none', 'reason': 'no_code'}
         r = afcodes.read_code(code, keys, PRODUCT_ID, dev, today)
+        if _COMMERCIAL_BUILD and r.valid and not r.terms.get('device_bound'):
+            # Accidentally signed unbound time licences must not be shareable
+            # across PCs in any sold or CI-test build.
+            return {**base, 'state': 'invalid', 'reason': 'device_required'}
         out = {**base, 'state': r.state, 'full': r.full_access, 'reason': r.reason}
         out.update({k: r.terms.get(k) for k in ('edition', 'first_day', 'last_day', 'days_left', 'serial') if k in r.terms})
         if r.state == 'active' and r.terms.get('edition') == 'trial':

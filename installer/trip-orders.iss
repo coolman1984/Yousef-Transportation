@@ -2,7 +2,22 @@
 ; The same TripOrders-Setup.exe installs the program on a new PC and updates it on a PC that already has it:
 ; only the program in Program Files is replaced, the data in %ProgramData%\TripOrders is never touched.
 
-#define MyAppName "Trip Orders"
+#ifndef AppChannel
+  #define AppChannel "commercial"
+#endif
+#if AppChannel == "ci-test"
+  #define MyAppId "{{B7C3E891-4A2D-4F1E-9C6B-8D2F4E1A0C93}"
+  #define MyInstallFolder "TripOrders-CITest"
+  #define AppDisplayName "Trip Orders - CI TEST - NOT FOR CUSTOMERS"
+  #define AppFileSuffix "-CI-TEST-NOT-FOR-CUSTOMERS"
+  #define MyAppName "Trip Orders CI Test"
+#else
+  #define MyAppId "{{51A5FF77-EE7F-474F-9A55-53DEEF2A4B7A}"
+  #define MyInstallFolder "TripOrders"
+  #define AppDisplayName "Trip Orders"
+  #define AppFileSuffix ""
+  #define MyAppName "Trip Orders"
+#endif
 #ifndef AppVersion
   #define AppVersion "0.0.0"
 #endif
@@ -14,14 +29,14 @@
 #endif
 
 [Setup]
-AppId={{51A5FF77-EE7F-474F-9A55-53DEEF2A4B7A}
-AppName={#MyAppName}
+AppId={#MyAppId}
+AppName={#AppDisplayName}
 AppVersion={#AppVersion}
-AppVerName={#MyAppName} {#AppVersion}
+AppVerName={#AppDisplayName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppCopyright={#AppCopyright}
 VersionInfoVersion={#AppVersion}
-DefaultDirName={autopf}\TripOrders
+DefaultDirName={autopf}\{#MyInstallFolder}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
@@ -30,10 +45,10 @@ PrivilegesRequired=admin
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 OutputDir=..\dist
-OutputBaseFilename=TripOrders-Setup-{#AppVersion}
+OutputBaseFilename=TripOrders-Setup-{#AppVersion}{#AppFileSuffix}
 SetupIconFile=..\build\triporders.ico
 UninstallDisplayIcon={app}\TripOrders.exe
-UninstallDisplayName={#MyAppName}
+UninstallDisplayName={#AppDisplayName}
 LicenseFile=..\LICENSE.txt
 Compression=lzma2/max
 SolidCompression=yes

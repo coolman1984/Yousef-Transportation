@@ -1,6 +1,18 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## PR #21 review fixes: CI installer isolation, fail-closed policy, upgrade grace (2026-10-12)
+
+**What:** CI-test Inno Setup channel now has its own AppId, Program Files folder, ProgramData folder, and start-menu name so silent CI installs cannot upgrade over a customer install. Missing `_release_policy` on frozen/non-python executables fails closed as commercial with no keys. Offices upgrading from contract to commercial get a one-time 30-day edit grace (stored in data, not renewable; clock-back ends it; CI-test excluded). Runbook: `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`. Tests: `test_commercial_licence`.
+**Lesson:** installer identity and licence policy must be channel-specific; migration grace belongs in durable office data, not in the binary alone.
+
+## Offline commercial licence and Windows executable hardening (2026-10-12, PR #21)
+
+**Gate:** protect the paid installer without requiring internet and without intentionally harming customer data. **Branch:** security/offline-commercial-licensing-20261012, based on main c766f7ab. **What:** fail-closed commercial key policy embedded into Nuitka code, ignore writable key overrides in commercial builds, Windows CI uses ephemeral test-only keys and no automatic publication. The EXE removes docstrings, verifies no Python/debug artifacts ship, and moves optional gateway deployment materials outside the installer. The existing offline signed codes and read/export/backup during expiry are preserved. Licence title corrected. Documented a separate future storage-encryption/R2 restore project, **not yet implemented**.
+**Risks & constraints:** Cannot encrypt a fully offline executable in a way that makes reverse engineering impossible; browser-delivered JS remains inspectable. No Windows commercial signing certificates or owner's real Ed25519 key embedded in CI. The currently public GitHub repository requires a separate visibility action. Never erase, corrupt or re-encrypt customer data as a tamper penalty.
+**Acceptance:** full GitHub CI including Windows installed-product journey and independent review; do not merge with red/unknown status. Commercial release additionally requires real offline signing key, clean PC acceptance, upgrade and disaster-recovery checks.
+**Lesson:** distinguish executable deterrence, licence enforcement and database confidentiality. They solve different problems and need different tests.
+
 ## Owner standards for every agent (2026-10-12)
 
 **Gate:** none. Agent instructions only. The pilot promise, version, and application code are unchanged.

@@ -1,4 +1,4 @@
-Break Area Management System - Licence
+Trip Orders (Yousef Transportation) - Licence
 
 Copyright (c) 2026 Mohamed Fawzy. All rights reserved.
 
@@ -12,5 +12,10 @@ This program was developed by Mohamed Fawzy and remains his property.
 4. The program is provided as it is. Keep the automatic backups switched on and keep a copy of them in a
    second place.
 5. Updates and changes are made only by the developer.
+6. Access to the customer's legitimate business records remains available for export
+   and backup if the licence expires. A suspected security incident will never
+   intentionally delete, corrupt, or encrypt the customer's data as a penalty.
+7. Any optional cloud backups must be disclosed to the customer and agreed with
+   them, including location, retention and restoration rights.
 
 By installing the program you accept these terms.

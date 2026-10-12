@@ -3,6 +3,9 @@
 
 ## Current work queue — first sale
 
+- [ ] Offline customer protection (PR #21, security/offline-commercial-licensing-20261012): key-pinned commercial installer, no customer source/debug artifacts, operator gateway excluded, CI-only ephemeral test keys. Code on PR; close only after green Windows acceptance and independent security review. Strong encrypted SQLite/Cloudflare backups are **separate follow-up work**, not delivered by this PR.
+
+
 Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
 
 - [x] Owner standards for agents (2026-10-12): `.cursor/rules/owner-standards.mdc` (alwaysApply). No product code. Test map: none (docs only). Not released, not merged.

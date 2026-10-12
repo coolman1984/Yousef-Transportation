@@ -106,7 +106,12 @@ def first(home, cmd):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
     import afcodes
-    key = Ed25519PrivateKey.generate()
+    key_file = os.environ.get('TO_TEST_SIGNING_KEY_FILE')
+    if key_file:
+        with open(key_file, 'rb') as source:
+            key = serialization.load_pem_private_key(source.read(), password=None)
+    else:
+        key = Ed25519PrivateKey.generate()
     pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     public = base64.urlsafe_b64encode(key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip('=')
     os.makedirs(home, exist_ok=True)
@@ -141,7 +146,19 @@ def after(home, cmd):
         app.call('POST', '/api/auth/login', {'username': ADMIN, 'password': PASSWORD})
         lic = app.call('GET', '/api/licence')
         if state.get('legacy'):
-            assert lic['full'] and lic['state'] == 'contract', 'an update of an old installation keeps working without a code: ' + str(lic)
+            if lic['enforced']:
+                # Upgrading a historical no-key install must preserve all data,
+                # but must NOT silently grandfather an unlicensed customer.
+                assert not lic['full'], 'commercial upgrade bypassed the licence: ' + str(lic)
+                assert app.call('GET', '/api/state')['version'] is not None
+                from cryptography.hazmat.primitives import serialization
+                import afcodes
+                with open(os.environ['TO_TEST_SIGNING_KEY_FILE'], 'rb') as source:
+                    key = source.read()
+                signed = afcodes.issue_code(key, 'trip-orders', 'standard', date.today(), 30, lic['device'], 3)['code']
+                assert app.call('POST', '/api/licence/activate', {'code': signed})['full']
+            else:
+                assert lic['full'] and lic['state'] == 'contract', 'source-mode legacy compatibility: ' + str(lic)
         else:
             assert lic['full'] and lic['edition'] == 'standard', 'the licence must survive the restart/update: ' + str(lic)
         trips = [t for t in app.call('GET', '/api/state')['trips'] if t['destination'] == 'Journey Factory']

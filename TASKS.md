@@ -3,6 +3,9 @@
 
 ## Current work queue — first sale
 
+- [ ] Offline customer protection (PR #21, security/offline-commercial-licensing-20261012): key-pinned commercial installer, no customer source/debug artifacts, operator gateway excluded, CI-only ephemeral test keys. Code on PR; close only after green Windows acceptance and independent security review. Strong encrypted SQLite/Cloudflare backups are **separate follow-up work**, not delivered by this PR.
+
+
 Use LAUNCH_SCOPE.md gates L1–L6 before the historical unchecked backlog. Record verified evidence, not assumptions. Later-release work below stays available; do not tick it complete merely because it is deferred.
 
 - [x] QA report of 2026-10-12 (Grok): every item decided in `docs/QA_2026-10-12_STATUS.md`. Test map: `test_trips_api` (i-p: validation, in-use delete, duplicates, department, overlaps, close form), `test_domain` (office-only trust, reviewed, overlap, plate), `gateway.test.js` + `test_gateway_client.test_0` (clock, bind, limits). Open: owner decisions on overtime per day and admin lock-out; later: mobile cards, small texts. Not released, not merged.

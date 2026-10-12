@@ -1,5 +1,6 @@
-# Tests on every change, and builds the Windows installer TripOrders-Setup-<version>.exe.
-# A new version (server/version.py) merged into main is published once as a GitHub release with its installer.
+# Tests every change and builds a NON-CUSTOMER Windows installer with throwaway verification keys.
+# Automated publication is disabled: a commercial release requires the owner's real
+# PUBLIC verification key, owner-side offline signing, and explicit acceptance.
 # See docs/BUILD_AND_RELEASE.md.
 name: Test and build
 
@@ -11,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read  # least privilege; only the installer job that publishes a release gets write
+  contents: read  # no automatic customer releases from ephemeral CI builds
 
 concurrency:
   # a newer push to the same PR cancels the older run; pushes to main and tags always finish
@@ -42,7 +43,7 @@ jobs:
         run: node --test --no-warnings test/gateway.test.js
       - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto test_release_policy
       - name: Core journey on the source (killed without warning, then restarted)
         run: |
           python -m pip install cryptography
@@ -52,7 +53,7 @@ jobs:
   windows-installer:
     needs: test
     permissions:
-      contents: write  # gh release create / upload
+      contents: read
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -68,7 +69,9 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "nuitka>=2.4,<3" ordered-set zstandard cryptography
           choco upgrade innosetup -y --no-progress
-      - name: Build TripOrders.exe and the installer
+      - name: Generate a throwaway signing key for CI only
+        run: python tools/ci_signing_key.py
+      - name: Build a NON-CUSTOMER test installer
         run: python tools/build_windows.py
       - name: Check that the built program folder starts and serves its pages
         shell: pwsh
@@ -183,23 +186,12 @@ jobs:
           exit 0  # netsh returns 1 when the rule is missing, which is the expected result here
       - uses: actions/upload-artifact@v7
         with:
-          name: TripOrders-Setup
+          name: TripOrders-CI-TEST-NOT-FOR-CUSTOMERS
           path: |
             dist/TripOrders-Setup-*.exe
             dist/RELEASE-PROOF.txt
+            dist/CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt
           retention-days: 30
-      - name: Publish the release (a new version on main, or a tag v*)
-        # every version (server/version.py) that reaches main is published once under Releases, with its installer
-        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          v=$(python -c "import sys; sys.path.insert(0, 'server'); from version import VERSION; print(VERSION)")
-          if gh release view "v$v" > /dev/null 2>&1; then
-            echo "Release v$v already exists - raise VERSION in server/version.py to publish a new one."
-            exit 0
-          fi
-          gh release create "v$v" dist/TripOrders-Setup-*.exe --target "$GITHUB_SHA" \
-            --title "Trip Orders $v" --notes-file docs/RELEASE_NOTES.md
-          gh release upload "v$v" gateway/dist/trip-orders-gateway.js gateway/dist/schema.sql gateway/deploy.mjs gateway/deploy.bat docs/GATEWAY_SETUP.md docs/GATEWAY_DEPLOY.md --clobber
+      # Deliberately NO 'gh release create': CI keys are ephemeral and must
+      # never create a real customer installer. Build the customer release
+      # under the owner's controlled commercial signing process instead.

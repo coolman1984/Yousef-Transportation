@@ -195,6 +195,7 @@
     'privacy.hub.clear': 'Remove the token',
     'privacy.log.t': 'What was sent',
     'privacy.sent.none': 'Nothing was sent yet.',
+    'lic.ciTest': 'CI TEST BUILD ONLY. Never sell or deliver this copy to customers.',
     'lic.banner': 'There is no working licence, so changes are paused. You can still read, print, export and back up.',
     'lic.state.contract': 'Licence by contract',
     'lic.state.none': 'No licence code yet',

@@ -380,6 +380,9 @@ def _refuse_delete_in_use(store, entity, rid):
         n = store.conn.execute(f'SELECT COUNT(*) FROM trips WHERE {col}=? AND deleted=0', (rid,)).fetchone()[0]
         if entity == 'people':
             n += store.conn.execute('SELECT COUNT(*) FROM trip_passengers WHERE person_id=? AND deleted=0', (rid,)).fetchone()[0]
+        if entity == 'departments':     # an old trip with no department of its own is reported under its requester's department
+            n += store.conn.execute("SELECT COUNT(*) FROM trips t JOIN people p ON p.id=t.requester_id AND p.deleted=0 WHERE t.deleted=0 "
+                                    "AND (t.department_id IS NULL OR t.department_id='') AND p.department_id=?", (rid,)).fetchone()[0]
     if n:
         raise BadRequest(f'This {label} is used by {n} trip(s). Switch it off (not active) instead of deleting it, so old trips keep their {label}.')
 

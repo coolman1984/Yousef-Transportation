@@ -1,4 +1,5 @@
 """Trip operations through the real server: numbering, amendments, cancel, GA approval, locked trips, insights."""
+import time
 import unittest
 from datetime import date
 
@@ -249,12 +250,34 @@ class TripsApiTest(unittest.TestCase):
         self.ac.post('/api/trips/close', {'id': t['id'], 'endKm': 200, 'reason': 'Paper says 200'})
         self.assertEqual(self.get_trip(t['id'])['endKm'], 200)
 
+    def test_q_review_findings_inactive_place_department_guard_and_same_second(self):
+        import os, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
+        import domain, reports
+        # a correction in the same second as the review is never hidden
+        t = {'id': 'x', 'status': 'finished', 'startKm': 1, 'endKm': 5, 'source': 'app', 'reviewedAt': '2026-10-12T10:00:00'}
+        self.assertEqual(domain.trust(t, [], [{'field': 'endKm', 'new': 6, 'at': '2026-10-12T10:00:00'}])[0], 'yellow')
+        # an inactive place still groups the past
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('places', 'plOld', name='Old Depot', key='olddepot', aliases=['The Depot'], active=False)]})
+        today = date.today().isoformat()[:7]
+        for dest in ('Old Depot', 'The Depot'):
+            self.trip(destination=dest)
+        routes = {r['label']: r['trips'] for r in reports.summaries(self.ac.get('/api/state'), today)['topRoutes']}
+        self.assertEqual(routes.get('Old Depot'), 2)
+        # a department that only legacy trips reach through their requester cannot be deleted
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('departments', 'depLegacy', name='Legacy Dept'), put('people', 'pLegacy', name='Legacy Requester', departmentId='depLegacy', isRequester=True)]})
+        legacy = self.ac.post('/api/commit', {'label': 'x', 'ops': [put('trips', 'trLegacy', no='L-1', date=date.today().isoformat(), categoryId='cat1', requesterId='pLegacy', status='draft', source='app')]})
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/commit', {'label': 'd', 'ops': [{'e': 'departments', 'id': 'depLegacy', 'op': 'del'}]})
+        self.assertIn('trip(s)', str(e.exception))
+
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()
         for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):
             self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'entered from the paper'})
         ins = self.ac.get('/api/insights')[t['id']]
         self.assertEqual((ins['trust'], ins['reasons']), ('yellow', ['Y_CLOSED_BY_OFFICE', 'Y_AMENDED']))
+        time.sleep(1.1)   # review and correction stamps have one-second precision; a person never reviews within the second of the entry
         self.ac.post('/api/trips/review', {'id': t['id']})
         x = self.get_trip(t['id'])
         self.assertTrue(x['reviewedBy'] and x['reviewedAt'])

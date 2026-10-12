@@ -45,7 +45,7 @@
     var seen = {}, out = [];
     TO.data.list('trips').forEach(function (t) { var k = U.key(t.destination); if (t.destination && !seen[k]) { seen[k] = 1; out.push(t.destination); } });
     TO.data.list('routes').forEach(function (r) { if (r.name) out.push(r.name); });
-    TO.data.list('places').forEach(function (p) { [p.name, p.nameAr].forEach(function (x) { var k = U.key(x); if (x && !seen[k]) { seen[k] = 1; out.push(x); } }); });
+    TO.data.list('places').forEach(function (p) { [p.name, p.nameAr].concat(p.aliases || []).forEach(function (x) { var k = U.key(x); if (x && !seen[k]) { seen[k] = 1; out.push(x); } }); });
     return out.sort();
   }
 
@@ -228,7 +228,7 @@
       if (TO.can('trips.cancel')) b += '<button class="btn danger" data-a="cancel" style="margin-inline-end:auto">' + TO.esc(TO.t('trip.cancel')) + '</button>';
       if (TO.can('trips.approve') && t.gaApproved !== 'yes') b += '<button class="btn" data-a="approve" data-guide="trip.approve">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.approve')) + '</button>';
       if ((t.status === 'draft' || t.status === 'sent') && TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn" data-a="start">' + TO.esc(TO.t('trip.start')) + '</button>';
-      if (t.status !== 'closed' && TO.can(t.locked ? ['trips.amend', 'trips.review'] : ['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="close" data-guide="trip.close">' + TO.esc(TO.t('trip.close')) + '</button>';
+      if (TO.can(t.locked ? ['trips.amend', 'trips.review'] : ['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="close" data-guide="trip.close">' + TO.esc(TO.t('trip.close')) + '</button>';
       if ((t.status === 'finished' || t.status === 'closed') && TO.can('trips.review') && TO.data.trust(t.id).trust !== 'green') b += '<button class="btn" data-a="review" data-guide="trip.review">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.review')) + '</button>';
       if (t.locked ? TO.can(['trips.amend', 'trips.review']) : TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="amend" data-guide="trip.amend">' + TO.esc(TO.t('trip.amend')) + '</button>';
     }

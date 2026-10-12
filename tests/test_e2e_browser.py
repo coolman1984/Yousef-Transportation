@@ -195,6 +195,33 @@ class TripFlowTest(BrowserBase):
         self.assertEqual([e for e in self.errors if '400' not in e], [], 'only the refused duplicate driver (HTTP 400) is expected')
 
 
+    def test_close_form_review_and_correcting_a_closed_trip(self):
+        c = self.S.client()
+        c.login(*ADMIN)
+        c.post('/api/commit', {'label': 'x', 'ops': [{'e': 'tripCategories', 'id': 'cc1', 'op': 'put', 'row': {'name': 'Close test cars'}}]})
+        t = c.post('/api/trips/new', {'categoryId': 'cc1', 'destination': 'Close test'})
+        pg = self.open({'lang': 'en'})
+        pg.goto(self.S.base + '/#/trips')
+        pg.wait_for_selector('tbody tr')
+        pg.click('tbody tr:has-text("Close test")')
+        pg.wait_for_selector('[data-a=close]')
+        pg.click('[data-a=close]')
+        pg.wait_for_selector('#cl-v')
+        for n, v in (('startKm', '1000'), ('endKm', '900'), ('startAt', '2026-10-12T08:00'), ('endAt', '2026-10-12T11:00')):
+            pg.fill(f'#cl-v [name={n}]', v)
+        pg.click('[data-ok]')
+        pg.wait_for_selector('.err:not([hidden])')                       # end below start is refused on the form
+        pg.fill('#cl-v [name=endKm]', '1090')
+        pg.click('[data-ok]')
+        pg.wait_for_selector('#cl-v', state='detached')
+        pg.wait_for_selector('[data-a=review]')                          # closed by the office: yellow until reviewed
+        self.assertTrue(pg.query_selector('[data-a=close]'), 'a closed trip can still be corrected on the same form')
+        pg.wait_for_timeout(1200)                                        # stamps have one-second precision; a person needs longer than that anyway
+        pg.click('[data-a=review]')
+        pg.wait_for_selector('[data-a=review]', state='detached')
+        pg.click('[data-a=close]')                                       # the correction form asks for the reason
+        pg.wait_for_selector('#cl-r')
+
     def test_who_can_do_what_and_a_new_person_starts_as_viewer(self):
         """Factory access standard: the matrix of every permission against every profile, printable; a new person's
         profile name matches the ticks shown (it showed the first profile over the Viewer ticks) and is in Arabic."""

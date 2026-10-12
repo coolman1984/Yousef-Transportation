@@ -78,7 +78,7 @@ def place_names(places):
     """{spelling key: the place's own name} for every name, Arabic name and alias of the places list: all spellings count as one place."""
     out = {}
     for p in places or []:
-        if p.get('active') is False or not p.get('name'):
+        if not p.get('name'):                   # an inactive place still groups the past: inactive only stops new choices
             continue
         for spelling in [p.get('name'), p.get('nameAr'), *(p.get('aliases') or [])]:
             k = domain.key_text(spelling)

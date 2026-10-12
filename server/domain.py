@@ -297,7 +297,7 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
     if time_unclear(trip.get('startAt')) or time_unclear(trip.get('endAt')):
         reasons.append('Y_TIME_UNCLEAR')
     reviewed_at = str(trip.get('reviewedAt') or '')   # "Reviewed" clears what the office did before it, not what it changes afterwards
-    amendments = [a for a in amendments if not reviewed_at or str(a.get('at') or '') > reviewed_at]
+    amendments = [a for a in amendments if not reviewed_at or str(a.get('at') or '') >= reviewed_at]   # same second counts as after: a hidden correction is worse than one more click
     if any(a.get('field') == 'status' and a.get('new') in DONE for a in amendments):
         reasons.append('Y_CLOSED_BY_OFFICE')
     if amendments:

@@ -33,9 +33,11 @@ def parse_public_keys(text):
     return tuple(found)
 
 
-def create_release_policy(output, raw_keys):
+def create_release_policy(output, raw_keys, channel="commercial"):
     """Write a temporary Python module compiled into TripOrders.exe."""
     keys = parse_public_keys(raw_keys)
+    if channel not in ("commercial", "ci-test"):
+        raise ValueError("Invalid release channel")
     if os.path.exists(output):
         raise ValueError("A release policy already exists: refusing an ambiguous build")
     with open(output, "x", encoding="ascii") as f:

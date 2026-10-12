@@ -45,6 +45,7 @@
     var seen = {}, out = [];
     TO.data.list('trips').forEach(function (t) { var k = U.key(t.destination); if (t.destination && !seen[k]) { seen[k] = 1; out.push(t.destination); } });
     TO.data.list('routes').forEach(function (r) { if (r.name) out.push(r.name); });
+    TO.data.list('places').forEach(function (p) { [p.name, p.nameAr].forEach(function (x) { var k = U.key(x); if (x && !seen[k]) { seen[k] = 1; out.push(x); } }); });
     return out.sort();
   }
 

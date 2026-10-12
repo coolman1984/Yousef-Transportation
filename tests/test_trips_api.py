@@ -156,6 +156,50 @@ class TripsApiTest(unittest.TestCase):
             self.ac.post('/api/trips/link', {'id': g['id']})
         self.assertIn('declined', str(e.exception))
 
+    def test_l_deleting_something_in_use_is_refused(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vdel', plate='س ص ع 1111', plateKey='سصع1111', active=True),
+                                                           put('drivers', 'ddel', name='Driver Del', active=True), put('people', 'pdel', name='Req Del', isRequester=True)]})
+        self.trip(vehicleId='vdel', driverId='ddel', requesterId='pdel')
+        for e, i in (('vehicles', 'vdel'), ('drivers', 'ddel'), ('tripCategories', 'cat1'), ('people', 'pdel')):
+            with self.assertRaises(ApiError, msg=e) as ex:
+                self.ac.post('/api/commit', {'label': 'del', 'ops': [{'e': e, 'id': i, 'op': 'del'}]})
+            self.assertEqual(ex.exception.code, 400)
+            self.assertIn('trip(s)', str(ex.exception))
+        # an unused one can still be deleted
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vfree', plate='ع ع ع 2222', plateKey='ععع2222', active=True)]})
+        ver = next(v['ver'] for v in self.ac.get('/api/state')['vehicles'] if v['id'] == 'vfree')
+        self.ac.post('/api/commit', {'label': 'del', 'ops': [{'e': 'vehicles', 'id': 'vfree', 'op': 'del', 'ver': ver}]})
+
+    def test_m_no_copies_and_no_negative_money(self):
+        for ops in ([put('tripCategories', 'dupcat', name='manager  CAR')], [put('departments', 'dupdep', name=' hr ')],
+                    [put('people', 'dupp', name='Sara Adel')],
+                    [put('tripCategories', 'neg', name='Negative', ratePerKm=-5)], [put('tripCategories', 'neg2', name='Negative2', openLimitHours=-3)]):
+            with self.assertRaises(ApiError, msg=str(ops)) as ex:
+                self.ac.post('/api/commit', {'label': 'x', 'ops': ops})
+            self.assertEqual(ex.exception.code, 400)
+        # the same name in another department is allowed (two real people can share a name)
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('people', 'sara2', name='Sara Adel', departmentId='dep1')]})
+
+    def test_n_department_comes_from_the_requester_and_places_merge_in_reports(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('departments', 'depacc', name='Accounts'), put('people', 'pacc', name='Mona R', departmentId='depacc', isRequester=True),
+                                                           put('places', 'pl1', name='Cairo Airport', key='cairoairport', aliases=['مطار القاهرة', 'المطار'], active=True)]})
+        t = self.trip(requesterId='pacc', departmentId='')
+        self.assertEqual(self.get_trip(t['id'])['departmentId'], 'depacc')
+        t2 = self.trip(requesterId='pacc', departmentId='dep1')    # an explicit department wins
+        self.assertEqual(self.get_trip(t2['id'])['departmentId'], 'dep1')
+        today = date.today().isoformat()[:7]
+        for dest in ('Cairo Airport', 'مطار القاهرة', 'المطار', 'Cairo Airport'):
+            self.trip(destination=dest)
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
+        import reports
+        st = self.ac.get('/api/state')
+        routes = {r['label']: r['trips'] for r in reports.summaries(st, today)['topRoutes']}
+        self.assertEqual(routes.get('Cairo Airport'), 4)
+        self.assertNotIn('المطار', routes)
+        dep = {d['label']: d['trips'] for d in reports.summaries(st, today)['byDepartment']}
+        self.assertIn('Accounts', dep)
+
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()
         for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):

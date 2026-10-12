@@ -122,6 +122,10 @@ def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
     today = domain.business_now()
     row.setdefault('date', today.date().isoformat())
     check_trip(row, today=today.date())
+    if not row.get('departmentId') and row.get('requesterId'):   # the requester's own department, still changeable
+        row['departmentId'] = (_row(store, 'people', row['requesterId']) or {}).get('departmentId') or ''
+        if not row['departmentId']:
+            del row['departmentId']
     with store.lock:  # numbering and saving under one lock, so two clicks at once never get the same number
         nos = [r[0] for r in store.conn.execute('SELECT no FROM trips')]
         letter = my_letter(journal, node_id)
@@ -158,7 +162,7 @@ def amend(store, user, ip, user_id, trip_id, field, value, reason, guard=None):
         new_row['locked'] = True
     ops = [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': new_row},
            {'e': 'tripAmendments', 'id': new_id('am'), 'op': 'put',
-            'row': {'tripId': trip_id, 'field': field, 'old': old, 'new': value, 'reason': reason[:400], 'by': user, 'at': _now()}}]
+            'row': {'tripId': trip_id, 'field': field, 'old': old, 'new': new_row[field], 'reason': reason[:400], 'by': user, 'at': _now()}}]
     store.commit(user, ip, f'Amend trip {t.get("no")}: {field}', ops, guard=guard, user_id=user_id)
     return {'ok': True}
 
@@ -280,6 +284,50 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
     return out
 
 
+# what a deleted record would leave orphaned: (trips column, label). Delete the trips first or switch the record off instead.
+USED_BY_TRIPS = {'vehicles': ('vehicle_id', 'vehicle'), 'drivers': ('driver_id', 'driver'), 'tripCategories': ('category_id', 'category'),
+                 'departments': ('department_id', 'department'), 'people': ('requester_id', 'person')}
+
+
+def _refuse_delete_in_use(store, entity, rid):
+    if entity not in USED_BY_TRIPS:
+        return
+    col, label = USED_BY_TRIPS[entity]
+    with store.lock:
+        n = store.conn.execute(f'SELECT COUNT(*) FROM trips WHERE {col}=? AND deleted=0', (rid,)).fetchone()[0]
+        if entity == 'people':
+            n += store.conn.execute('SELECT COUNT(*) FROM trip_passengers WHERE person_id=? AND deleted=0', (rid,)).fetchone()[0]
+    if n:
+        raise BadRequest(f'This {label} is used by {n} trip(s). Switch it off (not active) instead of deleting it, so old trips keep their {label}.')
+
+
+def _check_list_row(store, entity, row, rid):
+    """Master-data sanity: no money or hours below zero, and no second copy of a category, a department or the same person."""
+    if entity == 'tripCategories':
+        for f in ('ratePerKm', 'ratePerOtHour', 'openLimitHours'):
+            v = row.get(f)
+            if v not in (None, ''):
+                try:
+                    ok = 0 <= float(v) <= 1_000_000
+                except (TypeError, ValueError):
+                    ok = False
+                if not ok:
+                    raise BadRequest(f'{f}: write a number that is not below zero')
+    if entity in ('tripCategories', 'departments') and row.get('name'):
+        table = store_entities()[entity][0]
+        k = domain.key_text(row['name'])
+        with store.lock:
+            others = [r[0] for r in store.conn.execute(f'SELECT name FROM {table} WHERE deleted=0 AND id<>?', (rid,))]
+        if any(domain.key_text(o) == k for o in others):
+            raise BadRequest(f'Another {entity[:-1] if entity == "departments" else "category"} already has this name: "{row["name"]}"')
+    if entity == 'people' and row.get('name'):
+        k = domain.key_text(row['name'])
+        with store.lock:
+            others = store.conn.execute('SELECT department_id, mobile FROM people WHERE deleted=0 AND id<>? AND name_key=?', (rid, k)).fetchall()
+        if any((o[0] or '') == (row.get('departmentId') or '') and (o[1] or '') == (row.get('mobile') or '') for o in others):
+            raise BadRequest(f'This person is already in the list: "{row["name"]}" (same department and mobile)')
+
+
 def normalize_ops(store, ops, trusted=False):
     """Clean names, plates and mobiles on the server (so every client and the Excel import agree) and refuse duplicates
     of things that must be unique: a plate, a driver, a place, a department. People may share a name."""
@@ -288,6 +336,8 @@ def normalize_ops(store, ops, trusted=False):
     unique = {'vehicles': ('vehicles', 'plate_key', 'plateKey', 'plate'), 'drivers': ('drivers', 'name_key', 'nameKey', 'name'),
               'places': ('places', 'key', 'key', 'name')}
     for op in ops:
+        if isinstance(op, dict) and op.get('op') == 'del' and not trusted and not op.get('resolve'):
+            _refuse_delete_in_use(store, op.get('e'), op.get('id'))
         if not isinstance(op, dict) or op.get('op') != 'put' or not isinstance(op.get('row'), dict):
             continue
         e, row = op.get('e'), op['row']
@@ -309,6 +359,8 @@ def normalize_ops(store, ops, trusted=False):
                     row[f] = domain.norm_text(row[f])
             if not trusted:
                 check_trip(row, _row(store, 'trips', op.get('id')))
+        if not trusted:
+            _check_list_row(store, e, row, op.get('id'))
         if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save
             row['rateHistory'] = pricing.stamp(_row(store, 'tripCategories', op.get('id')), row, domain.business_now().date().isoformat())
         if e in unique and not op.get('resolve'):

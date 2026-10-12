@@ -38,11 +38,15 @@ test('cancelled and expired cards answer 410 with a reason', async () => {
   assert.equal((await r.json()).expired, true);
 });
 
-test('the first phone binds; a second phone is told so', async () => {
+test('opening the link does not bind; the first real message does, and then a second phone is told so', async () => {
   const env = newEnv();
   await putCard(env);
   const bind = (d) => call(env, 'POST', '/api/bind/' + TOKEN, { body: JSON.stringify({ deviceId: d }) }).then((r) => r.json());
-  assert.deepEqual(await bind('device-AAAA-1'), { bound: true });
+  assert.deepEqual(await bind('device-BBBB-2'), { bound: true });                 // the dispatcher looks at the link first ...
+  assert.equal((await env.DB.prepare('SELECT bound_device FROM cards').first()).bound_device, null);
+  assert.deepEqual(await bind('device-AAAA-1'), { bound: true });                 // ... the driver opens it later
+  const sent = await (await postEvent(env, { ...ev(), deviceId: 'device-AAAA-1' })).json();
+  assert.equal(sent.secondDevice, false);                                           // the driver's first real message binds his phone
   assert.deepEqual(await bind('device-AAAA-1'), { bound: true });
   assert.deepEqual(await bind('device-BBBB-2'), { bound: false, secondDevice: true });
   assert.equal((await bind('x')).error, 'Bad device');
@@ -145,11 +149,11 @@ test('office requests must be signed, fresh, unrepeated and untampered', async (
   assert.equal((await office(noSecret, 'GET', '/office/status')).status, 503);
 });
 
-test('rate limits: 60 requests per token and 300 per address in ten minutes', async () => {
+test('rate limits: 120 requests per token and 1200 per address in ten minutes (phones on one mobile-network address share it)', async () => {
   const env = newEnv();
   await putCard(env);
   let last;
-  for (let i = 0; i < 61; i++) last = await call(env, 'GET', '/api/card/' + TOKEN);
+  for (let i = 0; i < 121; i++) last = await call(env, 'GET', '/api/card/' + TOKEN);
   assert.equal(last.status, 429);
   assert.ok(last.headers.get('Retry-After'));
   // another token from the same address is still fine until the address limit

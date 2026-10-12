@@ -12,6 +12,7 @@ import tz
 _TATWEEL = 'ـ'
 _ZERO_WIDTH = dict.fromkeys(map(ord, '​‌‍‎‏‪‫‬⁦⁧⁨⁩﻿'))
 _AR_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
+_AR_UNIFY_SHOWN = str.maketrans({'ى': 'ي', 'ة': 'ه', 'ؤ': 'و', 'ئ': 'ي'})   # a plate is shown with the hamza as typed (أ stays أ); the other forms are unified
 _AR_UNIFY = str.maketrans({'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ى': 'ي', 'ة': 'ه', 'ؤ': 'و', 'ئ': 'ي'})
 _DIACRITICS = re.compile('[ً-ٰٟ]')
 _AR_LETTER = re.compile('[ء-ي]')
@@ -38,11 +39,13 @@ def key_text(s):
 def norm_plate(s):
     """(display, key). "ط و ي 6829" and " طوي6829 " are the same car. A text without digits is kept as typed."""
     t = norm_text(s).translate(_AR_DIGITS)
-    letters = ''.join(_AR_LETTER.findall(_DIACRITICS.sub('', t).translate(_AR_UNIFY)))
+    plain = _DIACRITICS.sub('', t)
+    shown = ''.join(_AR_LETTER.findall(plain.translate(_AR_UNIFY_SHOWN)))
+    letters = ''.join(_AR_LETTER.findall(plain.translate(_AR_UNIFY)))  # the key treats أ/ا, ى/ي, ة/ه as the same
     digits = ''.join(re.findall(r'\d', t))
     if not digits or not letters:
         return t, key_text(t).replace(' ', '')
-    return ' '.join(letters) + ' ' + digits, letters + digits
+    return ' '.join(shown) + ' ' + digits, letters + digits
 
 
 def norm_mobile_eg(s):

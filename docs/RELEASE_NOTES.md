@@ -1,6 +1,19 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+# Next (not released yet)
+
+## Fixed - from the 12 October 2026 test
+- **Trips recorded only at the office are no longer all red.** They show "needs review" (yellow) until a person presses **Reviewed**; a later change brings the mark back.
+- **The program refuses impossible values:** a wrong date, text in the kilometres, an end before the start, an unknown status; a cancelled or closed trip cannot be reopened.
+- **One "Close the trip" form** (and a **Start** button) instead of five separate edits.
+- **Cars, drivers, categories and people that trips use cannot be deleted** (switch them off instead); no duplicate categories, departments or people; no negative prices.
+- **The department is taken from the person who asked for the trip**, and a place and its other names are counted as one place in the reports.
+- **Warnings:** the same car or driver on two trips at the same time, a driver over 16 hours in one day, a driver whose licence had expired on the trip date.
+- **Excel imports that had doubts now show yellow** (they stayed green before).
+- **Mailbox:** a wrong clock on the office PC now says so, with the minutes of difference, instead of "wrong secret"; opening a driver link to check it no longer takes the trip away from the driver; the request limits are higher for drivers sharing one mobile network.
+- Plates keep the hamza as typed; side panels close when you open another page; the "required" message no longer repeats words.
+
 # Trip Orders 1.1.1
 
 ## New

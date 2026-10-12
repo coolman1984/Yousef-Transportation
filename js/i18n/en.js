@@ -473,7 +473,7 @@
     'amend.current': 'Now',
     'amend.done': 'The change was recorded.',
     'trip.new': 'New trip order',
-    'trip.new.hint': 'Only the category is required. The driver page comes with phase 5.',
+    'trip.new.hint': 'Required: the date and the category. Car, driver and the rest can be added later.',
     'trip.new.save': 'Create trip',
     'trip.created': 'Trip {no} created',
     'trip.people.added': 'New people added',

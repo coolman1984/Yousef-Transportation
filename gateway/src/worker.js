@@ -10,7 +10,7 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EVENT_TYPES = new Set(['start', 'end', 'route', 'note']);
 const PHOTO_KINDS = new Set(['start_odo', 'end_odo', 'paper', 'other']);
-const LIMIT_TOKEN = 60, LIMIT_IP = 300, WINDOW = 600;      // requests per 10 minutes
+const LIMIT_TOKEN = 120, LIMIT_IP = 1200, WINDOW = 600;      // requests per 10 minutes
 
 const HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -97,12 +97,9 @@ async function driver(request, env, url, parts) {
     const { data } = await readJson(request, 1024);
     const dev = String(data.deviceId || '');
     if (dev.length < 8 || dev.length > 64) throw new Fail(400, 'Bad device');
-    if (!card.bound_device) {
-      await env.DB.prepare('UPDATE cards SET bound_device = ? WHERE token_hash = ? AND bound_device IS NULL').bind(dev, th).run();
-      const again = await env.DB.prepare('SELECT bound_device FROM cards WHERE token_hash = ?').bind(th).first();
-      card.bound_device = again.bound_device;
-    }
-    if (card.bound_device === dev) return reply(200, { bound: true });
+    // Opening the link only asks "may I go on?": the phone becomes THE phone of the trip with its first real message (event), not with a look.
+    // So a dispatcher who opens the link to check it does not take the trip away from the driver.
+    if (!card.bound_device || card.bound_device === dev) return reply(200, { bound: true });
     return reply(200, { bound: false, secondDevice: true });
   }
 

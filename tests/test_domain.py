@@ -16,6 +16,8 @@ class TextTest(unittest.TestCase):
 
     def test_plate_without_digits_is_kept(self):
         self.assertEqual(d.norm_plate('  Rental van ')[0], 'Rental van')
+        self.assertEqual(d.norm_plate('أ ب ج 1234'), ('أ ب ج 1234', 'ابج1234'))      # the hamza is shown as typed ...
+        self.assertEqual(d.norm_plate('ا ب ج 1234')[1], d.norm_plate('أ ب ج 1234')[1])  # ... and still the same car
 
     def test_names_compare_without_spacing_case_or_spelling(self):
         self.assertEqual(d.key_text('Sayed  Abdallah Reyad '), d.key_text('sayed abdallah reyad'))

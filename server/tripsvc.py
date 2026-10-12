@@ -45,7 +45,7 @@ def _now():
 STATUSES = ('draft', 'sent', 'started', 'finished', 'closed', 'cancelled')
 DATE_WINDOW_DAYS = 60            # a trip date further than this from today is almost always a typing slip (2026-13-45, 1999, 2030)
 MAX_KM = 9_999_999
-TEXT_MAX = {'destination': 200, 'purpose': 300, 'routeText': 500, 'notes': 1000}
+TEXT_MAX = {'destination': 200, 'purpose': 300, 'routeText': 500, 'notes': 10000}
 
 
 def _whole_number(field, v, top):
@@ -60,10 +60,10 @@ def _whole_number(field, v, top):
     return int(n)
 
 
-def check_trip(row, before=None, today=None, trusted=False):
+def check_trip(row, before=None, today=None, trusted=False, window=True):
     """Refuse values that can never be true, for a new trip, a hand amendment and a plain save. Fills in clean numbers in `row`.
     `before` is the saved trip (None for a new one); only fields that CHANGED are judged, so an old record never blocks an unrelated edit.
-    `trusted` is for the Excel import and the restore: real history may be older than the date window."""
+    `trusted` / `window=False`: real history (Excel import, restore, a plain save of a list row) may be older than the date window; the date must still be a real date."""
     before = before or {}
     changed = lambda f: f in row and row.get(f) != before.get(f)
     if changed('date'):
@@ -75,7 +75,7 @@ def check_trip(row, before=None, today=None, trusted=False):
         if day is None:
             raise BadRequest('date: write the date like 2026-10-12')
         today = today or domain.business_now().date()
-        if not trusted and abs((day - today).days) > DATE_WINDOW_DAYS:
+        if window and not trusted and abs((day - today).days) > DATE_WINDOW_DAYS:
             raise BadRequest(f'date: more than {DATE_WINDOW_DAYS} days away from today - check the date')
         row['date'] = d
     for f in ('startKm', 'endKm'):
@@ -441,7 +441,7 @@ def normalize_ops(store, ops, trusted=False):
                 if row.get(f) is not None:
                     row[f] = domain.norm_text(row[f])
             if not trusted:
-                check_trip(row, _row(store, 'trips', op.get('id')))
+                check_trip(row, _row(store, 'trips', op.get('id')), window=False)   # the window guards new trips and hand amendments
         if not trusted:
             _check_list_row(store, e, row, op.get('id'))
         if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save

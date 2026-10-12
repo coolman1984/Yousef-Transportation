@@ -52,7 +52,11 @@
       root.addEventListener('focusin', function (e) { if (e.target.hasAttribute && e.target.hasAttribute('data-select')) e.target.select(); });
       root.addEventListener('click', function (e) {
         var b = e.target.closest('[data-gw]'); if (!b) return;
-        var a = b.dataset.gw, done = function () { return load().then(function () { TO.data.load(); TO.rerender(); }); };
+        var a = b.dataset.gw, done = function () {
+          /* the setup code carries the address: when the secrets are on screen, read them again so a saved address reaches the code */
+          return load().then(function () { return secrets && st.hasSecrets ? TO.get('/api/gateway/secrets').then(function (s) { secrets = s; }, function () { secrets = null; }) : (secrets = null); })
+            .then(function () { TO.data.load(); TO.rerender(); });
+        };
         if (a === 'save') U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value }), 'common.saved', b).then(done);
         else if (a === 'generate') {
           /* replacing the secrets stops every driver link until the gateway gets the new office secret: ask first */

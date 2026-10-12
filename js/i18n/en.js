@@ -805,7 +805,7 @@
     'gw.secret.code.help': 'Paste it on each other office PC under "Another office PC". Do not send it by email or chat.',
     'gw.secret.remake': 'Make new secrets',
     'gw.remake.title': 'Replace the secrets?',
-    'gw.remake.body': 'The old secrets stop working. Every driver link stops until you put the new office secret on the gateway and paste the new setup code on the other office PCs.',
+    'gw.remake.body': 'The old secrets stop working. This PC cannot reach the mailbox until you put the new office secret on the gateway, and the other office PCs need the new setup code. Links already sent to drivers keep working: to cancel one, make a new link for that trip.',
     'gw.secret.copy': 'Copy',
     'gw.secret.copied': 'Copied.',
     'gw.secret.code.nourl': 'The gateway address is not saved yet: copy this code again after you save it.',

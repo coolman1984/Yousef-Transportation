@@ -100,6 +100,12 @@ class LinkUiTest(BrowserBase):
         pg.click('[data-gw="show"]')
         pg.wait_for_selector('#gw-office')
         self.assertEqual(pg.input_value('#gw-office'), server['officeSecret'])
+        # saving the address while the secrets are on screen refreshes the setup code (it carries the address)
+        before = pg.input_value('#gw-setup')
+        pg.fill('#gw-url', 'https://mailbox.example.workers.dev')
+        pg.click('[data-gw="save"]')
+        pg.wait_for_function('s => document.querySelector("#gw-setup") && document.querySelector("#gw-setup").value !== s', arg=before)
+        self.assertEqual(pg.input_value('#gw-setup'), self.ac.get('/api/gateway/secrets')['setupCode'])
         # making new ones asks first; cancel changes nothing
         pg.click('[data-gw="generate"]')
         pg.wait_for_selector('[data-ok]')
@@ -110,6 +116,7 @@ class LinkUiTest(BrowserBase):
         pg.click('[data-ok]')
         pg.wait_for_function('s => { var e = document.querySelector("#gw-office"); return e && e.value && e.value !== s; }', arg=server['officeSecret'])
         self.assertEqual(pg.input_value('#gw-office'), self.ac.get('/api/gateway/secrets')['officeSecret'])
+        self.ac.post('/api/gateway/save', {'url': '', 'pollSeconds': 60})  # leave "not connected" for the next test
         self.assertEqual(self.errors, [])
 
     def test_b_print_sheet(self):

@@ -39,12 +39,13 @@ import afcodes
 # In installed customer builds this generated module is compiled into TripOrders.exe.
 # Never load commercial trust anchors from writable user configuration.
 try:
-    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS
+    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS, BUILD_CHANNEL as _BUILD_CHANNEL
 except ImportError:
     # Compiled binaries must never silently drop into contract mode if a release
     # policy module is missing due to a damaged build.
     _COMMERCIAL_BUILD = bool(globals().get('__compiled__', False))
     _RELEASE_KEYS = ()
+    _BUILD_CHANNEL = 'source'
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -158,7 +159,7 @@ class Licence:
             return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
                     'full': not _COMMERCIAL_BUILD, 'enforced': bool(_COMMERCIAL_BUILD),
                     'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
-                    'days_left': None, 'serial': None, 'reason': 'no_keys'}
+                    'days_left': None, 'serial': None, 'reason': 'no_keys', 'build_channel': _BUILD_CHANNEL}
         clock_back = self._seen_now()
         key = (code, dev, today, tuple(keys))
         with _lock:
@@ -169,6 +170,7 @@ class Licence:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
         result['enforced'] = True
+        result['build_channel'] = _BUILD_CHANNEL
         if clock_back and result['full']:
             result.update(state='clock_back', full=False, reason='clock_back')
         return result
@@ -179,6 +181,10 @@ class Licence:
         if not code:
             return {**base, 'state': 'none', 'reason': 'no_code'}
         r = afcodes.read_code(code, keys, PRODUCT_ID, dev, today)
+        if _COMMERCIAL_BUILD and r.valid and not r.terms.get('device_bound'):
+            # Accidentally signed unbound time licences must not be shareable
+            # across PCs in any sold or CI-test build.
+            return {**base, 'state': 'invalid', 'reason': 'device_required'}
         out = {**base, 'state': r.state, 'full': r.full_access, 'reason': r.reason}
         out.update({k: r.terms.get(k) for k in ('edition', 'first_day', 'last_day', 'days_left', 'serial') if k in r.terms})
         if r.state == 'active' and r.terms.get('edition') == 'trial':

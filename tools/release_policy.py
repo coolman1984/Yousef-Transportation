@@ -43,5 +43,6 @@ def create_release_policy(output, raw_keys, channel="commercial"):
     with open(output, "x", encoding="ascii") as f:
         f.write('"""Generated for a commercial installer. PUBLIC keys only. Do not edit."""\n')
         f.write("COMMERCIAL_BUILD = True\n")
+        f.write("BUILD_CHANNEL = " + repr(channel) + "\n")
         f.write("TRUSTED_KEYS = " + repr(keys) + "\n")
     return len(keys)

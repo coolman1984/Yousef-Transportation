@@ -75,5 +75,37 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
             self.assertEqual(p.returncode, 0, p.stderr)
 
 
+    def test_commercial_policy_rejects_unbound_signed_trial_and_monthly_codes(self):
+        from datetime import date
+        from unittest.mock import patch
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sys.path.insert(0, str(ROOT / "server"))
+        import afcodes, licence
+        private = Ed25519PrivateKey.generate()
+        pem = private.private_bytes(serialization.Encoding.PEM,
+                                    serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        public = base64.urlsafe_b64encode(private.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip("=")
+        device = "ABCDE-FGHJK"
+        with patch.object(licence, "_COMMERCIAL_BUILD", True):
+            for edition in ("trial", "standard", "pro"):
+                with self.subTest(edition=edition):
+                    unbound = afcodes.issue_code(pem, "trip-orders", edition, date.today(), 30)["code"]
+                    verdict = licence.Licence._check(unbound, device, date.today(), [public])
+                    self.assertEqual((verdict["state"], verdict["full"], verdict["reason"]),
+                                     ("invalid", False, "device_required"))
+                    bound = afcodes.issue_code(pem, "trip-orders", edition, date.today(), 30, device=device)["code"]
+                    self.assertTrue(licence.Licence._check(bound, device, date.today(), [public])["full"])
+
+    def test_ci_build_is_conspicuously_not_for_customers(self):
+        build = (ROOT / "tools" / "build_windows.py").read_text("utf-8")
+        installer = (ROOT / "installer" / "trip-orders.iss").read_text("utf-8")
+        licence_js = (ROOT / "js" / "views" / "licence.js").read_text("utf-8")
+        self.assertIn("/DAppChannel={channel}", build)
+        self.assertIn("CI-TEST-NOT-FOR-CUSTOMERS", installer)
+        self.assertIn("lic.ciTest", licence_js)
+
+
 if __name__ == "__main__":
     unittest.main()

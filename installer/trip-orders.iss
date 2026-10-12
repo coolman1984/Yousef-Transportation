@@ -7,13 +7,13 @@
 #endif
 #if AppChannel == "ci-test"
   #define MyAppId "{{B7C3E891-4A2D-4F1E-9C6B-8D2F4E1A0C93}"
-  #define MyDataFolder "TripOrders-CITest"
+  #define MyInstallFolder "TripOrders-CITest"
   #define AppDisplayName "Trip Orders - CI TEST - NOT FOR CUSTOMERS"
   #define AppFileSuffix "-CI-TEST-NOT-FOR-CUSTOMERS"
   #define MyAppName "Trip Orders CI Test"
 #else
   #define MyAppId "{{51A5FF77-EE7F-474F-9A55-53DEEF2A4B7A}"
-  #define MyDataFolder "TripOrders"
+  #define MyInstallFolder "TripOrders"
   #define AppDisplayName "Trip Orders"
   #define AppFileSuffix ""
   #define MyAppName "Trip Orders"
@@ -36,7 +36,7 @@ AppVerName={#AppDisplayName} {#AppVersion}
 AppPublisher={#AppPublisher}
 AppCopyright={#AppCopyright}
 VersionInfoVersion={#AppVersion}
-DefaultDirName={autopf}\{#MyDataFolder}
+DefaultDirName={autopf}\{#MyInstallFolder}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 UsePreviousAppDir=yes
@@ -80,7 +80,7 @@ Name: "thispconly"; Description: "{cm:ThisPcOnly}"; Flags: unchecked
 [Dirs]
 ; data, backups, signing keys and settings: kept when the program is updated or removed. Access is narrowed in [Run] below (icacls):
 ; only SYSTEM, the administrators and ONE operator account (the person who installs, or /OPERATOR=DOMAIN\name) may read or write it.
-Name: "{commonappdata}\{#MyDataFolder}"; Permissions: admins-full system-full; Flags: uninsneveruninstall
+Name: "{commonappdata}\TripOrders"; Permissions: admins-full system-full; Flags: uninsneveruninstall
 
 [Files]
 Source: "..\build\to_main.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -92,7 +92,7 @@ Name: "{commonstartup}\{#MyAppName}"; Filename: "{app}\TripOrders.exe"; Paramete
 
 [Run]
 ; B2: the data tree is not shared with the other Windows accounts of this PC (databases and the raw signing keys live there)
-Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\{#MyDataFolder}"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" ""*S-1-5-32-544:(OI)(CI)F"" ""{param:OPERATOR|{username}}:(OI)(CI)M"" /remove:g ""*S-1-5-32-545"" ""*S-1-5-11"""; Flags: runhidden; StatusMsg: "{cm:Firewall}"
+Filename: "{sys}\icacls.exe"; Parameters: """{commonappdata}\TripOrders"" /inheritance:r /grant:r ""*S-1-5-18:(OI)(CI)F"" ""*S-1-5-32-544:(OI)(CI)F"" ""{param:OPERATOR|{username}}:(OI)(CI)M"" /remove:g ""*S-1-5-32-545"" ""*S-1-5-11"""; Flags: runhidden; StatusMsg: "{cm:Firewall}"
 ; B3: the firewall rule is limited to private/domain networks (never a public Wi-Fi) and is not added when the office chose "this PC only"
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall delete rule name=""{#MyAppName}"""; Flags: runhidden
 Filename: "{sys}\netsh.exe"; Parameters: "advfirewall firewall add rule name=""{#MyAppName}"" dir=in action=allow program=""{app}\TripOrders.exe"" enable=yes profile=private,domain"; Flags: runhidden; Tasks: not thispconly
@@ -115,7 +115,7 @@ begin
   { this PC only: listen on this PC alone, but only if the office asked for it and has no settings file yet (the program default is the office LAN); written before the program is started }
   if (CurStep = ssInstall) and WizardIsTaskSelected('thispconly') then
   begin
-    Cfg := ExpandConstant('{commonappdata}\{#MyDataFolder}\config.json');
+    Cfg := ExpandConstant('{commonappdata}\TripOrders\config.json');
     ForceDirectories(ExtractFilePath(Cfg));
     if not FileExists(Cfg) then
       SaveStringToFile(Cfg, '{"host": "127.0.0.1"}', False);

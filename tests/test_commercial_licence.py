@@ -123,7 +123,7 @@ class InstallerChannelTest(unittest.TestCase):
         # the commercial AppId must stay byte-identical so real offices upgrade in place
         self.assertIn('#define MyAppId "{{51A5FF77-EE7F-474F-9A55-53DEEF2A4B7A}"', iss)
         self.assertNotIn("}}\"", iss)
-        self.assertRegex(iss, r'DefaultDirName=\{autopf\}\\\{#MyDataFolder\}')
+        self.assertRegex(iss, r'DefaultDirName=\{autopf\}\\\{#MyInstallFolder\}')
         self.assertIn('#define MyAppName "Trip Orders CI Test"', iss)
         self.assertIn('#define MyAppName "Trip Orders"', iss)
         build = (ROOT / "tools" / "build_windows.py").read_text("utf-8")

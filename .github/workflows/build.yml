@@ -104,12 +104,12 @@ jobs:
           pip install cryptography
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
           (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
-          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
           if (-not (Test-Path $exe)) { throw 'the installed program is missing' }
           $acl = (icacls (Join-Path ${env:ProgramData} 'TripOrders')) -join "`n"
           Write-Host $acl
           if ($acl -match 'BUILTIN\\Users' -or $acl -match 'Authenticated Users' -or $acl -match 'Everyone') { throw 'the data folder is open to other Windows accounts' }
-          $fw = (netsh advfirewall firewall show rule name="Trip Orders") -join "`n"
+          $fw = (netsh advfirewall firewall show rule name="Trip Orders CI Test") -join "`n"
           Write-Host $fw
           if ($fw -match 'No rules match') { throw 'the default install must add the firewall rule so the other PCs of the office can connect' }
           if ($fw -notmatch 'Profiles:\s+(Domain,Private|Private,Domain)\s*(\r?\n|$)') { throw 'the firewall rule must be limited to the private and domain profiles' }
@@ -118,7 +118,7 @@ jobs:
       - name: Core journey on the installed program, then update over it (the trip, the backup and the licence must survive)
         shell: pwsh
         run: |
-          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
           $h = Join-Path ${env:RUNNER_TEMP} 'journey-office'
           python tools/journey_exe.py first $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the first journey failed' }
@@ -136,17 +136,24 @@ jobs:
           gh release download --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir 2>$null
           $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $old) { Write-Host 'NOTICE: no earlier release exists yet, so the N-1 update could not be exercised here'; exit 0 }
-          $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          $unins = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\unins000.exe'
           (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
           Remove-Item -Recurse -Force (Join-Path ${env:ProgramData} 'TripOrders') -ErrorAction SilentlyContinue
           (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
-          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          # the previous release is a customer build in Program Files\TripOrders; this CI-test build has its own
+          # AppId and folder (it can never replace a customer install), so it reads the same office data side by side
+          $oldExe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
           $h = Join-Path ${env:RUNNER_TEMP} 'journey-n1'
-          python tools/journey_exe.py legacy $h $exe
+          python tools/journey_exe.py legacy $h $oldExe
           if ($LASTEXITCODE -ne 0) { throw 'the previous release did not run the journey' }
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
           (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          if (-not (Test-Path $oldExe)) { throw 'the CI-test installer must not touch the customer install' }
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
           python tools/journey_exe.py after $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the CI-test build could not read the office data of the previous release' }
+          $oldUnins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          (Start-Process -FilePath $oldUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
           if ($LASTEXITCODE -ne 0) { throw 'the update from the previous release lost data' }
       - name: Release proof (source commit, version, installer checksum, this run)
         shell: pwsh
@@ -163,11 +170,11 @@ jobs:
       - name: Uninstall keeps the office's data
         shell: pwsh
         run: |
-          $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          $unins = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\unins000.exe'
           (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
-          if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe')) { throw 'the program was not removed' }
+          if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe')) { throw 'the program was not removed' }
           if (-not (Test-Path (Join-Path ${env:ProgramData} 'TripOrders'))) { throw 'the data folder must survive an uninstall' }
-          $fw = (netsh advfirewall firewall show rule name="Trip Orders") -join "`n"
+          $fw = (netsh advfirewall firewall show rule name="Trip Orders CI Test") -join "`n"
           if ($fw -notmatch 'No rules match') { throw 'the uninstall must remove the firewall rule' }
           exit 0  # netsh returns 1 when the rule is missing, which is the expected result here
       - name: Install with "This PC only" adds no firewall rule and writes the this-PC-only setting
@@ -177,11 +184,11 @@ jobs:
           Remove-Item $cfg -Force -ErrorAction SilentlyContinue  # the installer writes the setting only when the office has none yet
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
           (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART','/TASKS=thispconly' -PassThru).WaitForExit()
-          if (-not (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'))) { throw 'the installed program is missing' }
-          $fw = (netsh advfirewall firewall show rule name="Trip Orders") -join "`n"
+          if (-not (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'))) { throw 'the installed program is missing' }
+          $fw = (netsh advfirewall firewall show rule name="Trip Orders CI Test") -join "`n"
           if ($fw -notmatch 'No rules match') { throw 'a firewall rule exists although the office chose this PC only' }
           if ((Get-Content $cfg -Raw | ConvertFrom-Json).host -ne '127.0.0.1') { throw 'this-PC-only must write host 127.0.0.1' }
-          $unins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
+          $unins = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\unins000.exe'
           (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
           exit 0  # netsh returns 1 when the rule is missing, which is the expected result here
       - uses: actions/upload-artifact@v7

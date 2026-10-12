@@ -97,6 +97,16 @@ class OdometerTest(unittest.TestCase):
         self.assertFalse(d.unusual_km(40, [20, 25, 30, 35]))  # small distances tolerate 30 km
 
 
+class OverlapTest(unittest.TestCase):
+    def t(self, i, a, b, **kw):
+        return {'id': i, 'startAt': f'2026-10-12T{a}:00', 'endAt': f'2026-10-12T{b}:00', **kw}
+
+    def test_overlap_and_touching(self):
+        out = d.overlaps([self.t('a', '10:00', '14:00'), self.t('b', '11:00', '13:00'), self.t('c', '14:00', '16:00'), self.t('x', '10:00', '12:00', status='cancelled')])
+        self.assertEqual(out, {'a': ['b'], 'b': ['a']})     # c only touches a; the cancelled trip does not count
+        self.assertEqual(d.overlaps([self.t('n', '10:00', '09:00'), {'id': 'm'}]), {})
+
+
 class TrustTest(unittest.TestCase):
     def done(self, **kw):
         return {'id': 't', 'status': 'finished', 'startKm': 100, 'endKm': 200, 'source': 'app', **kw}

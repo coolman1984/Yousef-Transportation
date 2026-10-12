@@ -233,6 +233,28 @@ DONE = ('finished', 'closed')
 IMPORT_WARN_NOTE = 'Imported with warnings'   # the Excel import writes this at the start of the trip's notes when a row had doubts
 
 
+DRIVER_DAY_LIMIT_HOURS = 16   # one driver, one day: more is almost always two trips typed over each other
+
+
+def overlaps(trips):
+    """{trip id: [ids of the other trips whose time overlaps it]} for trips that share one car or one driver. `trips` is one group
+    (all trips of one car, or of one driver). Only trips with a start and an end count; touching ends (10:00-12:00, 12:00-14:00) are no overlap."""
+    spans = []
+    for t in trips:
+        a, b = parse_dt(t.get('startAt')), parse_dt(t.get('endAt'))
+        if a and b and b > a and t.get('status') != 'cancelled':
+            spans.append((a, b, t['id']))
+    spans.sort()
+    out = {}
+    for i, (a1, b1, id1) in enumerate(spans):
+        for a2, b2, id2 in spans[i + 1:]:
+            if a2 >= b1:
+                break
+            out.setdefault(id1, []).append(id2)
+            out.setdefault(id2, []).append(id1)
+    return out
+
+
 def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(), open_limit_hours=16, now=None, drift_limit=10,
           billable_check=True):
     """(colour, [reason codes]) - deterministic, computed on read. Not-finished trips are grey (or red when left open too long)."""

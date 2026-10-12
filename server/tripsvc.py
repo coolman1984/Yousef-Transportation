@@ -271,6 +271,22 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
         km = domain.km_of(t)
         if k and km and km > 0 and t.get('status') in DONE:
             hist.setdefault(k, []).append((t['id'], km))
+    clash = {'vehicleId': {}, 'driverId': {}}                      # who shares a car or a driver at the same time
+    for field in clash:
+        groups = {}
+        for t in trips:
+            if t.get(field) and t.get('status') != 'cancelled':
+                groups.setdefault(t[field], []).append(t)
+        for g in groups.values():
+            clash[field].update(domain.overlaps(g))
+    day_hours = {}                                                  # hours one driver is on trips in one day
+    for t in trips:
+        dur = domain.duration(t.get('startAt'), t.get('endAt'))
+        st = domain.parse_dt(t.get('startAt'))
+        if dur and st and t.get('driverId') and t.get('status') != 'cancelled':
+            key = (t['driverId'], st.date().isoformat())
+            day_hours[key] = day_hours.get(key, 0) + domain.hours(dur)
+    licences = {d['id']: str(d.get('licenseExpiry') or '')[:10] for d in state.get('drivers', [])}
     out = {}
     for t in trips:
         tid = t['id']
@@ -279,7 +295,22 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
         dur = domain.duration(t.get('startAt'), t.get('endAt'))
         colour, reasons = domain.trust(t, photos.get(tid, []), amends.get(tid, []), events.get(tid, []), chains.get(tid), kms,
                                        open_limit_hours=(cats.get(t.get('categoryId')) or {}).get('openLimitHours') or 16, now=now, drift_limit=drift_limit)
-        out[tid] = {'trust': colour, 'reasons': reasons, 'km': domain.km_of(t), 'hours': domain.hours(dur) if dur else None,
+        if t.get('status') != 'cancelled':
+            extra = []
+            if tid in clash['vehicleId']:
+                extra.append('Y_CAR_OVERLAP')
+            if tid in clash['driverId']:
+                extra.append('Y_DRIVER_OVERLAP')
+            st = domain.parse_dt(t.get('startAt'))
+            if st and day_hours.get((t.get('driverId'), st.date().isoformat()), 0) > domain.DRIVER_DAY_LIMIT_HOURS:
+                extra.append('Y_DRIVER_LONG_DAY')
+            exp = licences.get(t.get('driverId'), '')
+            if exp and str(t.get('date') or '')[:10] > exp:
+                extra.append('Y_LICENCE_EXPIRED')
+            reasons = reasons + [x for x in extra if x not in reasons]
+            if extra and colour in (domain.GREEN,):
+                colour = domain.YELLOW
+        out[tid] = {'trust': colour, 'reasons': reasons, 'clashWith': {'vehicle': clash['vehicleId'].get(tid, []), 'driver': clash['driverId'].get(tid, [])}, 'km': domain.km_of(t), 'hours': domain.hours(dur) if dur else None,
                     'otHours': domain.hours(domain.overtime(dur, ot_threshold)) if dur else None, 'chain': chains.get(tid)}
     return out
 

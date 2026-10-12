@@ -200,6 +200,31 @@ class TripsApiTest(unittest.TestCase):
         dep = {d['label']: d['trips'] for d in reports.summaries(st, today)['byDepartment']}
         self.assertIn('Accounts', dep)
 
+    def test_o_clash_long_day_and_expired_licence_are_flagged(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vc1', plate='ب ب ب 3333', plateKey='ببب3333', active=True),
+                                                           put('drivers', 'dlic', name='Old Licence', licenseExpiry='2020-01-01', active=True),
+                                                           put('drivers', 'dlong', name='Long Day', active=True)]})
+        today = date.today().isoformat()
+
+        def times(tid, a, b):
+            for f, v in (('startAt', f'{today}T{a}:00'), ('endAt', f'{today}T{b}:00')):
+                self.ac.post('/api/trips/amend', {'id': tid, 'field': f, 'value': v, 'reason': 'from the paper'})
+        a, b = self.trip(vehicleId='vc1'), self.trip(vehicleId='vc1', driverId='dlic')
+        times(a['id'], '08:00', '12:00')
+        times(b['id'], '11:00', '13:00')
+        ins = self.ac.get('/api/insights')
+        self.assertIn('Y_CAR_OVERLAP', ins[a['id']]['reasons'])
+        self.assertIn('Y_CAR_OVERLAP', ins[b['id']]['reasons'])
+        self.assertEqual(ins[a['id']]['clashWith']['vehicle'], [b['id']])
+        self.assertIn('Y_LICENCE_EXPIRED', ins[b['id']]['reasons'])
+        self.assertNotIn('Y_LICENCE_EXPIRED', ins[a['id']]['reasons'])
+        x, y = self.trip(driverId='dlong'), self.trip(driverId='dlong')
+        times(x['id'], '00:00', '09:00')
+        times(y['id'], '09:00', '18:00')
+        ins = self.ac.get('/api/insights')
+        self.assertIn('Y_DRIVER_LONG_DAY', ins[x['id']]['reasons'])
+        self.assertNotIn('Y_DRIVER_OVERLAP', ins[x['id']]['reasons'])
+
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()
         for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):

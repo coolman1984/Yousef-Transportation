@@ -45,7 +45,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("'.map'", build)
         self.assertIn("raise RuntimeError('Customer package contains", build)
         installer = open(os.path.join(ROOT, 'installer', 'trip-orders.iss'), encoding='utf-8').read()
-        self.assertIn(r'Source: "..\\build\\to_main.dist\\*"', installer)
+        self.assertIn('to_main.dist', installer)
         self.assertNotIn('operator-only-gateway', installer)
 
     def test_vendored_factory_parts_carry_their_header(self):

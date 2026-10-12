@@ -1,4 +1,5 @@
 """Trip operations through the real server: numbering, amendments, cancel, GA approval, locked trips, insights."""
+import time
 import unittest
 from datetime import date
 
@@ -105,12 +106,186 @@ class TripsApiTest(unittest.TestCase):
 
     def test_g_insights(self):
         t = self.trip(cat='cat1')
-        for field, value in (('startKm', 500), ('endKm', 400), ('status', 'finished')):  # status only changes through the amend route
+        for field, value in (('startKm', 500), ('endKm', 500), ('status', 'finished')):  # equal readings = 0 km; status only changes through the amend route
             self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'test reading'})
         ins = self.ac.get('/api/insights')[t['id']]
         self.assertEqual(ins['trust'], 'red')
         self.assertIn('R_END_LE_START', ins['reasons'])
-        self.assertIn('R_NO_PAPER', ins['reasons'])
+        self.assertNotIn('R_NO_PAPER', ins['reasons'])   # an office-only trip has no driver page to send the paper
+
+    def test_i_bad_values_are_refused_and_nothing_is_saved(self):
+        t = self.trip()
+        before = self.get_trip(t['id'])
+        bad = [('endKm', 'abc'), ('endKm', -5), ('endKm', 12.5), ('startKm', 99999999999), ('status', 'flying'), ('date', 'abc'), ('date', '2026-13-45'),
+               ('date', '1999-01-01'), ('date', '2099-01-01'), ('startAt', 'nonsense'), ('destination', 'x' * 201)]
+        for field, value in bad:
+            with self.assertRaises(ApiError, msg=f'{field}={value!r}') as e:
+                self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'test the check'})
+            self.assertEqual(e.exception.code, 400)
+        self.assertEqual(self.get_trip(t['id']), before)
+        self.assertEqual([a for a in self.ac.get('/api/state')['tripAmendments'] if a['tripId'] == t['id']], [])
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'startKm', 'value': '1,000', 'reason': 'typed with a comma'})
+        self.assertEqual(self.get_trip(t['id'])['startKm'], 1000)
+        with self.assertRaises(ApiError):    # end below start
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endKm', 'value': 900, 'reason': 'lower than start'})
+
+    def test_j_times_order_and_new_trip_checks(self):
+        t = self.trip()
+        today = date.today().isoformat()
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'startAt', 'value': today + 'T10:00:00', 'reason': 'from the paper'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endAt', 'value': today + 'T09:00:00', 'reason': 'before the start'})
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endAt', 'value': today + 'T12:30:00', 'reason': 'from the paper'})
+        for body in ({'date': 'abc'}, {'date': '2026-13-45'}, {'date': '1999-05-05'}, {'date': '2031-05-05'}, {'destination': 'y' * 500}):
+            with self.assertRaises(ApiError, msg=str(body)) as e:
+                self.trip(**body)
+            self.assertEqual(e.exception.code, 400)
+
+    def test_k_cancelled_and_closed_are_final_declined_gets_no_link(self):
+        t = self.trip()
+        self.ac.post('/api/trips/cancel', {'id': t['id'], 'reason': 'Not needed any more'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'status', 'value': 'finished', 'reason': 'bring it back'})
+        self.assertEqual(self.get_trip(t['id'])['status'], 'cancelled')
+        c = self.trip()
+        self.ac.post('/api/trips/amend', {'id': c['id'], 'field': 'status', 'value': 'closed', 'reason': 'Closed by office'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': c['id'], 'field': 'status', 'value': 'started', 'reason': 'go back'})
+        g = self.trip()
+        self.ac.post('/api/trips/approve', {'id': g['id'], 'yes': False})
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/trips/link', {'id': g['id']})
+        self.assertIn('declined', str(e.exception))
+
+    def test_l_deleting_something_in_use_is_refused(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vdel', plate='س ص ع 1111', plateKey='سصع1111', active=True),
+                                                           put('drivers', 'ddel', name='Driver Del', active=True), put('people', 'pdel', name='Req Del', isRequester=True)]})
+        self.trip(vehicleId='vdel', driverId='ddel', requesterId='pdel')
+        for e, i in (('vehicles', 'vdel'), ('drivers', 'ddel'), ('tripCategories', 'cat1'), ('people', 'pdel')):
+            with self.assertRaises(ApiError, msg=e) as ex:
+                self.ac.post('/api/commit', {'label': 'del', 'ops': [{'e': e, 'id': i, 'op': 'del'}]})
+            self.assertEqual(ex.exception.code, 400)
+            self.assertIn('trip(s)', str(ex.exception))
+        # an unused one can still be deleted
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vfree', plate='ع ع ع 2222', plateKey='ععع2222', active=True)]})
+        ver = next(v['ver'] for v in self.ac.get('/api/state')['vehicles'] if v['id'] == 'vfree')
+        self.ac.post('/api/commit', {'label': 'del', 'ops': [{'e': 'vehicles', 'id': 'vfree', 'op': 'del', 'ver': ver}]})
+
+    def test_m_no_copies_and_no_negative_money(self):
+        for ops in ([put('tripCategories', 'dupcat', name='manager  CAR')], [put('departments', 'dupdep', name=' hr ')],
+                    [put('people', 'dupp', name='Sara Adel')],
+                    [put('tripCategories', 'neg', name='Negative', ratePerKm=-5)], [put('tripCategories', 'neg2', name='Negative2', openLimitHours=-3)]):
+            with self.assertRaises(ApiError, msg=str(ops)) as ex:
+                self.ac.post('/api/commit', {'label': 'x', 'ops': ops})
+            self.assertEqual(ex.exception.code, 400)
+        # the same name in another department is allowed (two real people can share a name)
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('people', 'sara2', name='Sara Adel', departmentId='dep1')]})
+
+    def test_n_department_comes_from_the_requester_and_places_merge_in_reports(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('departments', 'depacc', name='Accounts'), put('people', 'pacc', name='Mona R', departmentId='depacc', isRequester=True),
+                                                           put('places', 'pl1', name='Cairo Airport', key='cairoairport', aliases=['مطار القاهرة', 'المطار'], active=True)]})
+        t = self.trip(requesterId='pacc', departmentId='')
+        self.assertEqual(self.get_trip(t['id'])['departmentId'], 'depacc')
+        t2 = self.trip(requesterId='pacc', departmentId='dep1')    # an explicit department wins
+        self.assertEqual(self.get_trip(t2['id'])['departmentId'], 'dep1')
+        today = date.today().isoformat()[:7]
+        for dest in ('Cairo Airport', 'مطار القاهرة', 'المطار', 'Cairo Airport'):
+            self.trip(destination=dest)
+        import sys, os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
+        import reports
+        st = self.ac.get('/api/state')
+        routes = {r['label']: r['trips'] for r in reports.summaries(st, today)['topRoutes']}
+        self.assertEqual(routes.get('Cairo Airport'), 4)
+        self.assertNotIn('المطار', routes)
+        dep = {d['label']: d['trips'] for d in reports.summaries(st, today)['byDepartment']}
+        self.assertIn('Accounts', dep)
+
+    def test_o_clash_long_day_and_expired_licence_are_flagged(self):
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vc1', plate='ب ب ب 3333', plateKey='ببب3333', active=True),
+                                                           put('drivers', 'dlic', name='Old Licence', licenseExpiry='2020-01-01', active=True),
+                                                           put('drivers', 'dlong', name='Long Day', active=True)]})
+        today = date.today().isoformat()
+
+        def times(tid, a, b):
+            for f, v in (('startAt', f'{today}T{a}:00'), ('endAt', f'{today}T{b}:00')):
+                self.ac.post('/api/trips/amend', {'id': tid, 'field': f, 'value': v, 'reason': 'from the paper'})
+        a, b = self.trip(vehicleId='vc1'), self.trip(vehicleId='vc1', driverId='dlic')
+        times(a['id'], '08:00', '12:00')
+        times(b['id'], '11:00', '13:00')
+        ins = self.ac.get('/api/insights')
+        self.assertIn('Y_CAR_OVERLAP', ins[a['id']]['reasons'])
+        self.assertIn('Y_CAR_OVERLAP', ins[b['id']]['reasons'])
+        self.assertEqual(ins[a['id']]['clashWith']['vehicle'], [b['id']])
+        self.assertIn('Y_LICENCE_EXPIRED', ins[b['id']]['reasons'])
+        self.assertNotIn('Y_LICENCE_EXPIRED', ins[a['id']]['reasons'])
+        x, y = self.trip(driverId='dlong'), self.trip(driverId='dlong')
+        times(x['id'], '00:00', '09:00')
+        times(y['id'], '09:00', '18:00')
+        ins = self.ac.get('/api/insights')
+        self.assertIn('Y_DRIVER_LONG_DAY', ins[x['id']]['reasons'])
+        self.assertNotIn('Y_DRIVER_OVERLAP', ins[x['id']]['reasons'])
+
+    def test_p_start_then_close_in_one_step(self):
+        t = self.trip()
+        self.ac.post('/api/trips/start', {'id': t['id']})
+        x = self.get_trip(t['id'])
+        self.assertEqual(x['status'], 'started')
+        self.assertTrue(x['startAt'])
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/start', {'id': t['id']})
+        today = date.today().isoformat()
+        with self.assertRaises(ApiError):   # a missing value
+            self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 180})
+        with self.assertRaises(ApiError):   # end before start
+            self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 90, 'startAt': today + 'T08:00', 'endAt': today + 'T09:00'})
+        self.assertEqual(self.get_trip(t['id'])['status'], 'started')
+        self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 180, 'startAt': today + 'T08:00', 'endAt': today + 'T11:30'})
+        x = self.get_trip(t['id'])
+        self.assertEqual((x['status'], x['locked'], x['startKm'], x['endKm']), ('closed', True, 100, 180))
+        fields = sorted(a['field'] for a in self.ac.get('/api/state')['tripAmendments'] if a['tripId'] == t['id'])
+        self.assertEqual(fields, ['endAt', 'endKm', 'startAt', 'startKm', 'status'])   # one record per value that changed (startAt: "now" became 08:00)
+        with self.assertRaises(ApiError):   # correcting a closed trip needs a reason
+            self.ac.post('/api/trips/close', {'id': t['id'], 'endKm': 200})
+        self.ac.post('/api/trips/close', {'id': t['id'], 'endKm': 200, 'reason': 'Paper says 200'})
+        self.assertEqual(self.get_trip(t['id'])['endKm'], 200)
+
+    def test_q_review_findings_inactive_place_department_guard_and_same_second(self):
+        import os, sys
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'server'))
+        import domain, reports
+        # a correction in the same second as the review is never hidden
+        t = {'id': 'x', 'status': 'finished', 'startKm': 1, 'endKm': 5, 'source': 'app', 'reviewedAt': '2026-10-12T10:00:00'}
+        self.assertEqual(domain.trust(t, [], [{'field': 'endKm', 'new': 6, 'at': '2026-10-12T10:00:00'}])[0], 'yellow')
+        # an inactive place still groups the past
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('places', 'plOld', name='Old Depot', key='olddepot', aliases=['The Depot'], active=False)]})
+        today = date.today().isoformat()[:7]
+        for dest in ('Old Depot', 'The Depot'):
+            self.trip(destination=dest)
+        routes = {r['label']: r['trips'] for r in reports.summaries(self.ac.get('/api/state'), today)['topRoutes']}
+        self.assertEqual(routes.get('Old Depot'), 2)
+        # a department that only legacy trips reach through their requester cannot be deleted
+        self.ac.post('/api/commit', {'label': 'x', 'ops': [put('departments', 'depLegacy', name='Legacy Dept'), put('people', 'pLegacy', name='Legacy Requester', departmentId='depLegacy', isRequester=True)]})
+        legacy = self.ac.post('/api/commit', {'label': 'x', 'ops': [put('trips', 'trLegacy', no='L-1', date=date.today().isoformat(), categoryId='cat1', requesterId='pLegacy', status='draft', source='app')]})
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/commit', {'label': 'd', 'ops': [{'e': 'departments', 'id': 'depLegacy', 'op': 'del'}]})
+        self.assertIn('trip(s)', str(e.exception))
+
+    def test_h_office_only_trip_turns_green_after_review(self):
+        t = self.trip()
+        for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'entered from the paper'})
+        ins = self.ac.get('/api/insights')[t['id']]
+        self.assertEqual((ins['trust'], ins['reasons']), ('yellow', ['Y_CLOSED_BY_OFFICE', 'Y_AMENDED']))
+        time.sleep(1.1)   # review and correction stamps have one-second precision; a person never reviews within the second of the entry
+        self.ac.post('/api/trips/review', {'id': t['id']})
+        x = self.get_trip(t['id'])
+        self.assertTrue(x['reviewedBy'] and x['reviewedAt'])
+        self.assertEqual(self.ac.get('/api/insights')[t['id']]['trust'], 'green')
+        with self.assertRaises(ApiError):   # a draft is not reviewable
+            self.ac.post('/api/trips/review', {'id': self.trip()['id']})
+        with self.assertRaises(ApiError):   # the review stamp cannot be written by hand
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'reviewedAt', 'value': '2099-01-01T00:00:00', 'reason': 'sneaky try'})
 
 
 if __name__ == '__main__':

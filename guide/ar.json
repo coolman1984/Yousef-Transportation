@@ -164,5 +164,18 @@
  "problem.licence-locked.why": "الترخيص غير موجود أو انتهى أو هو لجهاز آخر.",
  "problem.licence-locked.do.1": "افتح الإعدادات ثم صفحة الترخيص.",
  "problem.licence-locked.do.2": "اطلب تجربة أو كودًا من الشركة، أو الصق الكود الذي وصلك.",
- "problem.licence-locked.still": "أرسل رقم الجهاز المكتوب في الصفحة إلى الشركة."
+ "problem.licence-locked.still": "أرسل رقم الجهاز المكتوب في الصفحة إلى الشركة.",
+ "problem.trip-value-refused.see": "يرفض البرنامج قيمة كتبتها في المشوار.",
+ "problem.trip-value-refused.why": "القيمة لا يمكن أن تكون صحيحة، مثل تاريخ خاطئ أو عداد نهاية أقل من البداية.",
+ "problem.trip-value-refused.do.1": "اقرأ الرسالة، فهي تقول أي قيمة خاطئة.",
+ "problem.trip-value-refused.do.2": "صحّح القيمة واحفظ من جديد.",
+ "problem.trip-value-refused.do.3": "المشوار الملغي أو المقفول لا يعود مفتوحًا. أنشئ مشوارًا جديدًا إن لزم.",
+ "problem.record-in-use.see": "لا يُحذف السجل، أو لا يُحفظ لأن مثله موجود.",
+ "problem.record-in-use.why": "مشاوير كثيرة تستخدم هذا السجل، أو يوجد سجل آخر بالاسم نفسه.",
+ "problem.record-in-use.do.1": "لا تحذف سجلًا تستخدمه مشاوير. اجعله غير نشط بدلًا من ذلك.",
+ "problem.record-in-use.do.2": "إن كان الاسم مكررًا، استخدم السجل الموجود.",
+ "problem.mailbox-refused.see": "يرفض الصندوق هذا الجهاز.",
+ "problem.mailbox-refused.why": "ساعة الجهاز مضبوطة خطأ، أو السر لا يطابق السر المسجل على الصندوق.",
+ "problem.mailbox-refused.do.1": "اضبط التاريخ والوقت في الجهاز، ثم جرّب من جديد.",
+ "problem.mailbox-refused.do.2": "إن بقيت الرسالة، انسخ كود الإعداد من الجهاز الأول مرة أخرى."
 }

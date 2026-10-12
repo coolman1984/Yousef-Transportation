@@ -12,6 +12,7 @@ import tz
 _TATWEEL = 'ـ'
 _ZERO_WIDTH = dict.fromkeys(map(ord, '​‌‍‎‏‪‫‬⁦⁧⁨⁩﻿'))
 _AR_DIGITS = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
+_AR_UNIFY_SHOWN = str.maketrans({'ى': 'ي', 'ة': 'ه', 'ؤ': 'و', 'ئ': 'ي'})   # a plate is shown with the hamza as typed (أ stays أ); the other forms are unified
 _AR_UNIFY = str.maketrans({'أ': 'ا', 'إ': 'ا', 'آ': 'ا', 'ى': 'ي', 'ة': 'ه', 'ؤ': 'و', 'ئ': 'ي'})
 _DIACRITICS = re.compile('[ً-ٰٟ]')
 _AR_LETTER = re.compile('[ء-ي]')
@@ -38,11 +39,13 @@ def key_text(s):
 def norm_plate(s):
     """(display, key). "ط و ي 6829" and " طوي6829 " are the same car. A text without digits is kept as typed."""
     t = norm_text(s).translate(_AR_DIGITS)
-    letters = ''.join(_AR_LETTER.findall(_DIACRITICS.sub('', t).translate(_AR_UNIFY)))
+    plain = _DIACRITICS.sub('', t)
+    shown = ''.join(_AR_LETTER.findall(plain.translate(_AR_UNIFY_SHOWN)))
+    letters = ''.join(_AR_LETTER.findall(plain.translate(_AR_UNIFY)))  # the key treats أ/ا, ى/ي, ة/ه as the same
     digits = ''.join(re.findall(r'\d', t))
     if not digits or not letters:
         return t, key_text(t).replace(' ', '')
-    return ' '.join(letters) + ' ' + digits, letters + digits
+    return ' '.join(shown) + ' ' + digits, letters + digits
 
 
 def norm_mobile_eg(s):
@@ -230,6 +233,29 @@ def unusual_km(km, history_kms, min_history=3, tolerance=0.25, floor=30):
 # ---------------------------------------------------------------- trust colour
 RED, YELLOW, GREEN, GREY = 'red', 'yellow', 'green', 'grey'
 DONE = ('finished', 'closed')
+IMPORT_WARN_NOTE = 'Imported with warnings'   # the Excel import writes this at the start of the trip's notes when a row had doubts
+
+
+DRIVER_DAY_LIMIT_HOURS = 16   # one driver, one day: more is almost always two trips typed over each other
+
+
+def overlaps(trips):
+    """{trip id: [ids of the other trips whose time overlaps it]} for trips that share one car or one driver. `trips` is one group
+    (all trips of one car, or of one driver). Only trips with a start and an end count; touching ends (10:00-12:00, 12:00-14:00) are no overlap."""
+    spans = []
+    for t in trips:
+        a, b = parse_dt(t.get('startAt')), parse_dt(t.get('endAt'))
+        if a and b and b > a and t.get('status') != 'cancelled':
+            spans.append((a, b, t['id']))
+    spans.sort()
+    out = {}
+    for i, (a1, b1, id1) in enumerate(spans):
+        for a2, b2, id2 in spans[i + 1:]:
+            if a2 >= b1:
+                break
+            out.setdefault(id1, []).append(id2)
+            out.setdefault(id2, []).append(id1)
+    return out
 
 
 def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(), open_limit_hours=16, now=None, drift_limit=10,
@@ -250,10 +276,13 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
     bound = trip.get('boundDevice')
     if bound and any(e.get('deviceId') and e.get('deviceId') != bound for e in events):
         reasons.append('R_SECOND_DEVICE')
+    # A trip the driver's page never touched (no link, no photo, no message) was recorded by the office alone: the paper and the
+    # odometer photo cannot exist, so their absence is not a doubt about the trip. The office's own corrections stay visible (below).
+    office_only = not trip.get('linkHash') and not photos and not events
     if status in DONE:
-        if trip.get('source', 'app') == 'app' and 'paper' not in kinds:
+        if trip.get('source', 'app') == 'app' and not office_only and 'paper' not in kinds:
             reasons.append('R_NO_PAPER')
-        if trip.get('source', 'app') == 'app' and 'start_odo' not in kinds:
+        if trip.get('source', 'app') == 'app' and not office_only and 'start_odo' not in kinds:
             reasons.append('Y_NO_START_PHOTO')
     elif status == 'started':
         st = parse_dt(trip.get('startAt'))
@@ -267,11 +296,13 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
         reasons.append('Y_DRIFT')
     if time_unclear(trip.get('startAt')) or time_unclear(trip.get('endAt')):
         reasons.append('Y_TIME_UNCLEAR')
+    reviewed_at = str(trip.get('reviewedAt') or '')   # "Reviewed" clears what the office did before it, not what it changes afterwards
+    amendments = [a for a in amendments if not reviewed_at or str(a.get('at') or '') >= reviewed_at]   # same second counts as after: a hidden correction is worse than one more click
     if any(a.get('field') == 'status' and a.get('new') in DONE for a in amendments):
         reasons.append('Y_CLOSED_BY_OFFICE')
     if amendments:
         reasons.append('Y_AMENDED')
-    if trip.get('source') == 'excel' and trip.get('importWarn'):
+    if trip.get('source') == 'excel' and (trip.get('importWarn') or str(trip.get('notes') or '').startswith(IMPORT_WARN_NOTE)):
         reasons.append('Y_IMPORT_WARN')
     if billable_check and km is not None and isinstance(trip.get('billableKm'), (int, float)) and trip['billableKm'] != km:
         reasons.append('Y_BILLABLE_DIFF')

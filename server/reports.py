@@ -33,8 +33,9 @@ def enrich(state, ym='', ot_threshold=12):
         dur = domain.duration(t.get('startAt'), t.get('endAt'))
         cat = n['cat'].get(t.get('categoryId')) or {}
         rate_km, rate_ot = pricing.rates_on(cat, t.get('date'))          # the rates valid on the day of the trip, not today's
-        out.append({**t, 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''), 'driverName': (n['drv'].get(t.get('driverId')) or {}).get('name', ''),
-                    'requesterName': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'departmentName': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
+        dep_id = t.get('departmentId') or (n['ppl'].get(t.get('requesterId')) or {}).get('departmentId') or ''   # an old trip with no department: the requester's
+        out.append({**t, 'departmentId': dep_id, 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''), 'driverName': (n['drv'].get(t.get('driverId')) or {}).get('name', ''),
+                    'requesterName': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'departmentName': (n['dep'].get(dep_id) or {}).get('name', ''),
                     'categoryName': cat.get('name', ''), 'vendor': cat.get('vendor') or (n['veh'].get(t.get('vehicleId')) or {}).get('vendor') or '',
                     'kmDone': km if km is not None and km > 0 else 0, 'kmKnown': km is not None, 'hours': domain.hours(dur) if dur else None,
                     'otHours': i.get('otHours') or 0.0, 'trust': i.get('trust', 'grey'), 'reasons': i.get('reasons', []),
@@ -70,15 +71,33 @@ def summaries(state, ym=''):
             'byRequester': _group(rows, lambda r: r.get('requesterId') or '-', lambda r: r['requesterName'] or '-'),
             'byCategory': _group(rows, lambda r: r.get('categoryId') or '-', lambda r: r['categoryName'] or '-'),
             'byDay': sorted(_group(rows, lambda r: r['date'], lambda r: r['date']), key=lambda a: a['key']),
-            'topRoutes': _routes(rows)}
+            'topRoutes': _routes(rows, places=state.get('places'))}
 
 
-def _routes(rows, n=10):
+def place_names(places):
+    """{spelling key: the place's own name} for every name, Arabic name and alias of the places list: all spellings count as one place."""
+    out = {}
+    for p in places or []:
+        if not p.get('name'):                   # an inactive place still groups the past: inactive only stops new choices
+            continue
+        for spelling in [p.get('name'), p.get('nameAr'), *(p.get('aliases') or [])]:
+            k = domain.key_text(spelling)
+            if k:
+                out.setdefault(k, p['name'])
+    return out
+
+
+def _routes(rows, n=10, places=None):
     g = {}
+    known = place_names(places)
     for r in rows:
         k = domain.key_text(r.get('destination'))
         if k:
-            a = g.setdefault(k, {'label': r['destination'], 'trips': 0, 'km': 0})
+            if k in known:
+                k, label = domain.key_text(known[k]), known[k]
+            else:
+                label = r['destination']
+            a = g.setdefault(k, {'label': label, 'trips': 0, 'km': 0})
             a['trips'] += 1
             a['km'] += r['kmDone']
     return sorted(g.values(), key=lambda a: -a['trips'])[:n]

@@ -1,6 +1,14 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## QA report of 12 October 2026: office-only correctness (2026-10-12)
+
+**Gate:** L2 core journey (create trip → office start/end → review/approve/correct with history → matching report). Source: Grok's hands-on report in the Inbox repository; every item and its decision is in `docs/QA_2026-10-12_STATUS.md`.
+**What changed:** (1) A trip the driver page never touched is no longer red for a missing paper or photo; the office's own entry shows yellow until someone presses **Reviewed** (stored as `reviewedBy/At`, a later correction brings the mark back). (2) `tripsvc.check_trip` refuses impossible dates, kilometres, times and statuses in new trips, hand amendments and plain saves; cancelled and closed are final. (3) One **Close the trip** form (+ **Start**) replaces five amendment dialogs. (4) Vehicles, drivers, categories, departments and requesters in use cannot be deleted; no duplicate categories/departments/people, no negative rates; department comes from the requester; place aliases are merged in reports. (5) Warnings for the same car or driver on overlapping trips, a driver over 16 hours in a day, an expired licence. (6) Imported-with-warnings trips now show yellow (the flag was never a stored column). (7) Mailbox: a wrong PC clock is reported as a clock problem with the minutes; opening a link no longer binds the phone; rate limits 120/1200.
+**Mistakes / lessons:** `importWarn` was written to a column that does not exist, so it vanished silently - every flag a rule reads must be a stored field (the existing test used a flag the real flow never produced). Grok's code-review items were mostly checked before fixing: 3 of 5 were by design or already guarded - verify a reviewer's claim by a failing test first.
+**Not changed on purpose:** overtime stays per trip (Excel parity); version stays 1.1.1 and nothing is merged or released without the owner.
+**Checks:** new regression tests `test_trips_api` i-p, `test_domain` (overlap, office-only trust, reviewed, import warning, plate), `gateway.test.js` (clock reason, bind-on-first-message, limits), `test_gateway_client.test_0`; full suites run before the push.
+
 ## Mailbox secrets appear right after "Create the secrets" (2026-10-12)
 
 **Gate:** supports the later-release lane "driver phone link / internet mailbox"; no change to the office-only first-pilot core.

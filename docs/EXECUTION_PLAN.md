@@ -369,7 +369,7 @@ event) deletes items older than `RETENTION_DAYS` (30) and expired cards.
 
 **P4.2 Security.** Office HMAC: headers `X-TO-Time` (unix s), `X-TO-Nonce` (random 128-bit), `X-TO-Sig` =
 hex HMAC-SHA256(secret, `method\npath\ntime\nnonce\nsha256(body)`); reject skew > 300 s or reused nonce. Driver
-limits: 60 requests/10 min per token, 300/10 min per IP, bodies ≤ 600 KB, JSON ≤ 16 KB. Headers: CSP
+limits: 120 requests/10 min per token, 1200/10 min per IP (was 60/300: mobile networks put many drivers on one address), bodies ≤ 600 KB, JSON ≤ 16 KB. Headers: CSP
 `default-src 'self'; img-src 'self' blob: data:; connect-src 'self'`, `X-Content-Type-Options`,
 `Referrer-Policy: no-referrer`, `Permissions-Policy: camera=(self), geolocation=()`. No CORS (same origin).
 Never log paths containing tokens (custom logger strips `/t/…` and `/api/*/:token`).

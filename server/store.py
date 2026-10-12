@@ -67,7 +67,8 @@ ENTITIES = {
         ('linkHash', 'link_hash', T, 'Link Hash'), ('linkNonce', 'link_nonce', T, 'Link Nonce'), ('linkExpiry', 'link_expiry', T, 'Link Expiry'),
         ('oldLinks', 'old_links', J, 'Replaced Links'),
         ('boundDevice', 'bound_device', T, 'Bound Device'), ('source', 'source', T, 'Source'), ('importKey', 'import_key', T, 'Import Key'),
-        ('notes', 'notes', T, 'Notes'), ('locked', 'locked', B, 'Locked')]),
+        ('notes', 'notes', T, 'Notes'), ('locked', 'locked', B, 'Locked'),
+        ('reviewedBy', 'reviewed_by', T, 'Reviewed By'), ('reviewedAt', 'reviewed_at', T, 'Reviewed At')]),
     'tripPassengers': ('trip_passengers', 'Trip Passengers', [
         ('tripId', 'trip_id', T, 'Trip'), ('personId', 'person_id', T, 'Person'), ('freeText', 'free_text', T, 'Free Text')]),
     'tripPhotos': ('trip_photos', 'Trip Photos', [

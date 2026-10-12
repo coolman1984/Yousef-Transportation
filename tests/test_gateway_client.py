@@ -248,6 +248,19 @@ class IntegrationTest(unittest.TestCase):
     def pull(self):
         return self.ac.post('/api/gateway/pull')
 
+    def test_0_a_wrong_clock_is_not_reported_as_a_wrong_secret(self):
+        from unittest import mock
+        c = G.Client(self.gw.url, SECRET)
+        c.status()                                              # a normal call works
+        with mock.patch.object(G.time, 'time', return_value=time.time() + 14 * 60):
+            with self.assertRaises(G.GatewayError) as e:
+                c.status()
+        self.assertIn('clock of this PC is off by 14 minutes', str(e.exception))
+        self.assertNotIn('secret', str(e.exception).lower())
+        with self.assertRaises(G.GatewayError) as e:
+            G.Client(self.gw.url, 'not-the-secret').status()
+        self.assertIn('secret does not match', str(e.exception))
+
     def test_a_full_trip_through_the_mailbox(self):
         t = self.new_trip()
         link = self.ac.post('/api/trips/link', {'id': t['id'], 'sent': True})

@@ -892,6 +892,63 @@
     "lic.unbound_perpetual",
     "lic.unknown_edition"
    ]
+  },
+  {
+   "id": "trip-value-refused",
+   "cat": "trips",
+   "page": "trips",
+   "guide": "fix-locked-trip",
+   "roles": [
+    "dispatcher",
+    "reviewer",
+    "administrator"
+   ],
+   "errors": [
+    "err.wholeNumber",
+    "err.badDate",
+    "err.dateFar",
+    "err.kmOrder",
+    "err.badTime",
+    "err.timeOrder",
+    "err.tooLong",
+    "err.badStatus",
+    "err.cancelledFinal",
+    "err.closedFinal",
+    "err.gaDeclined",
+    "err.notFinished",
+    "err.cannotStart",
+    "err.cancelledClose",
+    "err.closeMissing",
+    "err.negative",
+    "err.kmPositive"
+   ]
+  },
+  {
+   "id": "record-in-use",
+   "cat": "trips",
+   "page": "vehicles",
+   "roles": [
+    "administrator",
+    "dispatcher"
+   ],
+   "errors": [
+    "err.inUse",
+    "err.duplicate",
+    "err.dupPerson"
+   ]
+  },
+  {
+   "id": "mailbox-refused",
+   "cat": "network",
+   "page": "settings",
+   "roles": [
+    "administrator"
+   ],
+   "errors": [
+    "err.clockOff",
+    "err.mailboxSecret",
+    "err.mailboxReplay"
+   ]
   }
  ]
 }

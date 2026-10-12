@@ -94,7 +94,12 @@
       root.innerHTML = shellHTML() + '<div id="overlay"></div><div id="toasts" aria-live="polite"></div><div id="tour"></div><div id="slides"></div>';
       shellReady = true;
       refreshThemeButton();
-      window.addEventListener('hashchange', renderRoute);
+      var lastPage = location.hash.split('?')[0];
+      window.addEventListener('hashchange', function () {
+        var page = location.hash.split('?')[0];     // moving to another page closes the side panel and any open dialog; a filter change on the same page does not
+        if (page !== lastPage) { lastPage = page; if (TO.panel.count()) TO.panel.close(); if (TO.overlay.isOpen) TO.overlay.close(); }
+        renderRoute();
+      });
       renderRoute();
       if (!TO.prefs.data.welcomed) setTimeout(function () { TO.slides.open(true); }, 500);
     },

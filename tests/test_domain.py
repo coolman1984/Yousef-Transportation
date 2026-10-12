@@ -16,6 +16,8 @@ class TextTest(unittest.TestCase):
 
     def test_plate_without_digits_is_kept(self):
         self.assertEqual(d.norm_plate('  Rental van ')[0], 'Rental van')
+        self.assertEqual(d.norm_plate('أ ب ج 1234'), ('أ ب ج 1234', 'ابج1234'))      # the hamza is shown as typed ...
+        self.assertEqual(d.norm_plate('ا ب ج 1234')[1], d.norm_plate('أ ب ج 1234')[1])  # ... and still the same car
 
     def test_names_compare_without_spacing_case_or_spelling(self):
         self.assertEqual(d.key_text('Sayed  Abdallah Reyad '), d.key_text('sayed abdallah reyad'))
@@ -97,6 +99,16 @@ class OdometerTest(unittest.TestCase):
         self.assertFalse(d.unusual_km(40, [20, 25, 30, 35]))  # small distances tolerate 30 km
 
 
+class OverlapTest(unittest.TestCase):
+    def t(self, i, a, b, **kw):
+        return {'id': i, 'startAt': f'2026-10-12T{a}:00', 'endAt': f'2026-10-12T{b}:00', **kw}
+
+    def test_overlap_and_touching(self):
+        out = d.overlaps([self.t('a', '10:00', '14:00'), self.t('b', '11:00', '13:00'), self.t('c', '14:00', '16:00'), self.t('x', '10:00', '12:00', status='cancelled')])
+        self.assertEqual(out, {'a': ['b'], 'b': ['a']})     # c only touches a; the cancelled trip does not count
+        self.assertEqual(d.overlaps([self.t('n', '10:00', '09:00'), {'id': 'm'}]), {})
+
+
 class TrustTest(unittest.TestCase):
     def done(self, **kw):
         return {'id': 't', 'status': 'finished', 'startKm': 100, 'endKm': 200, 'source': 'app', **kw}
@@ -148,6 +160,31 @@ class TrustTest(unittest.TestCase):
         t = self.done(source='excel')
         self.assertEqual(d.trust(t, [])[0], 'green')
         self.assertEqual(d.trust(self.done(source='excel', importWarn=True), [])[0], 'yellow')
+
+    def test_office_only_trip_needs_no_paper_or_photo_but_review(self):
+        # no link, no photo, no driver message: nothing the driver page could have sent is missing
+        self.assertEqual(d.trust(self.done(), []), ('green', []))
+        closed = [{'field': 'status', 'new': 'closed', 'at': '2026-09-28T10:00:00'}]
+        colour, reasons = d.trust(self.done(), [], closed)
+        self.assertEqual(colour, 'yellow')
+        self.assertEqual(reasons, ['Y_CLOSED_BY_OFFICE', 'Y_AMENDED'])
+        self.assertNotIn('R_NO_PAPER', reasons)
+
+    def test_reviewed_clears_earlier_office_changes_only(self):
+        t = self.done(reviewedAt='2026-09-28T11:00:00')
+        old = {'field': 'endKm', 'new': 210, 'at': '2026-09-28T10:00:00'}
+        late = {'field': 'endKm', 'new': 220, 'at': '2026-09-28T12:00:00'}
+        self.assertEqual(d.trust(t, [], [old]), ('green', []))
+        self.assertEqual(d.trust(t, [], [old, late])[0], 'yellow')
+
+    def test_trip_with_a_driver_link_still_needs_its_paper(self):
+        colour, reasons = d.trust(self.done(linkHash='h'), [])
+        self.assertEqual(colour, 'red')
+        self.assertIn('R_NO_PAPER', reasons)
+
+    def test_import_with_warnings_is_yellow_as_stored(self):
+        t = self.done(source='excel', notes=d.IMPORT_WARN_NOTE + ': km looks odd')   # importWarn is not a stored column; the note is
+        self.assertIn('Y_IMPORT_WARN', d.trust(t, [])[1])
 
     def test_red_beats_yellow_and_cancelled_is_grey(self):
         c, r = d.trust(self.done(billableKm=1), self.PHOTOS, chain={'backstep': 1})

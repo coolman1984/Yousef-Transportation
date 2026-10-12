@@ -164,5 +164,18 @@
  "problem.licence-locked.why": "The licence is missing, has expired, or belongs to another PC.",
  "problem.licence-locked.do.1": "Open Settings and then the Licence tab.",
  "problem.licence-locked.do.2": "Ask the company for a trial or a code, or paste the code you received.",
- "problem.licence-locked.still": "Send the device number shown on the page to the company."
+ "problem.licence-locked.still": "Send the device number shown on the page to the company.",
+ "problem.trip-value-refused.see": "The program refuses a value you wrote in the trip.",
+ "problem.trip-value-refused.why": "The value cannot be right, such as a wrong date or an end odometer below the start.",
+ "problem.trip-value-refused.do.1": "Read the message: it names the wrong value.",
+ "problem.trip-value-refused.do.2": "Correct the value and save again.",
+ "problem.trip-value-refused.do.3": "A cancelled or closed trip cannot be opened again. Make a new trip if needed.",
+ "problem.record-in-use.see": "The record is not deleted, or not saved because the same one exists.",
+ "problem.record-in-use.why": "Trips use this record, or another record has the same name.",
+ "problem.record-in-use.do.1": "Do not delete a record that trips use. Switch it off instead.",
+ "problem.record-in-use.do.2": "If the name is repeated, use the existing record.",
+ "problem.mailbox-refused.see": "The mailbox refuses this PC.",
+ "problem.mailbox-refused.why": "The clock of this PC is wrong, or the secret does not match the one on the mailbox.",
+ "problem.mailbox-refused.do.1": "Set the date and time of this PC, then try again.",
+ "problem.mailbox-refused.do.2": "If the message stays, copy the setup code from the first PC again."
 }

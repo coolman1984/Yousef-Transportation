@@ -45,6 +45,7 @@
     var seen = {}, out = [];
     TO.data.list('trips').forEach(function (t) { var k = U.key(t.destination); if (t.destination && !seen[k]) { seen[k] = 1; out.push(t.destination); } });
     TO.data.list('routes').forEach(function (r) { if (r.name) out.push(r.name); });
+    TO.data.list('places').forEach(function (p) { [p.name, p.nameAr].concat(p.aliases || []).forEach(function (x) { var k = U.key(x); if (x && !seen[k]) { seen[k] = 1; out.push(x); } }); });
     return out.sort();
   }
 
@@ -123,6 +124,26 @@
       if (reason.length < 3) { err.hidden = false; err.textContent = TO.t('amend.needReason'); el.querySelector('#am-r').focus(); return; }
       var btn = el.querySelector('[data-ok]');
       U.run(TO.post('/api/trips/amend', { id: t.id, field: sel.value, value: r.values.v, reason: reason }), 'amend.done', btn).then(function () {
+        return TO.data.load().then(function () { TO.overlay.close(); TO.rerender(); refreshPanel(t.id); });
+      }, function (e) { err.hidden = false; err.textContent = U.errorText(e); });
+    });
+  }
+  /* one form to write the result of a trip: both readings, both times; the reason is asked only for a trip that was already closed */
+  function closeDialog(t) {
+    var fields = [{ key: 'startKm', label: 'f.startKm', type: 'number' }, { key: 'endKm', label: 'f.endKm', type: 'number' },
+      { key: 'startAt', label: 'f.startAt', type: 'datetime' }, { key: 'endAt', label: 'f.endAt', type: 'datetime' }];
+    var el = TO.dialog({ title: TO.t(t.locked ? 'trip.close.fix' : 'trip.close'),
+      body: '<p class="muted">' + TO.esc(TO.t(t.locked ? 'trip.close.fixBody' : 'trip.close.body')) + '</p><div id="cl-v">' + fields.map(function (f) { return U.field(f, t[f.key]); }).join('') + '</div>' +
+        (t.locked ? '<div class="field"><label for="cl-r">' + TO.esc(TO.t('amend.reason')) + ' <span class="faint">*</span></label><input class="input" id="cl-r" autocomplete="off"></div>' : '') +
+        '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+      footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t(t.locked ? 'amend.save' : 'trip.close')) + '</button>' });
+    var err = el.querySelector('.err');
+    el.querySelector('[data-ok]').addEventListener('click', function () {
+      var r = U.read(el.querySelector('#cl-v'), fields), reasonEl = el.querySelector('#cl-r'), reason = reasonEl ? reasonEl.value.trim() : '';
+      if (r.missing.length) { err.hidden = false; err.textContent = TO.t('form.missing', { f: r.missing.join('، ') }); return; }
+      if (t.locked && reason.length < 3) { err.hidden = false; err.textContent = TO.t('amend.needReason'); reasonEl.focus(); return; }
+      var body = Object.assign({ id: t.id, reason: reason }, r.values), btn = el.querySelector('[data-ok]');
+      U.run(TO.post('/api/trips/close', body), 'trip.closed', btn).then(function () {
         return TO.data.load().then(function () { TO.overlay.close(); TO.rerender(); refreshPanel(t.id); });
       }, function (e) { err.hidden = false; err.textContent = U.errorText(e); });
     });
@@ -206,6 +227,9 @@
     if (t.status !== 'cancelled') {
       if (TO.can('trips.cancel')) b += '<button class="btn danger" data-a="cancel" style="margin-inline-end:auto">' + TO.esc(TO.t('trip.cancel')) + '</button>';
       if (TO.can('trips.approve') && t.gaApproved !== 'yes') b += '<button class="btn" data-a="approve" data-guide="trip.approve">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.approve')) + '</button>';
+      if ((t.status === 'draft' || t.status === 'sent') && TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn" data-a="start">' + TO.esc(TO.t('trip.start')) + '</button>';
+      if (TO.can(t.locked ? ['trips.amend', 'trips.review'] : ['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="close" data-guide="trip.close">' + TO.esc(TO.t('trip.close')) + '</button>';
+      if ((t.status === 'finished' || t.status === 'closed') && TO.can('trips.review') && TO.data.trust(t.id).trust !== 'green') b += '<button class="btn" data-a="review" data-guide="trip.review">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.review')) + '</button>';
       if (t.locked ? TO.can(['trips.amend', 'trips.review']) : TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="amend" data-guide="trip.amend">' + TO.esc(TO.t('trip.amend')) + '</button>';
     }
     return b;
@@ -219,11 +243,14 @@
           var a = e.target.closest('[data-a]'); if (!a) return;
           var cur = TO.data.get('trips', id);
           if (a.dataset.a === 'amend') amendDialog(cur);
+          else if (a.dataset.a === 'close') closeDialog(cur);
+          else if (a.dataset.a === 'start') U.run(TO.post('/api/trips/start', { id: id }), 'trip.started').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'print') TO.printTrip(cur);
           else if (a.dataset.a === 'copylink') sendLink(cur, false, false, function (r) { linkDialog(r.url); });
           else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
           else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
           else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
+          else if (a.dataset.a === 'review') U.run(TO.post('/api/trips/review', { id: id }), 'trip.reviewed').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'approve') U.run(TO.post('/api/trips/approve', { id: id, yes: true }), 'trip.approved').then(function () { if (TO.guide) TO.guide.signal('trip.approve'); return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'cancel') U.confirm({ title: TO.t('trip.cancel'), body: TO.t('trip.cancel.body'), reason: TO.t('amend.reason'), danger: true, ok: TO.t('trip.cancel') }).then(function (reason) {
             if (reason) U.run(TO.post('/api/trips/cancel', { id: id, reason: reason }), 'trip.cancelled').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });

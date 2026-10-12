@@ -105,7 +105,7 @@
         var text = el.value.trim(), hit = refOptions(f).filter(function (o) { return U.key(o.l) === U.key(text); })[0];
         if (hit) v = hit.v; else if (text && f.allowNew) { v = ''; newRefs.push({ field: f.key, entity: f.entity, text: text }); } else { v = ''; if (text) missing.push(TO.t(f.label)); }
       } else v = el.value.trim();
-      if (f.required && (v === '' || v === null)) missing.push(TO.t(f.label));
+      if (f.required && (v === '' || v === null) && missing.indexOf(TO.t(f.label)) < 0) missing.push(TO.t(f.label));
       values[f.key] = v;
     });
     return { values: values, missing: missing, newRefs: newRefs };

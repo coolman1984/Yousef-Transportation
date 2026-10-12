@@ -442,7 +442,7 @@ def build_ops(p, state, letter, skip_rows=(), merges=(), new_id=None, include_pr
                'importWarn': False}
         row = {k: v for k, v in row.items() if v not in (None, '') and k != 'importWarn'}
         if r['messages'] and any(m['code'] in ('km', 'km_order', 'km_big', 'backstep', 'date', 'plate', 'driver') for m in r['messages']):
-            row['notes'] = 'Imported with warnings: ' + '; '.join(m['text'] for m in r['messages'] if m['code'] not in ('night', 'dup_db', 'dup_file'))[:300]
+            row['notes'] = domain.IMPORT_WARN_NOTE + ': ' + '; '.join(m['text'] for m in r['messages'] if m['code'] not in ('night', 'dup_db', 'dup_file'))[:300]
         ops.append({'e': 'trips', 'id': tid, 'op': 'put', 'row': row})
         for x in pax:
             ops.append({'e': 'tripPassengers', 'id': new_id('tp'), 'op': 'put', 'row': {'tripId': tid, **{'personId': x.get('personId', ''), 'freeText': x.get('freeText', '')}}})
@@ -586,11 +586,13 @@ WHY = {
     'en': {'R_BACKSTEP': 'Odometer went backwards', 'R_END_LE_START': 'End km not above start km', 'R_NO_PAPER': 'Signed paper not photographed', 'R_SECOND_DEVICE': 'Sent from a second phone',
            'R_OPEN_TOO_LONG': 'Open for too long', 'Y_FALLBACK_PHOTO': 'Photo from the gallery', 'Y_NO_START_PHOTO': 'No start odometer photo', 'Y_KM_UNUSUAL': 'Unusual km for the route',
            'Y_DRIFT': 'Phone clock is off', 'Y_CLOSED_BY_OFFICE': 'Closed by the office', 'Y_AMENDED': 'Changed after saving', 'Y_IMPORT_WARN': 'Imported with warnings',
-           'Y_BILLABLE_DIFF': 'Billable km differs', 'NO_KM': 'No odometer readings', 'NO_TIMES': 'No start/end times'},
+           'Y_BILLABLE_DIFF': 'Billable km differs', 'Y_CAR_OVERLAP': 'Same car on another trip at the same time', 'Y_DRIVER_OVERLAP': 'Same driver on another trip at the same time',
+           'Y_DRIVER_LONG_DAY': 'Driver is over 16 hours on this day', 'Y_LICENCE_EXPIRED': 'Driver licence had expired on the trip date', 'NO_KM': 'No odometer readings', 'NO_TIMES': 'No start/end times'},
     'ar': {'R_BACKSTEP': 'العداد رجع لورا', 'R_END_LE_START': 'عداد النهاية مش أكبر من البداية', 'R_NO_PAPER': 'الورقة الموقّعة ما اتصورتش', 'R_SECOND_DEVICE': 'اتبعت من موبايل تاني',
            'R_OPEN_TOO_LONG': 'مفتوح من وقت طويل', 'Y_FALLBACK_PHOTO': 'صورة من المعرض', 'Y_NO_START_PHOTO': 'مفيش صورة عداد البداية', 'Y_KM_UNUSUAL': 'كيلومترات غير معتادة',
            'Y_DRIFT': 'ساعة الموبايل مش مظبوطة', 'Y_CLOSED_BY_OFFICE': 'اتقفل من المكتب', 'Y_AMENDED': 'اتعدّل بعد الحفظ', 'Y_IMPORT_WARN': 'مستورد بملاحظات',
-           'Y_BILLABLE_DIFF': 'كم المفوتر مختلف', 'NO_KM': 'مفيش قراءات عداد', 'NO_TIMES': 'مفيش أوقات بداية/نهاية'},
+           'Y_BILLABLE_DIFF': 'كم المفوتر مختلف', 'Y_CAR_OVERLAP': 'نفس العربية على مشوار تاني في نفس الوقت', 'Y_DRIVER_OVERLAP': 'نفس السواق على مشوار تاني في نفس الوقت',
+           'Y_DRIVER_LONG_DAY': 'السواق أكتر من 16 ساعة في اليوم ده', 'Y_LICENCE_EXPIRED': 'رخصة السواق كانت منتهية يوم المشوار', 'NO_KM': 'مفيش قراءات عداد', 'NO_TIMES': 'مفيش أوقات بداية/نهاية'},
 }
 TRUST = {'en': {'green': 'Verified', 'yellow': 'Worth a look', 'red': 'Needs a decision', 'grey': 'In progress'},
          'ar': {'green': 'موثّق', 'yellow': 'يستاهل نظرة', 'red': 'محتاج قرار', 'grey': 'شغّال'}}

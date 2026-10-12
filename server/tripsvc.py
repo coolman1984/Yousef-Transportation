@@ -1,6 +1,7 @@
 """Trip Orders - trip operations that need several records to change together (new trip, amendment, cancel, approval)
 and the read-side "insights" (trust colour, km, overtime, odometer chain) for every trip.
 Each operation is ONE store commit, so it is saved completely or not at all and appears as one change in the history."""
+import datetime
 import uuid
 
 import domain
@@ -10,7 +11,7 @@ from store import BadRequest
 CREATE_FIELDS = ('date', 'categoryId', 'vehicleId', 'driverId', 'requesterId', 'departmentId', 'destination', 'stops', 'purpose', 'notes', 'seq',
                  'billableKm')
 # fields nobody may change by hand: identity, link secrets and things the driver's page or the server writes
-PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
+PROTECTED = {'id', 'ver', 'no', 'reviewedBy', 'reviewedAt', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
 DONE = domain.DONE
 
 
@@ -41,6 +42,73 @@ def _now():
     return domain.business_now().isoformat(timespec='seconds')
 
 
+STATUSES = ('draft', 'sent', 'started', 'finished', 'closed', 'cancelled')
+DATE_WINDOW_DAYS = 60            # a trip date further than this from today is almost always a typing slip (2026-13-45, 1999, 2030)
+MAX_KM = 9_999_999
+TEXT_MAX = {'destination': 200, 'purpose': 300, 'routeText': 500, 'notes': 10000}
+
+
+def _whole_number(field, v, top):
+    if isinstance(v, bool):
+        raise BadRequest(f'{field}: write a whole number')
+    try:
+        n = float(str(v).strip().replace(',', '')) if not isinstance(v, (int, float)) else float(v)
+    except ValueError:
+        raise BadRequest(f'{field}: write a whole number')
+    if n != n or n in (float('inf'), float('-inf')) or n != int(n) or not 0 <= n <= top:
+        raise BadRequest(f'{field}: write a whole number between 0 and {top:,}')
+    return int(n)
+
+
+def check_trip(row, before=None, today=None, trusted=False, window=True):
+    """Refuse values that can never be true, for a new trip, a hand amendment and a plain save. Fills in clean numbers in `row`.
+    `before` is the saved trip (None for a new one); only fields that CHANGED are judged, so an old record never blocks an unrelated edit.
+    `trusted` / `window=False`: real history (Excel import, restore, a plain save of a list row) may be older than the date window; the date must still be a real date."""
+    before = before or {}
+    changed = lambda f: f in row and row.get(f) != before.get(f)
+    if changed('date'):
+        d = str(row['date'] or '').strip()
+        try:
+            day = datetime.date.fromisoformat(d) if len(d) == 10 else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise BadRequest('date: write the date like 2026-10-12')
+        today = today or domain.business_now().date()
+        if window and not trusted and abs((day - today).days) > DATE_WINDOW_DAYS:
+            raise BadRequest(f'date: more than {DATE_WINDOW_DAYS} days away from today - check the date')
+        row['date'] = d
+    for f in ('startKm', 'endKm'):
+        if changed(f) and row[f] not in (None, ''):
+            row[f] = _whole_number(f, row[f], MAX_KM)
+    if changed('billableKm') and row['billableKm'] not in (None, ''):
+        row['billableKm'] = _whole_number('billableKm', row['billableKm'], MAX_KM)
+    if changed('seq') and row['seq'] not in (None, ''):
+        row['seq'] = _whole_number('seq', row['seq'], 100000)
+    if (changed('startKm') or changed('endKm')) and isinstance(row.get('startKm'), int) and isinstance(row.get('endKm'), int) and row['endKm'] < row['startKm']:
+        raise BadRequest('endKm: the end odometer cannot be lower than the start odometer')
+    for f in ('startAt', 'endAt'):
+        if changed(f) and row[f] not in (None, ''):
+            if domain.parse_dt(row[f]) is None:
+                raise BadRequest(f'{f}: write the time like 2026-10-12T08:30')
+    if (changed('startAt') or changed('endAt')) and row.get('startAt') and row.get('endAt'):
+        a, b = domain.parse_dt(row['startAt']), domain.parse_dt(row['endAt'])
+        if a and b and b < a:
+            raise BadRequest('endAt: the end time cannot be before the start time')
+    for f, top in TEXT_MAX.items():
+        if changed(f) and len(str(row.get(f) or '')) > top:
+            raise BadRequest(f'{f}: at most {top} characters')
+    if changed('status'):
+        new, old = row['status'], before.get('status') or 'draft'
+        if new not in STATUSES:
+            raise BadRequest('status: not a known status')
+        if old == 'cancelled':
+            raise BadRequest('A cancelled trip cannot be opened again - make a new trip')
+        if old == 'closed' and new != 'cancelled':
+            raise BadRequest('A closed trip can only be cancelled')
+    return row
+
+
 def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
     """data: trip fields (CREATE_FIELDS) + 'passengers': [{'personId': .., 'freeText': ..}]. Returns the saved trip."""
     row = {k: data.get(k) for k in CREATE_FIELDS if data.get(k) not in (None, '')}
@@ -53,6 +121,11 @@ def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
             raise BadRequest(f'Unknown {f[:-2]}')
     today = domain.business_now()
     row.setdefault('date', today.date().isoformat())
+    check_trip(row, today=today.date())
+    if not row.get('departmentId') and row.get('requesterId'):   # the requester's own department, still changeable
+        row['departmentId'] = (_row(store, 'people', row['requesterId']) or {}).get('departmentId') or ''
+        if not row['departmentId']:
+            del row['departmentId']
     with store.lock:  # numbering and saving under one lock, so two clicks at once never get the same number
         nos = [r[0] for r in store.conn.execute('SELECT no FROM trips')]
         letter = my_letter(journal, node_id)
@@ -84,13 +157,65 @@ def amend(store, user, ip, user_id, trip_id, field, value, reason, guard=None):
     if old == value:
         raise BadRequest('Nothing changed')
     ver = t.pop('ver')
-    new_row = {**t, field: value}
+    new_row = check_trip({**t, field: value}, t)
     if field == 'status' and value in DONE:
         new_row['locked'] = True
     ops = [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': new_row},
            {'e': 'tripAmendments', 'id': new_id('am'), 'op': 'put',
-            'row': {'tripId': trip_id, 'field': field, 'old': old, 'new': value, 'reason': reason[:400], 'by': user, 'at': _now()}}]
+            'row': {'tripId': trip_id, 'field': field, 'old': old, 'new': new_row[field], 'reason': reason[:400], 'by': user, 'at': _now()}}]
     store.commit(user, ip, f'Amend trip {t.get("no")}: {field}', ops, guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
+def start_trip(store, user, ip, user_id, trip_id, guard=None):
+    """The trip left: status "started" and the start time now (Cairo time) unless the office already wrote one."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') not in ('draft', 'sent'):
+        raise BadRequest('Only a trip that has not left yet can be started')
+    ver = t.pop('ver')
+    row = {**t, 'status': 'started', 'startAt': t.get('startAt') or _now()}
+    store.commit(user, ip, f'Started trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}], guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
+CLOSE_FIELDS = ('startKm', 'endKm', 'startAt', 'endAt')
+
+
+def close_trip(store, user, ip, user_id, trip_id, data, guard=None):
+    """The office writes the whole result of a trip in ONE step: both odometer readings, both times, and the trip is closed.
+    Every changed value still gets its own amendment record (old value kept) with the same reason. The reason is only required when the
+    trip was already closed before (then it is a correction); the first entry is plain data entry."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') == 'cancelled':
+        raise BadRequest('A cancelled trip cannot be closed')
+    reason = str(data.get('reason') or '').strip()
+    if t.get('locked') and len(reason) < 3:
+        raise BadRequest('Write the reason for the change')
+    reason = reason or 'Entered at the office'
+    ver = t.pop('ver')
+    row = dict(t)
+    for f in CLOSE_FIELDS:
+        v = data.get(f)
+        if v not in (None, ''):
+            row[f] = str(v).strip() + (':00' if f.endswith('At') and len(str(v).strip()) == 16 else '')
+    missing = [f for f in CLOSE_FIELDS if row.get(f) in (None, '')]
+    if missing:
+        raise BadRequest('Write both odometer readings and both times: ' + ', '.join(missing))
+    row['status'], row['locked'] = 'closed', True
+    check_trip(row, t)
+    ops = [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}]
+    at = _now()
+    for f in (*CLOSE_FIELDS, 'status'):
+        if row.get(f) != t.get(f):
+            ops.append({'e': 'tripAmendments', 'id': new_id('am'), 'op': 'put',
+                        'row': {'tripId': trip_id, 'field': f, 'old': t.get(f), 'new': row.get(f), 'reason': reason[:400], 'by': user, 'at': at}})
+    if len(ops) == 1:
+        raise BadRequest('Nothing changed')
+    store.commit(user, ip, f'Closed trip {t.get("no")}', ops, guard=guard, user_id=user_id)
     return {'ok': True}
 
 
@@ -114,6 +239,20 @@ def approve(store, user, ip, user_id, trip_id, yes, guard=None):
     return {'ok': True}
 
 
+def review(store, user, ip, user_id, trip_id, guard=None):
+    """"Reviewed": a person looked at a finished trip and accepts what the office entered. It clears the office-origin yellow marks
+    that existed up to now (`domain.trust`); a later correction brings them back."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') not in DONE:
+        raise BadRequest('Only a finished trip can be marked as reviewed')
+    ver = t.pop('ver')
+    store.commit(user, ip, f'Reviewed trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': {**t, 'reviewedBy': user, 'reviewedAt': _now()}}],
+                 guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
 def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False, guard=None):
     """Give the trip its driver link (or a new one) and, when the dispatcher pressed "send", mark it sent.
     Only the hash of the link is saved; the link itself is made again from the link secret when needed."""
@@ -123,6 +262,8 @@ def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False
         raise BadRequest('Trip not found')
     if t.get('status') in ('cancelled', 'closed') or t.get('locked'):
         raise BadRequest('A link cannot be made for a trip that is finished or cancelled')
+    if t.get('gaApproved') == 'no':
+        raise BadRequest('General Affairs declined this trip - approve it again before sending a link')
     nonce = t.get('linkNonce') if t.get('linkNonce') and not replace else gwc.new_nonce()
     try:
         tok, url = gate.make_link(trip_id, nonce)
@@ -182,6 +323,22 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
         km = domain.km_of(t)
         if k and km and km > 0 and t.get('status') in DONE:
             hist.setdefault(k, []).append((t['id'], km))
+    clash = {'vehicleId': {}, 'driverId': {}}                      # who shares a car or a driver at the same time
+    for field in clash:
+        groups = {}
+        for t in trips:
+            if t.get(field) and t.get('status') != 'cancelled':
+                groups.setdefault(t[field], []).append(t)
+        for g in groups.values():
+            clash[field].update(domain.overlaps(g))
+    day_hours = {}                                                  # hours one driver is on trips in one day
+    for t in trips:
+        dur = domain.duration(t.get('startAt'), t.get('endAt'))
+        st = domain.parse_dt(t.get('startAt'))
+        if dur and st and t.get('driverId') and t.get('status') != 'cancelled':
+            key = (t['driverId'], st.date().isoformat())
+            day_hours[key] = day_hours.get(key, 0) + domain.hours(dur)
+    licences = {d['id']: str(d.get('licenseExpiry') or '')[:10] for d in state.get('drivers', [])}
     out = {}
     for t in trips:
         tid = t['id']
@@ -190,9 +347,71 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
         dur = domain.duration(t.get('startAt'), t.get('endAt'))
         colour, reasons = domain.trust(t, photos.get(tid, []), amends.get(tid, []), events.get(tid, []), chains.get(tid), kms,
                                        open_limit_hours=(cats.get(t.get('categoryId')) or {}).get('openLimitHours') or 16, now=now, drift_limit=drift_limit)
-        out[tid] = {'trust': colour, 'reasons': reasons, 'km': domain.km_of(t), 'hours': domain.hours(dur) if dur else None,
+        if t.get('status') != 'cancelled':
+            extra = []
+            if tid in clash['vehicleId']:
+                extra.append('Y_CAR_OVERLAP')
+            if tid in clash['driverId']:
+                extra.append('Y_DRIVER_OVERLAP')
+            st = domain.parse_dt(t.get('startAt'))
+            if st and day_hours.get((t.get('driverId'), st.date().isoformat()), 0) > domain.DRIVER_DAY_LIMIT_HOURS:
+                extra.append('Y_DRIVER_LONG_DAY')
+            exp = licences.get(t.get('driverId'), '')
+            if exp and str(t.get('date') or '')[:10] > exp:
+                extra.append('Y_LICENCE_EXPIRED')
+            reasons = reasons + [x for x in extra if x not in reasons]
+            if extra and colour in (domain.GREEN,):
+                colour = domain.YELLOW
+        out[tid] = {'trust': colour, 'reasons': reasons, 'clashWith': {'vehicle': clash['vehicleId'].get(tid, []), 'driver': clash['driverId'].get(tid, [])}, 'km': domain.km_of(t), 'hours': domain.hours(dur) if dur else None,
                     'otHours': domain.hours(domain.overtime(dur, ot_threshold)) if dur else None, 'chain': chains.get(tid)}
     return out
+
+
+# what a deleted record would leave orphaned: (trips column, label). Delete the trips first or switch the record off instead.
+USED_BY_TRIPS = {'vehicles': ('vehicle_id', 'vehicle'), 'drivers': ('driver_id', 'driver'), 'tripCategories': ('category_id', 'category'),
+                 'departments': ('department_id', 'department'), 'people': ('requester_id', 'person')}
+
+
+def _refuse_delete_in_use(store, entity, rid):
+    if entity not in USED_BY_TRIPS:
+        return
+    col, label = USED_BY_TRIPS[entity]
+    with store.lock:
+        n = store.conn.execute(f'SELECT COUNT(*) FROM trips WHERE {col}=? AND deleted=0', (rid,)).fetchone()[0]
+        if entity == 'people':
+            n += store.conn.execute('SELECT COUNT(*) FROM trip_passengers WHERE person_id=? AND deleted=0', (rid,)).fetchone()[0]
+        if entity == 'departments':     # an old trip with no department of its own is reported under its requester's department
+            n += store.conn.execute("SELECT COUNT(*) FROM trips t JOIN people p ON p.id=t.requester_id AND p.deleted=0 WHERE t.deleted=0 "
+                                    "AND (t.department_id IS NULL OR t.department_id='') AND p.department_id=?", (rid,)).fetchone()[0]
+    if n:
+        raise BadRequest(f'This {label} is used by {n} trip(s). Switch it off (not active) instead of deleting it, so old trips keep their {label}.')
+
+
+def _check_list_row(store, entity, row, rid):
+    """Master-data sanity: no money or hours below zero, and no second copy of a category, a department or the same person."""
+    if entity == 'tripCategories':
+        for f in ('ratePerKm', 'ratePerOtHour', 'openLimitHours'):
+            v = row.get(f)
+            if v not in (None, ''):
+                try:
+                    ok = 0 <= float(v) <= 1_000_000
+                except (TypeError, ValueError):
+                    ok = False
+                if not ok:
+                    raise BadRequest(f'{f}: write a number that is not below zero')
+    if entity in ('tripCategories', 'departments') and row.get('name'):
+        table = store_entities()[entity][0]
+        k = domain.key_text(row['name'])
+        with store.lock:
+            others = [r[0] for r in store.conn.execute(f'SELECT name FROM {table} WHERE deleted=0 AND id<>?', (rid,))]
+        if any(domain.key_text(o) == k for o in others):
+            raise BadRequest(f'Another {entity[:-1] if entity == "departments" else "category"} already has this name: "{row["name"]}"')
+    if entity == 'people' and row.get('name'):
+        k = domain.key_text(row['name'])
+        with store.lock:
+            others = store.conn.execute('SELECT department_id, mobile FROM people WHERE deleted=0 AND id<>? AND name_key=?', (rid, k)).fetchall()
+        if any((o[0] or '') == (row.get('departmentId') or '') and (o[1] or '') == (row.get('mobile') or '') for o in others):
+            raise BadRequest(f'This person is already in the list: "{row["name"]}" (same department and mobile)')
 
 
 def normalize_ops(store, ops, trusted=False):
@@ -203,6 +422,8 @@ def normalize_ops(store, ops, trusted=False):
     unique = {'vehicles': ('vehicles', 'plate_key', 'plateKey', 'plate'), 'drivers': ('drivers', 'name_key', 'nameKey', 'name'),
               'places': ('places', 'key', 'key', 'name')}
     for op in ops:
+        if isinstance(op, dict) and op.get('op') == 'del' and not trusted and not op.get('resolve'):
+            _refuse_delete_in_use(store, op.get('e'), op.get('id'))
         if not isinstance(op, dict) or op.get('op') != 'put' or not isinstance(op.get('row'), dict):
             continue
         e, row = op.get('e'), op['row']
@@ -222,6 +443,10 @@ def normalize_ops(store, ops, trusted=False):
             for f in ('destination', 'purpose', 'routeText'):
                 if row.get(f) is not None:
                     row[f] = domain.norm_text(row[f])
+            if not trusted:
+                check_trip(row, _row(store, 'trips', op.get('id')), window=False)   # the window guards new trips and hand amendments
+        if not trusted:
+            _check_list_row(store, e, row, op.get('id'))
         if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save
             row['rateHistory'] = pricing.stamp(_row(store, 'tripCategories', op.get('id')), row, domain.business_now().date().isoformat())
         if e in unique and not op.get('resolve'):

@@ -10,7 +10,7 @@ const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-9a-f][0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const EVENT_TYPES = new Set(['start', 'end', 'route', 'note']);
 const PHOTO_KINDS = new Set(['start_odo', 'end_odo', 'paper', 'other']);
-const LIMIT_TOKEN = 60, LIMIT_IP = 300, WINDOW = 600;      // requests per 10 minutes
+const LIMIT_TOKEN = 120, LIMIT_IP = 1200, WINDOW = 600;      // requests per 10 minutes
 
 const HEADERS = {
   'X-Content-Type-Options': 'nosniff',
@@ -97,12 +97,9 @@ async function driver(request, env, url, parts) {
     const { data } = await readJson(request, 1024);
     const dev = String(data.deviceId || '');
     if (dev.length < 8 || dev.length > 64) throw new Fail(400, 'Bad device');
-    if (!card.bound_device) {
-      await env.DB.prepare('UPDATE cards SET bound_device = ? WHERE token_hash = ? AND bound_device IS NULL').bind(dev, th).run();
-      const again = await env.DB.prepare('SELECT bound_device FROM cards WHERE token_hash = ?').bind(th).first();
-      card.bound_device = again.bound_device;
-    }
-    if (card.bound_device === dev) return reply(200, { bound: true });
+    // Opening the link only asks "may I go on?": the phone becomes THE phone of the trip with its first real message (event), not with a look.
+    // So a dispatcher who opens the link to check it does not take the trip away from the driver.
+    if (!card.bound_device || card.bound_device === dev) return reply(200, { bound: true });
     return reply(200, { bound: false, secondDevice: true });
   }
 
@@ -149,11 +146,13 @@ async function driver(request, env, url, parts) {
 async function officeAuth(request, env, url, bodyBytes) {
   if (!env.OFFICE_SECRET) throw new Fail(503, 'The gateway has no office secret yet');
   const t = Number(request.headers.get('X-TO-Time')), nonce = request.headers.get('X-TO-Nonce') || '', sig = (request.headers.get('X-TO-Sig') || '').toLowerCase();
-  if (!t || Math.abs(now() - t) > 300 || !/^[0-9a-f]{16,64}$/.test(nonce) || !sig) throw new Fail(401, 'Unauthorised');
+  if (!t || !/^[0-9a-f]{16,64}$/.test(nonce) || !sig) throw new Fail(401, 'Unauthorised', { reason: 'secret' });
+  // A clock that is off is told apart from a wrong secret, so the office is not sent chasing the secret (the skew is not a secret).
+  if (Math.abs(now() - t) > 300) throw new Fail(401, 'Clock is off', { reason: 'clock', skewSeconds: t - now(), serverTime: iso(now()) });
   const expected = await hmacHex(env.OFFICE_SECRET, [request.method, url.pathname + url.search, String(t), nonce, await sha256Hex(bodyBytes)].join('\n'));
-  if (!same(expected, sig)) throw new Fail(401, 'Unauthorised');
+  if (!same(expected, sig)) throw new Fail(401, 'Unauthorised', { reason: 'secret' });
   const r = await env.DB.prepare('INSERT OR IGNORE INTO nonces(nonce, at) VALUES(?, ?)').bind(nonce, now()).run();
-  if (!(r.meta ? r.meta.changes : r.changes)) throw new Fail(401, 'Replayed request');
+  if (!(r.meta ? r.meta.changes : r.changes)) throw new Fail(401, 'Replayed request', { reason: 'replay' });
 }
 
 // Links the office replaced. A removed card is remembered here so a PC that still has the old link in its data cannot publish it again.

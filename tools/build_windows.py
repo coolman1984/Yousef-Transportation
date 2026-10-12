@@ -7,6 +7,7 @@ Steps: pack the web pages into server/_assets.py, draw the icon, compile the pro
     python tools/build_windows.py            needs: pip install nuitka ordered-set zstandard cryptography, and Inno Setup 6
 """
 import glob
+import pathlib
 import os
 import shutil
 import subprocess
@@ -33,6 +34,7 @@ def iscc():
 
 def compile_program(v4):
     run([sys.executable, '-m', 'nuitka', '--standalone', '--assume-yes-for-downloads', '--windows-console-mode=attach',
+         '--python-flag=no_docstrings', '--lto=auto',
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
          f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets', '--include-module=_release_policy',
@@ -63,14 +65,19 @@ def main():
                 os.remove(path)
     dist = os.path.join(BUILD, 'to_main.dist')
     assert os.path.exists(os.path.join(dist, 'TripOrders.exe')), 'TripOrders.exe was not built'
-    leaks = [p for p in glob.glob(os.path.join(dist, '**', '*.py'), recursive=True)]
-    assert not leaks, f'source files in the program folder: {leaks}'
-    # the internet-mailbox files travel with the program, so the owner finds them next to it (docs/GATEWAY_SETUP.md)
+    forbidden = {'.py', '.pyc', '.pyo', '.pdb', '.map', '.c', '.h'}
+    leaks = [str(path.relative_to(dist)) for path in pathlib.Path(dist).rglob('*')
+             if path.is_file() and path.suffix.lower() in forbidden]
+    if leaks:
+        raise RuntimeError('Customer package contains readable sources, caches or debugging symbols: ' + repr(leaks))
+    # Cloud gateway DEPLOYMENT sources are operator-only materials, not required
+    # for the office runtime. They must never be bundled in the customer installer.
     run(['node', os.path.join('gateway', 'build.js')])
-    gw = os.path.join(dist, 'gateway')
+    gw = os.path.join(ROOT, 'dist', 'operator-only-gateway')
     os.makedirs(gw, exist_ok=True)
     for src in ('gateway/dist/trip-orders-gateway.js', 'gateway/dist/schema.sql', 'docs/GATEWAY_SETUP.md'):
         shutil.copy(os.path.join(ROOT, src), gw)
+    assert not os.path.exists(os.path.join(dist, 'gateway')), 'Gateway deployment files leaked into customer installer'
     run([iscc(), f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'trip-orders.iss')])
     if channel == 'ci-test':
         with open(os.path.join(ROOT, 'dist', 'CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt'), 'w', encoding='utf-8') as f:

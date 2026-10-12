@@ -22,10 +22,14 @@
       '<div class="field"><label for="gw-url">' + TO.esc(TO.t('gw.url')) + '</label><input class="input" id="gw-url" dir="ltr" placeholder="https://trip-orders.name.workers.dev" value="' + TO.esc(st.url || '') + '"><span class="help">' + TO.esc(TO.t('gw.url.help')) + '</span></div>' +
       '<div class="field"><label for="gw-poll">' + TO.esc(TO.t('gw.poll')) + '</label><input class="input" id="gw-poll" type="number" min="15" max="600" style="max-width:9rem" dir="ltr" value="' + TO.esc(st.pollSeconds || 60) + '"><span class="help">' + TO.esc(TO.t('gw.poll.help')) + '</span></div>' +
       '<div class="row wrap" style="gap:.6rem"><button class="btn primary" data-gw="save">' + TO.esc(TO.t('common.save')) + '</button>' +
-      '<button class="btn" data-gw="' + (st.configured ? 'show' : 'generate') + '">' + TO.icon('lock', 'sm') + TO.esc(TO.t(st.configured ? 'gw.secret.show' : 'gw.secret.make')) + '</button></div>' +
+      (st.hasSecrets ? '<button class="btn" data-gw="show" aria-pressed="' + (secrets ? 'true' : 'false') + '">' + TO.icon('lock', 'sm') + TO.esc(TO.t('gw.secret.show')) + '</button>' : '') +
+      '<button class="btn" data-gw="generate">' + TO.icon(st.hasSecrets ? 'refresh' : 'lock', 'sm') + TO.esc(TO.t(st.hasSecrets ? 'gw.secret.remake' : 'gw.secret.make')) + '</button></div>' +
       (secrets ? '<div class="stack" style="margin-top:1rem;gap:.8rem"><div class="tip warn">' + TO.icon('alert') + '<span>' + TO.esc(TO.t('gw.secret.warn')) + '</span></div>' +
-        '<div class="field"><label>' + TO.esc(TO.t('gw.secret.office')) + '</label><input class="input" readonly dir="ltr" value="' + TO.esc(secrets.officeSecret) + '" data-select></div>' +
-        '<div class="field"><label>' + TO.esc(TO.t('gw.secret.code')) + '</label><textarea class="input" rows="3" readonly dir="ltr" data-select>' + TO.esc(secrets.setupCode) + '</textarea><span class="help">' + TO.esc(TO.t('gw.secret.code.help')) + '</span></div></div>' : '') +
+        '<div class="field"><label for="gw-office">' + TO.esc(TO.t('gw.secret.office')) + '</label><div class="row" style="gap:.5rem"><input class="input" id="gw-office" readonly dir="ltr" value="' + TO.esc(secrets.officeSecret) + '" data-select>' +
+        '<button class="btn" data-gw="copy" data-copy="#gw-office">' + TO.icon('copy', 'sm') + TO.esc(TO.t('gw.secret.copy')) + '</button></div></div>' +
+        '<div class="field"><label for="gw-setup">' + TO.esc(TO.t('gw.secret.code')) + '</label><textarea class="input" id="gw-setup" rows="3" readonly dir="ltr" data-select>' + TO.esc(secrets.setupCode) + '</textarea>' +
+        '<span class="help">' + TO.esc(TO.t('gw.secret.code.help')) + (st.url ? '' : ' ' + TO.esc(TO.t('gw.secret.code.nourl'))) + '</span>' +
+        '<div><button class="btn" data-gw="copy" data-copy="#gw-setup">' + TO.icon('copy', 'sm') + TO.esc(TO.t('gw.secret.copy')) + '</button></div></div></div>' : '') +
       '</section>';
   }
   function otherPcCard() {
@@ -50,9 +54,23 @@
         var b = e.target.closest('[data-gw]'); if (!b) return;
         var a = b.dataset.gw, done = function () { return load().then(function () { TO.data.load(); TO.rerender(); }); };
         if (a === 'save') U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value }), 'common.saved', b).then(done);
-        else if (a === 'generate') U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value }).then(function () { return TO.post('/api/gateway/generate', {}); }), 'gw.made', b)
-          .then(function () { return TO.get('/api/gateway/secrets'); }).then(function (s) { secrets = s; return done(); });
-        else if (a === 'show') TO.get('/api/gateway/secrets').then(function (s) { secrets = secrets ? null : s; TO.rerender(); }, function (er) { TO.toast(U.errorText(er), 'bad'); });
+        else if (a === 'generate') {
+          /* replacing the secrets stops every driver link until the gateway gets the new office secret: ask first */
+          var replace = !!st.hasSecrets;
+          (replace ? U.confirm({ title: TO.t('gw.remake.title'), body: TO.t('gw.remake.body'), ok: TO.t('gw.secret.remake'), danger: true }) : Promise.resolve(true)).then(function (yes) {
+            if (!yes) return;
+            return U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value })
+              .then(function () { return TO.post('/api/gateway/generate', { replace: replace }); })
+              .then(function () { return TO.get('/api/gateway/secrets'); }), 'gw.made', b)
+              .then(function (s) { secrets = s; return done(); }, function () { /* U.run already showed the error */ });
+          });
+        }
+        else if (a === 'show') { if (secrets) { secrets = null; TO.rerender(); } else TO.get('/api/gateway/secrets').then(function (s) { secrets = s; TO.rerender(); }, function (er) { TO.toast(U.errorText(er), 'bad'); }); }
+        else if (a === 'copy') {
+          var box = root.querySelector(b.dataset.copy); if (!box) return;
+          var ok = function () { TO.toast(TO.t('gw.secret.copied')); }, fallback = function () { box.focus(); box.select(); try { document.execCommand('copy'); ok(); } catch (er) { /* the text stays selected for Ctrl+C */ } };
+          if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(box.value).then(ok, fallback); else fallback();
+        }
         else if (a === 'test') { b.disabled = true; TO.post('/api/gateway/test', {}).then(function (r) { testing = r; }, function (er) { testing = { ok: false, error: U.errorText(er) }; }).then(function () { TO.rerender(); }); }
         else if (a === 'pull') { b.disabled = true; TO.post('/api/gateway/pull', {}).then(function () { TO.toast(TO.t('gw.pulled')); return TO.data.load(); }, function (er) { TO.toast(U.errorText(er), 'bad', 6000); }).then(done); }
         else if (a === 'code') U.run(TO.post('/api/gateway/code', { code: (root.querySelector('#gw-code') || {}).value }), 'gw.code.done', b).then(done);

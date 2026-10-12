@@ -20,6 +20,9 @@
 - **Crash reports** (only with the office's agreement): a fingerprint of the error, never the message or any data.
 - **Licence** (Settings): device-bound trial / monthly / permanent codes checked offline with public keys; ask the company from the screen (the code arrives by itself) or paste it. Without a working code you can still read, print, export and back up. A build without public keys says "licence by contract" and works fully (the assisted pilot). Setup: `docs/HUB_SETUP.md`.
 
+## Fixed
+- **Settings → Mailbox: the secrets now appear right after «اعمل الأسرار / Create the secrets»**, also before the gateway address is saved. «اعرض / اخفي الأسرار» shows whenever secrets exist, each secret has a Copy button, and «اعمل أسرار جديدة / Make new secrets» asks before replacing them.
+
 ## New
 - **Mailbox on Cloudflare in one step:** double-click `deploy.bat` (or run "Deploy gateway" on GitHub). It makes the database, tables, gateway and secret by itself and can be repeated safely. Guide: `GATEWAY_DEPLOY.md`.
 - **A course for every job:** Help → «مساري / My path». The administrator starts by setting the office up, then each role has its own lessons (dispatcher, approver, reviewer, finance, viewer). The program sees what you already did and marks «أنت هنا / You are here»; the next lesson waits on the overview with «Guide me».

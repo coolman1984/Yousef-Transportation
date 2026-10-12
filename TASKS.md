@@ -67,7 +67,8 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P5.3 WhatsApp `wa.me` button, copy link, new link, free the phone (trip panel)
 - [x] P5.4 Printable order (A4, QR of the trip number) + Word form
 - [x] P5.5 Settings -> Mailbox + `docs/GATEWAY_SETUP.md` (Arabic, dashboard steps)
-- Test map: `test_gateway_client` (9), `test_e2e_link_ui` (2), plus the driver and gateway tests above
+- [x] P5.5a Mailbox secrets shown right after creating them, before the address exists; show/hide whenever secrets exist; copy buttons; confirm before replacing (2026-10-12 owner bug) – verified (`test_gateway_client.SecretsBeforeAddressTest`, `test_e2e_link_ui` test 0)
+- Test map: `test_gateway_client` (17), `test_e2e_link_ui` (3), plus the driver and gateway tests above
 
 ## Phase 6 – Reports & presentation
 - [x] P6.1 `reports.py` summaries per vehicle/driver/department/requester/category/day + top routes; `/api/reports`

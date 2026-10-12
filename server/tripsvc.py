@@ -1,6 +1,7 @@
 """Trip Orders - trip operations that need several records to change together (new trip, amendment, cancel, approval)
 and the read-side "insights" (trust colour, km, overtime, odometer chain) for every trip.
 Each operation is ONE store commit, so it is saved completely or not at all and appears as one change in the history."""
+import datetime
 import uuid
 
 import domain
@@ -41,6 +42,73 @@ def _now():
     return domain.business_now().isoformat(timespec='seconds')
 
 
+STATUSES = ('draft', 'sent', 'started', 'finished', 'closed', 'cancelled')
+DATE_WINDOW_DAYS = 60            # a trip date further than this from today is almost always a typing slip (2026-13-45, 1999, 2030)
+MAX_KM = 9_999_999
+TEXT_MAX = {'destination': 200, 'purpose': 300, 'routeText': 500, 'notes': 1000}
+
+
+def _whole_number(field, v, top):
+    if isinstance(v, bool):
+        raise BadRequest(f'{field}: write a whole number')
+    try:
+        n = float(str(v).strip().replace(',', '')) if not isinstance(v, (int, float)) else float(v)
+    except ValueError:
+        raise BadRequest(f'{field}: write a whole number')
+    if n != n or n in (float('inf'), float('-inf')) or n != int(n) or not 0 <= n <= top:
+        raise BadRequest(f'{field}: write a whole number between 0 and {top:,}')
+    return int(n)
+
+
+def check_trip(row, before=None, today=None, trusted=False):
+    """Refuse values that can never be true, for a new trip, a hand amendment and a plain save. Fills in clean numbers in `row`.
+    `before` is the saved trip (None for a new one); only fields that CHANGED are judged, so an old record never blocks an unrelated edit.
+    `trusted` is for the Excel import and the restore: real history may be older than the date window."""
+    before = before or {}
+    changed = lambda f: f in row and row.get(f) != before.get(f)
+    if changed('date'):
+        d = str(row['date'] or '').strip()
+        try:
+            day = datetime.date.fromisoformat(d) if len(d) == 10 else None
+        except ValueError:
+            day = None
+        if day is None:
+            raise BadRequest('date: write the date like 2026-10-12')
+        today = today or domain.business_now().date()
+        if not trusted and abs((day - today).days) > DATE_WINDOW_DAYS:
+            raise BadRequest(f'date: more than {DATE_WINDOW_DAYS} days away from today - check the date')
+        row['date'] = d
+    for f in ('startKm', 'endKm'):
+        if changed(f) and row[f] not in (None, ''):
+            row[f] = _whole_number(f, row[f], MAX_KM)
+    if changed('billableKm') and row['billableKm'] not in (None, ''):
+        row['billableKm'] = _whole_number('billableKm', row['billableKm'], MAX_KM)
+    if changed('seq') and row['seq'] not in (None, ''):
+        row['seq'] = _whole_number('seq', row['seq'], 100000)
+    if (changed('startKm') or changed('endKm')) and isinstance(row.get('startKm'), int) and isinstance(row.get('endKm'), int) and row['endKm'] < row['startKm']:
+        raise BadRequest('endKm: the end odometer cannot be lower than the start odometer')
+    for f in ('startAt', 'endAt'):
+        if changed(f) and row[f] not in (None, ''):
+            if domain.parse_dt(row[f]) is None:
+                raise BadRequest(f'{f}: write the time like 2026-10-12T08:30')
+    if (changed('startAt') or changed('endAt')) and row.get('startAt') and row.get('endAt'):
+        a, b = domain.parse_dt(row['startAt']), domain.parse_dt(row['endAt'])
+        if a and b and b < a:
+            raise BadRequest('endAt: the end time cannot be before the start time')
+    for f, top in TEXT_MAX.items():
+        if changed(f) and len(str(row.get(f) or '')) > top:
+            raise BadRequest(f'{f}: at most {top} characters')
+    if changed('status'):
+        new, old = row['status'], before.get('status') or 'draft'
+        if new not in STATUSES:
+            raise BadRequest('status: not a known status')
+        if old == 'cancelled':
+            raise BadRequest('A cancelled trip cannot be opened again - make a new trip')
+        if old == 'closed' and new != 'cancelled':
+            raise BadRequest('A closed trip can only be cancelled')
+    return row
+
+
 def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
     """data: trip fields (CREATE_FIELDS) + 'passengers': [{'personId': .., 'freeText': ..}]. Returns the saved trip."""
     row = {k: data.get(k) for k in CREATE_FIELDS if data.get(k) not in (None, '')}
@@ -53,6 +121,7 @@ def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
             raise BadRequest(f'Unknown {f[:-2]}')
     today = domain.business_now()
     row.setdefault('date', today.date().isoformat())
+    check_trip(row, today=today.date())
     with store.lock:  # numbering and saving under one lock, so two clicks at once never get the same number
         nos = [r[0] for r in store.conn.execute('SELECT no FROM trips')]
         letter = my_letter(journal, node_id)
@@ -84,7 +153,7 @@ def amend(store, user, ip, user_id, trip_id, field, value, reason, guard=None):
     if old == value:
         raise BadRequest('Nothing changed')
     ver = t.pop('ver')
-    new_row = {**t, field: value}
+    new_row = check_trip({**t, field: value}, t)
     if field == 'status' and value in DONE:
         new_row['locked'] = True
     ops = [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': new_row},
@@ -137,6 +206,8 @@ def make_link(store, gate, user, ip, user_id, trip_id, replace=False, sent=False
         raise BadRequest('Trip not found')
     if t.get('status') in ('cancelled', 'closed') or t.get('locked'):
         raise BadRequest('A link cannot be made for a trip that is finished or cancelled')
+    if t.get('gaApproved') == 'no':
+        raise BadRequest('General Affairs declined this trip - approve it again before sending a link')
     nonce = t.get('linkNonce') if t.get('linkNonce') and not replace else gwc.new_nonce()
     try:
         tok, url = gate.make_link(trip_id, nonce)
@@ -236,6 +307,8 @@ def normalize_ops(store, ops, trusted=False):
             for f in ('destination', 'purpose', 'routeText'):
                 if row.get(f) is not None:
                     row[f] = domain.norm_text(row[f])
+            if not trusted:
+                check_trip(row, _row(store, 'trips', op.get('id')))
         if e == 'tripCategories' and not trusted:   # the rate history is kept by the server: an old rate is never rewritten by a save
             row['rateHistory'] = pricing.stamp(_row(store, 'tripCategories', op.get('id')), row, domain.business_now().date().isoformat())
         if e in unique and not op.get('resolve'):

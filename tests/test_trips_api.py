@@ -105,12 +105,56 @@ class TripsApiTest(unittest.TestCase):
 
     def test_g_insights(self):
         t = self.trip(cat='cat1')
-        for field, value in (('startKm', 500), ('endKm', 400), ('status', 'finished')):  # status only changes through the amend route
+        for field, value in (('startKm', 500), ('endKm', 500), ('status', 'finished')):  # equal readings = 0 km; status only changes through the amend route
             self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'test reading'})
         ins = self.ac.get('/api/insights')[t['id']]
         self.assertEqual(ins['trust'], 'red')
         self.assertIn('R_END_LE_START', ins['reasons'])
         self.assertNotIn('R_NO_PAPER', ins['reasons'])   # an office-only trip has no driver page to send the paper
+
+    def test_i_bad_values_are_refused_and_nothing_is_saved(self):
+        t = self.trip()
+        before = self.get_trip(t['id'])
+        bad = [('endKm', 'abc'), ('endKm', -5), ('endKm', 12.5), ('startKm', 99999999999), ('status', 'flying'), ('date', 'abc'), ('date', '2026-13-45'),
+               ('date', '1999-01-01'), ('date', '2099-01-01'), ('startAt', 'nonsense'), ('destination', 'x' * 201)]
+        for field, value in bad:
+            with self.assertRaises(ApiError, msg=f'{field}={value!r}') as e:
+                self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'test the check'})
+            self.assertEqual(e.exception.code, 400)
+        self.assertEqual(self.get_trip(t['id']), before)
+        self.assertEqual([a for a in self.ac.get('/api/state')['tripAmendments'] if a['tripId'] == t['id']], [])
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'startKm', 'value': '1,000', 'reason': 'typed with a comma'})
+        self.assertEqual(self.get_trip(t['id'])['startKm'], 1000)
+        with self.assertRaises(ApiError):    # end below start
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endKm', 'value': 900, 'reason': 'lower than start'})
+
+    def test_j_times_order_and_new_trip_checks(self):
+        t = self.trip()
+        today = date.today().isoformat()
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'startAt', 'value': today + 'T10:00:00', 'reason': 'from the paper'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endAt', 'value': today + 'T09:00:00', 'reason': 'before the start'})
+        self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endAt', 'value': today + 'T12:30:00', 'reason': 'from the paper'})
+        for body in ({'date': 'abc'}, {'date': '2026-13-45'}, {'date': '1999-05-05'}, {'date': '2031-05-05'}, {'destination': 'y' * 500}):
+            with self.assertRaises(ApiError, msg=str(body)) as e:
+                self.trip(**body)
+            self.assertEqual(e.exception.code, 400)
+
+    def test_k_cancelled_and_closed_are_final_declined_gets_no_link(self):
+        t = self.trip()
+        self.ac.post('/api/trips/cancel', {'id': t['id'], 'reason': 'Not needed any more'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'status', 'value': 'finished', 'reason': 'bring it back'})
+        self.assertEqual(self.get_trip(t['id'])['status'], 'cancelled')
+        c = self.trip()
+        self.ac.post('/api/trips/amend', {'id': c['id'], 'field': 'status', 'value': 'closed', 'reason': 'Closed by office'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': c['id'], 'field': 'status', 'value': 'started', 'reason': 'go back'})
+        g = self.trip()
+        self.ac.post('/api/trips/approve', {'id': g['id'], 'yes': False})
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/trips/link', {'id': g['id']})
+        self.assertIn('declined', str(e.exception))
 
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()

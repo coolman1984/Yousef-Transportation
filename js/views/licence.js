@@ -9,8 +9,9 @@
     var host = TO.$('#lic-banner');
     if (!host) return;
     var lic = TO.me && TO.me.licence;
-    if (!lic || lic.full) { host.innerHTML = ''; return; }
-    host.innerHTML = '<div class="tip lic-banner">' + TO.icon('alert') + '<span>' + TO.esc(TO.t('lic.banner')) + '</span><a class="btn sm" href="#/settings?tab=licence">' + TO.esc(TO.t('set.tab.licence')) + '</a></div>';
+    var ciWarning = lic && lic.build_channel === 'ci-test' ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<b>' + TO.esc(TO.t('lic.ciTest')) + '</b></div>' : '';
+    if (!lic || lic.full) { host.innerHTML = ciWarning; return; }
+    host.innerHTML = ciWarning + '<div class="tip lic-banner">' + TO.icon('alert') + '<span>' + TO.esc(TO.t('lic.banner')) + '</span><a class="btn sm" href="#/settings?tab=licence">' + TO.esc(TO.t('set.tab.licence')) + '</a></div>';
   }
   TO.licenceBanner = banner;
   TO.on('licence', function (lic) { if (TO.me && lic) { TO.me.licence = lic; banner(); } });
@@ -40,7 +41,7 @@
       function draw(lic) {
         var q = lic.request || { status: 'none', available: false }, ln = line(q);
         var good = ['trial', 'active', 'grace', 'contract'].indexOf(lic.state) >= 0;
-        host.innerHTML = '<div class="lic ' + (good ? 'good' : '') + '"><div class="lic-state">' + TO.icon(good ? 'shield' : 'lock') + '<div><b data-lic-state>' + TO.esc(TO.t('lic.state.' + lic.state)) + '</b>' +
+        host.innerHTML = (lic.build_channel === 'ci-test' ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<b>' + TO.esc(TO.t('lic.ciTest')) + '</b></div>' : '') + '<div class="lic ' + (good ? 'good' : '') + '"><div class="lic-state">' + TO.icon(good ? 'shield' : 'lock') + '<div><b data-lic-state>' + TO.esc(TO.t('lic.state.' + lic.state)) + '</b>' +
           (lic.edition ? '<div class="small">' + TO.esc(TO.t('lic.kind.' + lic.edition)) + '</div>' : '') +
           (lic.last_day ? '<div class="small muted">' + TO.esc(TO.t('lic.until', { day: lic.last_day, n: lic.days_left })) + '</div>' : '') + '</div></div>' +
           (lic.state === 'contract' ? '<p class="muted">' + TO.esc(TO.t('lic.contract')) + '</p>' : '') +

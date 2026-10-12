@@ -110,7 +110,22 @@ class TripsApiTest(unittest.TestCase):
         ins = self.ac.get('/api/insights')[t['id']]
         self.assertEqual(ins['trust'], 'red')
         self.assertIn('R_END_LE_START', ins['reasons'])
-        self.assertIn('R_NO_PAPER', ins['reasons'])
+        self.assertNotIn('R_NO_PAPER', ins['reasons'])   # an office-only trip has no driver page to send the paper
+
+    def test_h_office_only_trip_turns_green_after_review(self):
+        t = self.trip()
+        for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': field, 'value': value, 'reason': 'entered from the paper'})
+        ins = self.ac.get('/api/insights')[t['id']]
+        self.assertEqual((ins['trust'], ins['reasons']), ('yellow', ['Y_CLOSED_BY_OFFICE', 'Y_AMENDED']))
+        self.ac.post('/api/trips/review', {'id': t['id']})
+        x = self.get_trip(t['id'])
+        self.assertTrue(x['reviewedBy'] and x['reviewedAt'])
+        self.assertEqual(self.ac.get('/api/insights')[t['id']]['trust'], 'green')
+        with self.assertRaises(ApiError):   # a draft is not reviewable
+            self.ac.post('/api/trips/review', {'id': self.trip()['id']})
+        with self.assertRaises(ApiError):   # the review stamp cannot be written by hand
+            self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'reviewedAt', 'value': '2099-01-01T00:00:00', 'reason': 'sneaky try'})
 
 
 if __name__ == '__main__':

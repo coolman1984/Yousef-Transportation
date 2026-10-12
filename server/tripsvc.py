@@ -10,7 +10,7 @@ from store import BadRequest
 CREATE_FIELDS = ('date', 'categoryId', 'vehicleId', 'driverId', 'requesterId', 'departmentId', 'destination', 'stops', 'purpose', 'notes', 'seq',
                  'billableKm')
 # fields nobody may change by hand: identity, link secrets and things the driver's page or the server writes
-PROTECTED = {'id', 'ver', 'no', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
+PROTECTED = {'id', 'ver', 'no', 'reviewedBy', 'reviewedAt', 'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'source', 'importKey'}
 DONE = domain.DONE
 
 
@@ -110,6 +110,20 @@ def approve(store, user, ip, user_id, trip_id, yes, guard=None):
     ver = t.pop('ver')
     row = {**t, 'gaApproved': 'yes' if yes else 'no', 'gaBy': user, 'gaAt': _now()}
     store.commit(user, ip, f'GA {"approved" if yes else "declined"} trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': row}],
+                 guard=guard, user_id=user_id)
+    return {'ok': True}
+
+
+def review(store, user, ip, user_id, trip_id, guard=None):
+    """"Reviewed": a person looked at a finished trip and accepts what the office entered. It clears the office-origin yellow marks
+    that existed up to now (`domain.trust`); a later correction brings them back."""
+    t = _row(store, 'trips', trip_id)
+    if not t:
+        raise BadRequest('Trip not found')
+    if t.get('status') not in DONE:
+        raise BadRequest('Only a finished trip can be marked as reviewed')
+    ver = t.pop('ver')
+    store.commit(user, ip, f'Reviewed trip {t.get("no")}', [{'e': 'trips', 'id': trip_id, 'op': 'put', 'ver': ver, 'row': {**t, 'reviewedBy': user, 'reviewedAt': _now()}}],
                  guard=guard, user_id=user_id)
     return {'ok': True}
 

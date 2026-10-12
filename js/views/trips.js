@@ -206,6 +206,7 @@
     if (t.status !== 'cancelled') {
       if (TO.can('trips.cancel')) b += '<button class="btn danger" data-a="cancel" style="margin-inline-end:auto">' + TO.esc(TO.t('trip.cancel')) + '</button>';
       if (TO.can('trips.approve') && t.gaApproved !== 'yes') b += '<button class="btn" data-a="approve" data-guide="trip.approve">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.approve')) + '</button>';
+      if ((t.status === 'finished' || t.status === 'closed') && TO.can('trips.review') && TO.data.trust(t.id).trust !== 'green') b += '<button class="btn" data-a="review" data-guide="trip.review">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.review')) + '</button>';
       if (t.locked ? TO.can(['trips.amend', 'trips.review']) : TO.can(['trips.edit', 'trips.amend', 'trips.review'])) b += '<button class="btn primary" data-a="amend" data-guide="trip.amend">' + TO.esc(TO.t('trip.amend')) + '</button>';
     }
     return b;
@@ -224,6 +225,7 @@
           else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
           else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
           else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
+          else if (a.dataset.a === 'review') U.run(TO.post('/api/trips/review', { id: id }), 'trip.reviewed').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'approve') U.run(TO.post('/api/trips/approve', { id: id, yes: true }), 'trip.approved').then(function () { if (TO.guide) TO.guide.signal('trip.approve'); return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'cancel') U.confirm({ title: TO.t('trip.cancel'), body: TO.t('trip.cancel.body'), reason: TO.t('amend.reason'), danger: true, ok: TO.t('trip.cancel') }).then(function (reason) {
             if (reason) U.run(TO.post('/api/trips/cancel', { id: id, reason: reason }), 'trip.cancelled').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });

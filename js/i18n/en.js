@@ -457,6 +457,8 @@
     'trip.amend': 'Change...',
     'trip.approve': 'Approve (General Affairs)',
     'trip.approved': 'Approved',
+    'trip.review': 'Reviewed - accept this trip',
+    'trip.reviewed': 'Marked as reviewed',
     'trip.cancel': 'Cancel trip',
     'trip.cancel.body': 'A cancelled trip stays in the history. The reason is kept.',
     'trip.cancelled': 'Trip cancelled',

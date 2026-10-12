@@ -457,6 +457,8 @@
     'trip.amend': 'عدّل...',
     'trip.approve': 'موافقة (الشؤون العامة)',
     'trip.approved': 'تمت الموافقة',
+    'trip.review': 'تمت المراجعة',
+    'trip.reviewed': 'تمت مراجعة المشوار',
     'trip.cancel': 'إلغاء المشوار',
     'trip.cancel.body': 'المشوار الملغي بيفضل في التاريخ. والسبب بيتحفظ.',
     'trip.cancelled': 'المشوار اتلغى',

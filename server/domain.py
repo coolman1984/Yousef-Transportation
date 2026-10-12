@@ -230,6 +230,7 @@ def unusual_km(km, history_kms, min_history=3, tolerance=0.25, floor=30):
 # ---------------------------------------------------------------- trust colour
 RED, YELLOW, GREEN, GREY = 'red', 'yellow', 'green', 'grey'
 DONE = ('finished', 'closed')
+IMPORT_WARN_NOTE = 'Imported with warnings'   # the Excel import writes this at the start of the trip's notes when a row had doubts
 
 
 def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(), open_limit_hours=16, now=None, drift_limit=10,
@@ -250,10 +251,13 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
     bound = trip.get('boundDevice')
     if bound and any(e.get('deviceId') and e.get('deviceId') != bound for e in events):
         reasons.append('R_SECOND_DEVICE')
+    # A trip the driver's page never touched (no link, no photo, no message) was recorded by the office alone: the paper and the
+    # odometer photo cannot exist, so their absence is not a doubt about the trip. The office's own corrections stay visible (below).
+    office_only = not trip.get('linkHash') and not photos and not events
     if status in DONE:
-        if trip.get('source', 'app') == 'app' and 'paper' not in kinds:
+        if trip.get('source', 'app') == 'app' and not office_only and 'paper' not in kinds:
             reasons.append('R_NO_PAPER')
-        if trip.get('source', 'app') == 'app' and 'start_odo' not in kinds:
+        if trip.get('source', 'app') == 'app' and not office_only and 'start_odo' not in kinds:
             reasons.append('Y_NO_START_PHOTO')
     elif status == 'started':
         st = parse_dt(trip.get('startAt'))
@@ -267,11 +271,13 @@ def trust(trip, photos=(), amendments=(), events=(), chain=None, history_kms=(),
         reasons.append('Y_DRIFT')
     if time_unclear(trip.get('startAt')) or time_unclear(trip.get('endAt')):
         reasons.append('Y_TIME_UNCLEAR')
+    reviewed_at = str(trip.get('reviewedAt') or '')   # "Reviewed" clears what the office did before it, not what it changes afterwards
+    amendments = [a for a in amendments if not reviewed_at or str(a.get('at') or '') > reviewed_at]
     if any(a.get('field') == 'status' and a.get('new') in DONE for a in amendments):
         reasons.append('Y_CLOSED_BY_OFFICE')
     if amendments:
         reasons.append('Y_AMENDED')
-    if trip.get('source') == 'excel' and trip.get('importWarn'):
+    if trip.get('source') == 'excel' and (trip.get('importWarn') or str(trip.get('notes') or '').startswith(IMPORT_WARN_NOTE)):
         reasons.append('Y_IMPORT_WARN')
     if billable_check and km is not None and isinstance(trip.get('billableKm'), (int, float)) and trip['billableKm'] != km:
         reasons.append('Y_BILLABLE_DIFF')

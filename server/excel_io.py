@@ -442,7 +442,7 @@ def build_ops(p, state, letter, skip_rows=(), merges=(), new_id=None, include_pr
                'importWarn': False}
         row = {k: v for k, v in row.items() if v not in (None, '') and k != 'importWarn'}
         if r['messages'] and any(m['code'] in ('km', 'km_order', 'km_big', 'backstep', 'date', 'plate', 'driver') for m in r['messages']):
-            row['notes'] = 'Imported with warnings: ' + '; '.join(m['text'] for m in r['messages'] if m['code'] not in ('night', 'dup_db', 'dup_file'))[:300]
+            row['notes'] = domain.IMPORT_WARN_NOTE + ': ' + '; '.join(m['text'] for m in r['messages'] if m['code'] not in ('night', 'dup_db', 'dup_file'))[:300]
         ops.append({'e': 'trips', 'id': tid, 'op': 'put', 'row': row})
         for x in pax:
             ops.append({'e': 'tripPassengers', 'id': new_id('tp'), 'op': 'put', 'row': {'tripId': tid, **{'personId': x.get('personId', ''), 'freeText': x.get('freeText', '')}}})

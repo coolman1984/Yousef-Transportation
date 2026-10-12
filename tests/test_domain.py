@@ -149,6 +149,31 @@ class TrustTest(unittest.TestCase):
         self.assertEqual(d.trust(t, [])[0], 'green')
         self.assertEqual(d.trust(self.done(source='excel', importWarn=True), [])[0], 'yellow')
 
+    def test_office_only_trip_needs_no_paper_or_photo_but_review(self):
+        # no link, no photo, no driver message: nothing the driver page could have sent is missing
+        self.assertEqual(d.trust(self.done(), []), ('green', []))
+        closed = [{'field': 'status', 'new': 'closed', 'at': '2026-09-28T10:00:00'}]
+        colour, reasons = d.trust(self.done(), [], closed)
+        self.assertEqual(colour, 'yellow')
+        self.assertEqual(reasons, ['Y_CLOSED_BY_OFFICE', 'Y_AMENDED'])
+        self.assertNotIn('R_NO_PAPER', reasons)
+
+    def test_reviewed_clears_earlier_office_changes_only(self):
+        t = self.done(reviewedAt='2026-09-28T11:00:00')
+        old = {'field': 'endKm', 'new': 210, 'at': '2026-09-28T10:00:00'}
+        late = {'field': 'endKm', 'new': 220, 'at': '2026-09-28T12:00:00'}
+        self.assertEqual(d.trust(t, [], [old]), ('green', []))
+        self.assertEqual(d.trust(t, [], [old, late])[0], 'yellow')
+
+    def test_trip_with_a_driver_link_still_needs_its_paper(self):
+        colour, reasons = d.trust(self.done(linkHash='h'), [])
+        self.assertEqual(colour, 'red')
+        self.assertIn('R_NO_PAPER', reasons)
+
+    def test_import_with_warnings_is_yellow_as_stored(self):
+        t = self.done(source='excel', notes=d.IMPORT_WARN_NOTE + ': km looks odd')   # importWarn is not a stored column; the note is
+        self.assertIn('Y_IMPORT_WARN', d.trust(t, [])[1])
+
     def test_red_beats_yellow_and_cancelled_is_grey(self):
         c, r = d.trust(self.done(billableKm=1), self.PHOTOS, chain={'backstep': 1})
         self.assertEqual(c, 'red')

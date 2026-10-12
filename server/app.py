@@ -261,7 +261,7 @@ RATE_FIELDS = ('ratePerKm', 'ratePerOtHour', 'rateHistory')
 RATE_VIEWERS = ('finance.view', 'rates.manage', 'categories.manage')  # whoever sees or edits rates
 DRIVER_CONTACT_VIEWERS = ('fleet.view', 'drivers.manage', 'trips.send')  # the Drivers page, its editor and the WhatsApp button
 PEOPLE_CONTACT_VIEWERS = ('people.view', 'people.manage')
-TRIP_SERVER_FIELDS = GA_FIELDS | LINK_FIELDS | {'locked', 'no', 'source', 'importKey'}  # written by the server through the dedicated trip routes only
+TRIP_SERVER_FIELDS = GA_FIELDS | LINK_FIELDS | {'locked', 'no', 'source', 'importKey', 'reviewedBy', 'reviewedAt'}  # written by the server through the dedicated trip routes only
 
 
 # Reading: a list is only sent to a person who has a permission that uses it. Without any of them the answer is empty,
@@ -1076,6 +1076,9 @@ class Handler(BaseHTTPRequestHandler):
             if action == 'release-device':
                 self.need('trips.amend')
                 return self.send(200, tripsvc.release_device(STORE, GATE, self.user, self.ip, self.u['id'], str(d.get('id')), guard=g))
+            if action == 'review':
+                self.need('trips.review')
+                return self.send(200, tripsvc.review(*args, str(d.get('id')), guard=g))
             if action == 'approve':
                 self.need('trips.approve')
                 return self.send(200, tripsvc.approve(*args, str(d.get('id')), bool(d.get('yes')), guard=g))

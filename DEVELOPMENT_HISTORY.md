@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## CI journey fresh paid activation (2026-10-13)
+
+**What:** `_profile_clock_established()` no longer treats a profile auth key file alone as established (fixes windows-installer journey when an earlier CI step created auth under the same Windows user); `ci_signing_key.py` writes `studio:` kid; regression test for ci-test paid activate with orphan auth.
+**Why:** windows-installer `journey_exe.py first` returned `full=False` after valid standard activation on a fresh `TO_HOME`.
+**Checks:** `cd licence-hub && node --test`; `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
 ## Review 10 — licence clock fail-closed hardening (2026-10-13)
 
 **What:** Trial replay blocked when code/auth/marker/flag show prior use but clock file is gone or sealed; fail-closed seals rewrite migration marker; hub days clamp forward up to seven days per poll (frozen clock catch-up); profile lock contention no longer seals healthy state; paid activation clears trial fail-closed seal; established profile never recreates clock from a near hub day after file delete.

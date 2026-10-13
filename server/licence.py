@@ -219,11 +219,10 @@ class Licence:
         return value
 
     def _profile_clock_established(self):
+        """True once this office has used the sealed clock profile (not merely a shared OS profile auth file)."""
         if self.a.kv('licence_clock_profile') == '1':
             return True
         if licence_state.migration_marker_exists():
-            return True
-        if licence_state.auth_key_on_disk():
             return True
         return False
 

@@ -151,6 +151,44 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
             self.assertEqual(p.returncode, 0, p.stderr)
 
 
+class CiTestFreshPaidActivationTest(unittest.TestCase):
+    """CI smoke test + journey share one Windows profile; orphan auth must not block a new TO_HOME."""
+
+    def test_ci_test_paid_activation_with_orphan_profile_auth_key(self):
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            self.skipTest('cryptography not installed')
+        import afcodes
+        import licence_state
+        from datetime import date as date_cls
+
+        private = Ed25519PrivateKey.generate()
+        pem = private.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        public = base64.urlsafe_b64encode(
+            private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        ).decode().rstrip('=')
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(
+                d, build_channel='ci-test', release_keys=(), studio_keys=(public,))
+            prof = holder.profile_dir
+            auth_path = os.path.join(prof, licence_state.AUTH_FILE)
+            os.makedirs(prof, mode=0o700, exist_ok=True)
+            with open(auth_path, 'wb') as f:
+                f.write(b'\x01' * 32)
+            with holder as l:
+                self.assertFalse(l._profile_clock_established())
+                lic = l.status()
+                self.assertTrue(lic['enforced'])
+                self.assertFalse(lic['full'])
+                code = afcodes.issue_code(
+                    pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=l.device())['code']
+                st = l.activate(code, manual=True)
+                self.assertTrue(st['full'], st)
+
+
 class InstallerChannelTest(unittest.TestCase):
     def test_ci_test_and_commercial_installer_identity_differ(self):
         iss = (ROOT / "installer" / "trip-orders.iss").read_text("utf-8")

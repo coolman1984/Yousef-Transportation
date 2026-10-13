@@ -704,6 +704,106 @@ class LicenceClockStateTest(unittest.TestCase):
                     st = l.status()
                 self.assertEqual(st['state'], 'expired')
 
+    def test_missing_state_file_blocks_trial_code_replay(self):
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                l._note_hub_calendar_day((first + timedelta(days=20)).isoformat())
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+                os.remove(os.path.join(holder.profile_dir, licence_state.STATE_FILE))
+                licence._cache.clear()
+                with self.assertRaises(ValueError):
+                    l.activate(code, manual=True)
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+                self.assertEqual(l.status()['reason'], 'state_corrupt')
+
+    def test_forged_legacy_max_seen_cannot_reopen_established_trial(self):
+        import hashlib
+        import hmac
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                os.remove(os.path.join(holder.profile_dir, licence_state.STATE_FILE))
+                tag = l.machine_tag()
+                pepper = b'AF-LICENCE-STATE/1|trip-orders'
+                key = hmac.new(tag.encode('ascii'), pepper, hashlib.sha256).digest()
+                value = licence.iso(licence.utcnow())
+                mac = hmac.new(key, f'max_seen|{value}'.encode('utf-8'), hashlib.sha256).hexdigest()
+                l.a.kv('max_seen', f'{value}|{mac}')
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+                self.assertEqual(l.status()['reason'], 'state_corrupt')
+
+    def test_stale_max_seen_write_does_not_rewind_watermark(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                newer = licence.utcnow()
+                older = newer - timedelta(hours=2)
+                l._write_max_seen(newer)
+                l._write_max_seen(older)
+                record = l._clock_record(create=False)
+                self.assertIsNotNone(record)
+                seen = licence.parse(record['max_seen'])
+                self.assertGreater(seen, older)
+                self.assertGreaterEqual(seen.replace(microsecond=0), newer.replace(microsecond=0))
+
+    def test_binary_mac_blob_returns_fail_closed_status(self):
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                path = os.path.join(holder.profile_dir, licence_state.STATE_FILE)
+                with open(path, 'wb') as f:
+                    f.write(b'{}\n\xff')
+                licence._cache.clear()
+                st = l.status()
+                self.assertFalse(st['full'])
+                self.assertEqual(st['reason'], 'state_corrupt')
+                self.assertFalse(l.status()['full'])
+
+    def test_damaged_auth_key_returns_fail_closed_without_crash(self):
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                auth_path = os.path.join(holder.profile_dir, licence_state.AUTH_FILE)
+                with open(auth_path, 'wb') as f:
+                    f.write(b'bad')
+                licence._cache.clear()
+                st = l.status()
+                self.assertFalse(st['full'])
+                self.assertEqual(st['reason'], 'state_corrupt')
+
 
 if __name__ == "__main__":
     unittest.main()

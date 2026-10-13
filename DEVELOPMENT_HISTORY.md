@@ -7,6 +7,12 @@
 **What/why:** Public, uncached `/licence/time` reuses the hub calendar helper without DB/secrets. Client checks every six hours for all editions, even expired-looking codes or open requests; failed attempts stay rate limited and trial watch polling continues. Forward-only hub days expire paid codes beyond signed grace with `full=False`; existing read/export/backup access remains. No usage counters, secrets or user data changed. Updated hub guide, release notes and test map.
 **Checks:** `cd tests && python3 -W ignore::ResourceWarning -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto`: 110 run, 109 pass, one Windows-only SQLite rename test skipped on Linux (commercial licence module: 34 pass). `cd licence-hub && node --test`: 40 pass; no `node_modules` present. `git diff --check`: clean.
 **Remaining/next:** Local commit only; no push/deployment. Updated hub deployment, rebuilt Windows installer and field verification remain necessary. Existing `.model-fallback.log` left untouched and uncommitted.
+## Review 8 — trial state integrity, hub idempotency, fail-closed reads (2026-10-13)
+
+**What:** Block trial activation and legacy migration after established profile clock; monotonic `max_seen`; profile file lock + migration marker on save; corrupt auth/state reads fail closed without raising; hub approve/offline transactional claim cleanup, same-request idempotent issue, owner-path legacy `h:` migration, per-env offline queue + DB-authoritative code return.
+**Why:** Codex review 8: missing-state replay, approval retry deleting winner locks, offline multi-instance duplicate codes, owner approve before migration, clock watermark rollback, damaged key crashes.
+**Checks:** `cd licence-hub && node --test` (40 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (107 pass, 1 skip).
+**Next:** Owner redeploy licence hub; commercial rebuild only if shipping these server fixes.
 
 ## Review 7 — fail-closed trial state, D1 transactions, owner recovery (2026-10-13)
 

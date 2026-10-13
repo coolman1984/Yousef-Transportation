@@ -218,8 +218,13 @@ class Licence:
             return None
         return value
 
+    def _profile_clock_established(self):
+        return self.a.kv('licence_clock_profile') == '1'
+
     def _migrate_clock_state_once(self):
         bind = self._state_bind()
+        if self._profile_clock_established():
+            return
         status, _ = licence_state.read(bind)
         if status == 'ok':
             return
@@ -257,6 +262,10 @@ class Licence:
         if status == 'ok':
             return record
         if status == 'corrupt':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            return licence_state.load(bind)
+        if status == 'missing' and self._profile_clock_established():
             if self._trial_state_required():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
             return licence_state.load(bind)
@@ -318,6 +327,9 @@ class Licence:
             return
 
         def updater(record):
+            prev = parse(record.get('max_seen') or '')
+            if prev and when <= prev:
+                return record
             record['max_seen'] = iso(when)
             return record
 
@@ -604,7 +616,7 @@ class Licence:
         if self._trial_state_required() and not state_ok:
             bind = self._state_bind()
             status, _ = licence_state.read(bind)
-            if status == 'corrupt' or self.a.kv('licence_clock_profile') == '1':
+            if (status == 'corrupt' or self.a.kv('licence_clock_profile') == '1') and licence_state.auth_available():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
             result.update(state='invalid', full=False, reason='state_corrupt')
             clock_back = False
@@ -663,6 +675,13 @@ class Licence:
             raise ValueError(result['reason'] or 'invalid')
         if result['state'] == 'expired':
             raise ValueError('expired')
+        if result.get('edition') == 'trial' and self._profile_clock_established():
+            bind = self._state_bind()
+            st, _ = licence_state.read(bind)
+            if st in ('missing', 'corrupt'):
+                if licence_state.auth_available():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                raise ValueError('state_corrupt')
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
         self._clear_trial_latch()
         if result.get('edition') == 'trial':

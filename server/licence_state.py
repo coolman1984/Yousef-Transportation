@@ -14,6 +14,7 @@ import os
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 
 import atrest
 
@@ -21,6 +22,7 @@ STATE_VERSION = 1
 STATE_FILE = 'licence-clock.v1'
 AUTH_FILE = 'licence-state-auth'
 MIGRATION_MARKER = 'licence-clock-migrated.v1'
+PROFILE_LOCK_FILE = 'licence-state.profile.lock'
 
 _io_lock = threading.RLock()
 
@@ -29,7 +31,7 @@ def _profile_dir():
     return atrest._profile_dir()
 
 
-def _auth_key():
+def _read_auth_key_bytes():
     directory = _profile_dir()
     os.makedirs(directory, mode=0o700, exist_ok=True)
     path = os.path.join(directory, AUTH_FILE)
@@ -55,12 +57,54 @@ def _auth_key():
             break
         time.sleep(0.05)
     if len(data) != 32:
-        raise RuntimeError('licence state authentication file is damaged: ' + path)
+        return None
     try:
         os.chmod(path, 0o600)
     except OSError:
         pass
     return data
+
+
+def auth_available():
+    return _read_auth_key_bytes() is not None
+
+
+def _auth_key():
+    data = _read_auth_key_bytes()
+    if data is None:
+        path = os.path.join(_profile_dir(), AUTH_FILE)
+        raise RuntimeError('licence state authentication file is damaged: ' + path)
+    return data
+
+
+@contextmanager
+def _profile_file_lock():
+    """Serialize licence state writers that share one profile across data directories."""
+    directory = _profile_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    path = os.path.join(directory, PROFILE_LOCK_FILE)
+    f = open(path, 'a+')
+    try:
+        if os.name == 'nt':
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if os.name == 'nt':
+                import msvcrt
+                f.seek(0)
+                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+        f.close()
 
 
 def _state_path():
@@ -94,8 +138,15 @@ def _open(blob, bind_tag):
     if b'\n' not in blob:
         return None
     payload, mac = blob.rsplit(b'\n', 1)
-    expected = hmac.new(_auth_key(), payload, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(mac.decode('ascii'), expected):
+    key = _read_auth_key_bytes()
+    if key is None:
+        return None
+    expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+    try:
+        mac_text = mac.decode('ascii')
+    except UnicodeDecodeError:
+        return None
+    if not hmac.compare_digest(mac_text, expected):
         return None
     try:
         record = json.loads(payload.decode('utf-8'))
@@ -117,6 +168,8 @@ def read(bind_tag):
         with open(path, 'rb') as f:
             record = _open(f.read(), bind_tag)
     except OSError:
+        return 'corrupt', None
+    except RuntimeError:
         return 'corrupt', None
     if record is None:
         return 'corrupt', None
@@ -144,35 +197,44 @@ def seal_fail_closed(bind_tag, reason='state_corrupt'):
         record['fail_closed'] = True
         record['fail_closed_reason'] = str(reason or 'state_corrupt')
         record['trial_latch'] = True
-        save(record, bind_tag)
+        if auth_available():
+            save(record, bind_tag)
         return record
 
 
-def save(record, bind_tag):
+def _persist_record(record, bind_tag):
     record = dict(record)
     record['v'] = STATE_VERSION
     record['bind'] = bind_tag
     path = _state_path()
     atrest._write_0600(path, _seal(record))
+    if not record.get('fail_closed'):
+        mark_migration_done()
+
+
+def save(record, bind_tag):
+    with _profile_file_lock():
+        _persist_record(record, bind_tag)
 
 
 def mutate(bind_tag, updater, create=False):
     """Load, apply updater(record), save — serialized against concurrent writers."""
     with _io_lock:
-        status, record = read(bind_tag)
-        if status == 'ok' and record.get('fail_closed'):
-            return None
-        if status == 'corrupt':
-            return None
-        if status == 'missing':
-            if not create:
+        with _profile_file_lock():
+            status, record = read(bind_tag)
+            if status == 'ok' and record.get('fail_closed'):
                 return None
-            record = empty_record()
-        record = updater(dict(record))
-        if record is None:
-            return None
-        save(record, bind_tag)
-        return record
+            if status == 'corrupt':
+                return None
+            if status == 'missing':
+                if not create:
+                    return None
+                record = empty_record()
+            record = updater(dict(record))
+            if record is None:
+                return None
+            _persist_record(record, bind_tag)
+            return record
 
 
 def empty_record():

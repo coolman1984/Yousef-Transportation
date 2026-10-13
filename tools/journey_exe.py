@@ -138,6 +138,15 @@ def first(home, cmd):
                 prof = atrest._profile_dir()
                 print('DIAG profile dir:', prof, sorted((n, os.path.getsize(os.path.join(prof, n))) for n in os.listdir(prof)) if os.path.isdir(prof) else 'absent', flush=True)
                 bind = hashlib.sha256(f'AF-MACHINE/1|{_lic._machine_id()}|{_lic.PRODUCT_ID}'.encode('utf-8')).hexdigest()
+                try:
+                    _blob = open(os.path.join(prof, licence_state.STATE_FILE), 'rb').read()
+                    _payload, _mac = _blob.rsplit(b'\n', 1)
+                    _rec = json.loads(_payload)
+                    import hmac as _h
+                    print('DIAG state payload:', {k: _rec.get(k) for k in _rec if k != 'bind'}, 'bind_match:', _rec.get('bind') == bind,
+                          'mac_ok:', _h.compare_digest(_mac.decode(), _h.new(licence_state._read_auth_key_bytes(), _payload, hashlib.sha256).hexdigest()), flush=True)
+                except Exception:
+                    print('DIAG payload error:', traceback.format_exc(), flush=True)
                 print('DIAG state read:', licence_state.read(bind)[0], 'auth_available:', licence_state.auth_available(), 'marker:', licence_state.migration_marker_exists(), flush=True)
                 try:
                     with licence_state._profile_file_lock():

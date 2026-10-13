@@ -6,6 +6,7 @@ import gzip
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import threading
@@ -108,7 +109,12 @@ class Base(unittest.TestCase):
             extra['hub_url'] = cls.hub.url
         if with_keys:
             extra['licence_keys'] = [cls.hub.public()]
+        cls._profile_dir = tempfile.mkdtemp(prefix='triporders-profile-')
         os.environ['TO_DEVICE_ID'] = 'test-pc-' + name
+        os.environ['TRIPORDERS_DPAPI_DIR'] = cls._profile_dir
+        os.environ['XDG_CONFIG_HOME'] = cls._profile_dir
+        import atrest
+        atrest._MASTER = None
         cls.S = Server(name, extra_cfg=extra).start()
         cls.ac = make_authority(cls.S, consent=None)
 
@@ -117,6 +123,11 @@ class Base(unittest.TestCase):
         cls.S.cleanup()
         cls.hub.stop()
         os.environ.pop('TO_DEVICE_ID', None)
+        os.environ.pop('TRIPORDERS_DPAPI_DIR', None)
+        os.environ.pop('XDG_CONFIG_HOME', None)
+        import atrest
+        atrest._MASTER = None
+        shutil.rmtree(cls._profile_dir, ignore_errors=True)
 
     def flush(self):
         self.ac.post('/api/telemetry/flush', {})

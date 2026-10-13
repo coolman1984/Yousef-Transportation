@@ -439,6 +439,64 @@ class LicenceClockStateTest(unittest.TestCase):
                 st = l.status()
                 self.assertFalse(st['full'])
                 self.assertEqual(st['reason'], 'state_corrupt')
+                licence._cache.clear()
+                for _ in range(3):
+                    again = l.status()
+                    self.assertFalse(again['full'])
+                    self.assertEqual(again['reason'], 'state_corrupt')
+
+    def test_garbage_legacy_markers_fail_closed_without_reviving_trial(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            import licence_state
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                path = os.path.join(holder.profile_dir, licence_state.STATE_FILE)
+                os.remove(path)
+                l.a.kv('max_seen', 'not-valid|deadbeef')
+                l.a.kv(licence.TRIAL_EXPIRED_LATCH, 'bad|deadbeef')
+                licence._cache.clear()
+                st = l.status()
+                self.assertFalse(st['full'])
+                self.assertEqual(st['reason'], 'state_corrupt')
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+
+    def test_concurrent_state_writes_do_not_erase_expiry_latch(self):
+        import threading
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                bind = l.machine_tag()
+                ready = threading.Barrier(2)
+
+                def latch():
+                    ready.wait(timeout=2)
+                    l._trial_latch_set()
+
+                def watermark():
+                    ready.wait(timeout=2)
+                    l._write_max_seen(licence.utcnow())
+
+                threads = [threading.Thread(target=fn) for fn in (latch, watermark)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join(timeout=5)
+                licence._cache.clear()
+                st = l.status()
+                self.assertEqual(st['state'], 'expired')
+                self.assertFalse(st['full'])
 
     def test_plaintext_assist_max_seen_does_not_revive_expired_trial(self):
         with tempfile.TemporaryDirectory() as d:

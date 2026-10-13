@@ -1,14 +1,18 @@
 """Tamper-evident licence clock state kept outside assist.db.
 
-The authentication key lives only in the user profile (DPAPI stand-in), not in the
-office data directory. Resetting assist.db or install_id cannot forge or erase this
-protection without local-administrator access to the profile secret.
+The authentication key lives in the user profile, not in the office data directory.
+Resetting assist.db or install_id cannot forge clock state without also changing the
+profile secret file. That HMAC is tamper evidence against edits confined to assist.db
+or trips data — not a boundary against the same Windows user account running arbitrary
+code on this PC (the profile key is readable by that user). Windows DPAPI protection
+is the intended long-term hardening for sold builds.
 """
 import hashlib
 import hmac
 import json
 import os
 import secrets
+import threading
 import time
 
 import atrest
@@ -16,6 +20,9 @@ import atrest
 STATE_VERSION = 1
 STATE_FILE = 'licence-clock.v1'
 AUTH_FILE = 'licence-state-auth'
+MIGRATION_MARKER = 'licence-clock-migrated.v1'
+
+_io_lock = threading.RLock()
 
 
 def _profile_dir():
@@ -60,6 +67,19 @@ def _state_path():
     return os.path.join(_profile_dir(), STATE_FILE)
 
 
+def _migration_marker_path():
+    return os.path.join(_profile_dir(), MIGRATION_MARKER)
+
+
+def migration_marker_exists():
+    return os.path.exists(_migration_marker_path())
+
+
+def mark_migration_done():
+    path = _migration_marker_path()
+    atrest._write_0600(path, b'migrated\n')
+
+
 def _seal(record):
     payload = json.dumps(record, sort_keys=True, separators=(',', ':')).encode('utf-8')
     mac = hmac.new(_auth_key(), payload, hashlib.sha256).hexdigest()
@@ -88,15 +108,44 @@ def _open(blob, bind_tag):
     return record
 
 
-def load(bind_tag):
+def read(bind_tag):
+    """Return ('ok', record), ('missing', None), or ('corrupt', None)."""
     path = _state_path()
     if not os.path.exists(path):
-        return None
+        return 'missing', None
     try:
         with open(path, 'rb') as f:
-            return _open(f.read(), bind_tag)
+            record = _open(f.read(), bind_tag)
     except OSError:
-        return None
+        return 'corrupt', None
+    if record is None:
+        return 'corrupt', None
+    return 'ok', record
+
+
+def load(bind_tag):
+    status, record = read(bind_tag)
+    if status == 'ok':
+        return record
+    return None
+
+
+def is_fail_closed(bind_tag):
+    status, record = read(bind_tag)
+    return status == 'ok' and bool(record.get('fail_closed'))
+
+
+def seal_fail_closed(bind_tag, reason='state_corrupt'):
+    with _io_lock:
+        status, record = read(bind_tag)
+        if status == 'ok' and record.get('fail_closed'):
+            return record
+        record = empty_record()
+        record['fail_closed'] = True
+        record['fail_closed_reason'] = str(reason or 'state_corrupt')
+        record['trial_latch'] = True
+        save(record, bind_tag)
+        return record
 
 
 def save(record, bind_tag):
@@ -107,5 +156,24 @@ def save(record, bind_tag):
     atrest._write_0600(path, _seal(record))
 
 
+def mutate(bind_tag, updater, create=False):
+    """Load, apply updater(record), save — serialized against concurrent writers."""
+    with _io_lock:
+        status, record = read(bind_tag)
+        if status == 'ok' and record.get('fail_closed'):
+            return None
+        if status == 'corrupt':
+            return None
+        if status == 'missing':
+            if not create:
+                return None
+            record = empty_record()
+        record = updater(dict(record))
+        if record is None:
+            return None
+        save(record, bind_tag)
+        return record
+
+
 def empty_record():
-    return {'max_seen': None, 'hub_calendar_max': None, 'trial_latch': False}
+    return {'max_seen': None, 'hub_calendar_max': None, 'trial_latch': False, 'fail_closed': False}

@@ -5,10 +5,10 @@
   var TRIAL_BANNER_DAYS = 14;
 
   function trialDaysKey(n) {
-    return (TO.lang === 'en' && n === 1) ? 'lic.trialDaysLeft.one' : 'lic.trialDaysLeft';
+    return n === 1 ? 'lic.trialDaysLeft.one' : 'lic.trialDaysLeft';
   }
   function trialBannerKey(n) {
-    return (TO.lang === 'en' && n === 1) ? 'lic.trialBanner.one' : 'lic.trialBanner';
+    return n === 1 ? 'lic.trialBanner.one' : 'lic.trialBanner';
   }
 
   function trialCountdown(lic) {

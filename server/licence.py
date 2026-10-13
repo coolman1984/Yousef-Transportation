@@ -69,7 +69,8 @@ BACKOFF = (60, 300, 900, 3600)
 POLL = ((600, 20), (3600, 120), (10 ** 9, 600))
 SENT_FIELDS = ('product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version')
 ACTIVE = ('sending', 'waiting', 'failed')
-CLOCK_TOLERANCE_HOURS = 24
+CLOCK_TOLERANCE_HOURS = 1
+TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -160,7 +161,7 @@ class Licence:
         return hashlib.sha256(f'AF-MACHINE/1|{ident}|{PRODUCT_ID}'.encode('utf-8')).hexdigest()
 
     def _seen_now(self):
-        """The latest time this PC has shown: a clock moved back by more than a day locks changes until it is right again."""
+        """The latest time this PC has shown: a clock moved back beyond CLOCK_TOLERANCE_HOURS locks changes until it is right again."""
         now = utcnow()
         last = parse(self.a.kv('max_seen'))
         if not last or now > last:
@@ -168,6 +169,28 @@ class Licence:
                 self.a.kv('max_seen', iso(now))
             return False
         return now < last - timedelta(hours=CLOCK_TOLERANCE_HOURS)
+
+    def _effective_calendar_day(self, today=None):
+        """Latest calendar day this PC has credibly reached (local date or max_seen). Frozen clocks need hub calendar_day on poll."""
+        today = today or date.today()
+        last = parse(self.a.kv('max_seen'))
+        if last:
+            seen = last.date()
+            if seen > today:
+                today = seen
+        return today
+
+    def _note_hub_calendar_day(self, hub_day):
+        """Trust the hub's signed calendar (Africa/Cairo) so a stuck local clock cannot extend a trial forever."""
+        if not hub_day or not isinstance(hub_day, str):
+            return
+        try:
+            hub = datetime.strptime(hub_day[:10], '%Y-%m-%d').replace(tzinfo=None)
+        except ValueError:
+            return
+        last = parse(self.a.kv('max_seen'))
+        if not last or hub > last:
+            self.a.kv('max_seen', iso(hub + timedelta(hours=12)))
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -309,7 +332,7 @@ class Licence:
         keys = self.trusted_keys()
         code = self.a.kv('licence_code') or ''
         dev = self.device()
-        today = date.today()
+        today = self._effective_calendar_day()
         if not keys:
             # A broken commercial key policy must NOT unlock edits.
             return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
@@ -333,6 +356,16 @@ class Licence:
             else:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
+        if self.a.kv(TRIAL_EXPIRED_LATCH) == '1' and result.get('edition') == 'trial':
+            result.update(state='expired', full=False, reason='expired')
+        elif result.get('edition') == 'trial' and result.get('last_day'):
+            try:
+                last_day = date.fromisoformat(str(result['last_day']))
+                if today > last_day:
+                    self.a.kv(TRIAL_EXPIRED_LATCH, '1')
+                    result.update(state='expired', full=False, reason='expired')
+            except ValueError:
+                pass
         result['enforced'] = True
         result['build_channel'] = _BUILD_CHANNEL
         if clock_back and result['full']:
@@ -364,7 +397,7 @@ class Licence:
         if not keys:
             raise ValueError('no_keys')
         code = code if isinstance(code, str) else ''
-        result = self._check(code, self.device(), date.today(), keys)
+        result = self._check(code, self.device(), self._effective_calendar_day(), keys)
         if result['state'] == 'none':
             raise ValueError('no_code')                              # an empty box must never wipe the working code
         if result['state'] in ('invalid',):
@@ -372,6 +405,7 @@ class Licence:
         if result['state'] == 'expired':
             raise ValueError('expired')
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
+        self.a.kv(TRIAL_EXPIRED_LATCH, delete=True)
         if manual:
             self.a.kv('licence_manual_at', iso())
         with _lock:
@@ -517,18 +551,20 @@ class Licence:
                         st.update(status='failed', error='token', id=None, poll_token=None, nonce=str(uuid.uuid4()))
                     elif code != 200:
                         self._failed(st, f'http_{code}')
-                    elif d.get('status') == 'issued':
-                        self._activate(st, url, d.get('code'))
-                    elif d.get('status') == 'refused':
-                        st.update(status='refused', reason=d.get('reason') or 'refused', error='')
-                    elif d.get('status') == 'expired':
-                        st.update(status='closed', reason='expired', error='')
-                    elif d.get('status') == 'delivered':
-                        st.update(status='activated' if self.status()['full'] else 'closed', reason='delivered', error='')
                     else:
-                        age = (now - (parse(st['created_at']) or now)).total_seconds()
-                        st.update(status='waiting', error='', stage='approved' if d.get('stage') == 'approved' else '')
-                        self._soon(st, next(wait for limit, wait in POLL if age < limit))
+                        self._note_hub_calendar_day(d.get('calendar_day'))
+                        if d.get('status') == 'issued':
+                            self._activate(st, url, d.get('code'))
+                        elif d.get('status') == 'refused':
+                            st.update(status='refused', reason=d.get('reason') or 'refused', error='')
+                        elif d.get('status') == 'expired':
+                            st.update(status='closed', reason='expired', error='')
+                        elif d.get('status') == 'delivered':
+                            st.update(status='activated' if self.status()['full'] else 'closed', reason='delivered', error='')
+                        else:
+                            age = (now - (parse(st['created_at']) or now)).total_seconds()
+                            st.update(status='waiting', error='', stage='approved' if d.get('stage') == 'approved' else '')
+                            self._soon(st, next(wait for limit, wait in POLL if age < limit))
             except ConnectionError as e:
                 self._failed(st, 'offline:' + str(e))
             self._state(st)
@@ -548,7 +584,7 @@ class Licence:
         try:
             self._call('POST', url + '/licence/ack', {'id': st['id']}, token=st['poll_token'])
         except ConnectionError:
-            pass                                                    # saved and working; the hub drops the code by itself after two weeks
+            pass                                                    # saved and working; ack clears the code on the hub when it arrives
         st.update(status='activated', serial=self.status().get('serial'), error='', poll_token=None)
 
     def loop(self, every=20):

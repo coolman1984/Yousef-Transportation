@@ -17,10 +17,10 @@ Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screens
 - **Licence public keys:** one or more `kid:key` lines in `licence_keys.txt` next to `config.json` (or `TO_LICENCE_KEYS`, or `"licence_keys"` in `config.json`). With no key the program is "licence by contract" and nothing is enforced.
 
 ## Register the product (owner's PC / hub, once)
-1. Hub: add `trip-orders` to `LICENCE_PRODUCTS` of the Worker (`wrangler.toml` vars) and redeploy.
-2. Licence Studio (owner's trusted PC, never the Worker): register the product id `trip-orders`; the Studio signs device-bound codes, the Worker only carries them.
-3. Put the Studio's **public** key in `licence_keys.txt` of the build or installation.
-4. Control centre: register the installation (`install_id` is shown in Settings → Privacy & help) and give the install token.
+1. **Licence hub** (`licence-hub/` in this repository): deploy the Worker with `LICENCE_PRODUCTS` including `trip-orders` (`wrangler.toml` vars). Set `npx wrangler secret put LICENCE_SIGNING_KEY` with the PKCS#8 PEM Ed25519 **private** key (never in git). This hub **signs** 14-day trial codes online and for the owner phone UI.
+2. Licence Studio (owner's trusted PC): register the product id `trip-orders` for monthly/permanent and manual paste codes.
+3. Put the matching **public** key in `licence_keys.txt` of the build or installation (same key pair as `LICENCE_SIGNING_KEY`).
+4. Control centre (telemetry relay): register the installation (`install_id` is shown in Settings → Privacy & help) and give the install token for problem reports and usage counts.
 
 ## التفعيل البسيط (Simple activation)
 
@@ -33,10 +33,10 @@ Two paths use the **same** signed codes and rules; nothing new is invented.
 
 **Owner one-time setup** (not done from this repository; do not deploy from a customer PC):
 
-1. **Licence Studio** on the owner's trusted PC: register product id `trip-orders`; sign codes for the device code the customer sends.
-2. **Factory hub** (`templates/telemetry-relay`): add `trip-orders` to `LICENCE_PRODUCTS` in `wrangler.toml` and redeploy when you are ready.
-3. Put the Studio **public** key in `licence_keys.txt` (or the build's embedded keys) for installations that enforce codes.
-4. Optional: set `hub_url` / `FACTORY_HUB_URL` so the office can request a trial without typing a long code.
+1. **Licence hub** (`licence-hub/`): deploy the Worker, set `LICENCE_SIGNING_KEY` (private) and owner login secrets; trials are signed here.
+2. **Licence Studio** on the owner's trusted PC: monthly/permanent and manual codes for the device code the customer sends.
+3. Put the hub/Studio **public** key in `licence_keys.txt` (or the build's embedded keys) for installations that enforce codes.
+4. Set `hub_url` / `FACTORY_HUB_URL` to the licence hub URL so the office can request a trial without typing a long code.
 
 Advanced options (monthly/permanent requests, field preview) stay under **Details** on the Licence tab.
 

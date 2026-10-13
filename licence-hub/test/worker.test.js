@@ -37,6 +37,13 @@ test('owner dashboard is served at /owner/ with security headers', async () => {
   assert.ok(!String(await res.text()).includes('import {'), 'no inline module bootstrap');
 });
 
+test('logout without session does not send clearing Set-Cookie', async () => {
+  const e = env();
+  const res = await worker.fetch(new Request('https://hub.test/owner/logout', { method: 'POST' }), e);
+  assert.equal(res.status, 303);
+  assert.equal(res.headers.get('Set-Cookie'), null);
+});
+
 test('/owner/index.html redirects to /owner/', async () => {
   const e = env();
   const res = await worker.fetch(new Request('https://hub.test/owner/index.html'), e);

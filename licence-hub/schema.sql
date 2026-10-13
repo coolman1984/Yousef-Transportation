@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS licence_requests (
   product         TEXT NOT NULL,
   kind            TEXT NOT NULL,
   device          TEXT NOT NULL,
+  device_key      TEXT NOT NULL DEFAULT '',
   machine         TEXT NOT NULL,
   nonce           TEXT NOT NULL UNIQUE,
   shop            TEXT NOT NULL DEFAULT '',
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS licence_requests (
   updated_at      INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS licence_requests_status ON licence_requests(status, created_at);
+CREATE INDEX IF NOT EXISTS licence_requests_device_open ON licence_requests(device_key, status);
 
 CREATE TABLE IF NOT EXISTS machine_trials (
   machine    TEXT PRIMARY KEY,

@@ -33,7 +33,8 @@ export async function loadPending(host) {
     const when = new Date(item.created_at * 1000).toLocaleString('ar-EG');
     const kindLabel = kindLabelAr(item.kind);
     const paidNote = item.kind !== 'trial' ? '<div class="err">الاشتراك الشهري والدائم يُصدر من Licence Studio فقط — لا يمكن الموافقة من هنا.</div>' : '';
-    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · ' + escape(item.device) + '</div>' + paidNote + '<div class="muted">' + when + '</div></div>';
+    const usedNote = item.has_customer ? '<div class="err">هذا الجهاز لديه عميل مسجّل — الموافقة العادية مرفوضة؛ استخدم «إعادة إصدار» إن فُقد الكود.</div>' : '';
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · ' + escape(item.device) + '</div>' + paidNote + usedNote + '<div class="muted">' + when + '</div></div>';
     const row = document.createElement('div');
     row.className = 'row';
     const ok = document.createElement('button');
@@ -43,9 +44,18 @@ export async function loadPending(host) {
     ok.disabled = item.kind !== 'trial';
     ok.addEventListener('click', async () => {
       ok.disabled = true;
-      const res = await api('/approve', { method: 'POST', headers: headers(), body: JSON.stringify({ id: item.id, csrf }) });
+      const force = item.has_customer && confirm('إعادة إصدار تجربة لهذا الجهاز؟ (فقدان الكود فقط)');
+      const res = await api('/approve', { method: 'POST', headers: headers(), body: JSON.stringify({ id: item.id, csrf, force }) });
       if (res && res.error === 'paid_in_licence_studio') {
         alert('هذا الطلب اشتراك مدفوع — استخدم Licence Studio على جهاز المكتب.');
+      } else if (res && res.error === 'bad_device') {
+        alert('رمز الجهاز غير صالح — ارفض الطلب.');
+        ok.disabled = false;
+        return;
+      } else if (res && res.error && !res.ok) {
+        alert('تعذّرت الموافقة: ' + res.error);
+        ok.disabled = false;
+        return;
       }
       loadPending(host);
     });

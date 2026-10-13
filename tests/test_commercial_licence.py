@@ -236,6 +236,58 @@ class EncryptedTripsDbGraceTest(unittest.TestCase):
                     self.assertEqual(l._trips_meta(licence.UPGRADE_GRACE_EVER_META), '1')
 
 
+class TrialClockExpiryTest(unittest.TestCase):
+    """Trial end uses max(local day, max_seen day) and stays latched after clock rollback."""
+
+    def _trial_keypair(self):
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            self.skipTest('cryptography not installed')
+        private = Ed25519PrivateKey.generate()
+        pem = private.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        raw = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        public = base64.urlsafe_b64encode(raw).decode().rstrip('=')
+        return pem, public
+
+    def test_trial_latches_expired_after_max_seen_day_passes_last_day(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                device = l.device()
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=device)['code']
+                l.activate(code, manual=True)
+                licence._cache.clear()
+                l.a.kv('max_seen', licence.iso(licence.utcnow() + timedelta(days=10)))
+                st = l.status()
+                self.assertEqual(st['state'], 'expired')
+                self.assertFalse(st['full'])
+                self.assertEqual(l.a.kv(licence.TRIAL_EXPIRED_LATCH), '1')
+                with patch.object(l, '_effective_calendar_day', return_value=first):
+                    licence._cache.clear()
+                    st2 = l.status()
+                self.assertEqual(st2['state'], 'expired')
+
+    def test_hub_calendar_day_advances_max_seen_for_stuck_clock(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                future = (first + timedelta(days=40)).isoformat()
+                l._note_hub_calendar_day(future)
+                seen = licence.parse(l.a.kv('max_seen'))
+                self.assertIsNotNone(seen)
+                self.assertGreaterEqual(seen.date(), first + timedelta(days=40))
+
+
 class GraceNotLostByAccidentTest(unittest.TestCase):
     def test_unreadable_db_on_first_check_does_not_consume_grace(self):
         with tempfile.TemporaryDirectory() as d:

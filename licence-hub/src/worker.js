@@ -1,4 +1,4 @@
-import { handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, REASON_PAID_IN_STUDIO } from './licence-api.js';
+import { handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes, REASON_PAID_IN_STUDIO } from './licence-api.js';
 import { importSigningKey } from './afcodes.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -46,7 +46,7 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      "SELECT id, kind, shop, device, machine, version, created_at FROM licence_requests WHERE status IN ('pending', 'approved') ORDER BY created_at DESC LIMIT 50",
+      "SELECT r.id, r.kind, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
     ).all();
     return json({ items: rows.results || [] });
   }
@@ -70,12 +70,17 @@ async function ownerApi(request, env, url, session) {
 
   if (path === '/approve') {
     const key = await signingKey(env);
-    const signed = await approveRequest(env, body.id, key);
-    if (!signed) return json({ error: 'not_found' }, 404);
-    if (signed.refused) {
-      return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: 'paid_in_studio' }, 400);
+    try {
+      const signed = await approveRequest(env, body.id, key, { force: body.force === true });
+      if (!signed) return json({ error: 'not_found' }, 404);
+      if (signed.refused) {
+        return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: 'paid_in_studio' }, 400);
+      }
+      return json({ ok: true, code: signed.code });
+    } catch (e) {
+      if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
+      throw e;
     }
-    return json({ ok: true, code: signed.code });
   }
   if (path === '/refuse') {
     await refuseRequest(env, body.id, body.reason || 'refused');
@@ -86,8 +91,14 @@ async function ownerApi(request, env, url, session) {
     const shop = String(body.shop || '').trim();
     if (!device) return json({ error: 'device' }, 400);
     const key = await signingKey(env);
-    const signed = await issueOfflineCustomer(env, key, device, shop, 'trip-orders');
-    return json({ ok: true, code: signed.code, device: signed.device });
+    try {
+      const signed = await issueOfflineCustomer(env, key, device, shop, 'trip-orders', { force: body.force === true });
+      return json({ ok: true, code: signed.code, device: signed.device });
+    } catch (e) {
+      if (e?.message === 'already_used') return json({ error: 'already_used' }, 400);
+      if (e?.message === 'bad_device_code') return json({ error: 'bad_device' }, 400);
+      throw e;
+    }
   }
   return json({ error: 'not_found' }, 404);
 }
@@ -121,13 +132,9 @@ async function ownerPages(request, env, url) {
   if (url.pathname === '/owner/logout' && request.method === 'POST') {
     const session = await loadSession(env, sessionSecret, request);
     if (session) await destroySession(env, session.id);
-    return new Response(null, {
-      status: 303,
-      headers: {
-        Location: '/owner/login.html',
-        'Set-Cookie': cookieHeader(SESSION_COOKIE, '', 0),
-      },
-    });
+    const headers = { Location: '/owner/login.html' };
+    if (session) headers['Set-Cookie'] = cookieHeader(SESSION_COOKIE, '', 0);
+    return new Response(null, { status: 303, headers });
   }
 
   if (url.pathname.startsWith('/owner/api/')) {
@@ -176,5 +183,8 @@ export default {
     } catch (e) {
       return json({ error: 'server' }, 500);
     }
+  },
+  async scheduled(event, env) {
+    await purgeStaleCodes(env);
   },
 };

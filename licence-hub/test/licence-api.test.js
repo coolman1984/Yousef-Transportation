@@ -469,3 +469,67 @@ test('approval-race loser keeps no machine_trials rows and adds no customer', as
   const cust = (await e.DB.prepare('SELECT id FROM customers').bind().all()).results || [];
   assert.equal(cust.length, 1);
 });
+
+test('concurrent approval of the same request keeps device locks and one code', async () => {
+  const e = env();
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 41)));
+  const { data } = await postRequest(e, body());
+  const [a, b] = await Promise.all([approveRequest(e, data.id, key), approveRequest(e, data.id, key)]);
+  assert.ok(a?.code);
+  assert.equal(a.code, b.code);
+  const locks = (await e.DB.prepare('SELECT machine FROM machine_trials WHERE request_id = ?').bind(data.id).all()).results || [];
+  assert.ok(locks.length >= 1);
+  const cust = (await e.DB.prepare('SELECT id FROM customers').bind().all()).results || [];
+  assert.equal(cust.length, 1);
+});
+
+test('separate offline queues on one database return the same issued code', async () => {
+  const db = newD1();
+  const mk = () => ({
+    DB: db,
+    SESSION_SECRET: SECRET,
+    LICENCE_PRODUCTS: 'trip-orders',
+    TRIAL_DAYS: '14',
+    LICENCE_CALENDAR_TZ: 'Africa/Cairo',
+    _offlineTails: new Map(),
+  });
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 43)));
+  const device = '7KD2M-QX9TP';
+  const [a, b] = await Promise.all([
+    issueOfflineCustomer(mk(), key, device, 'A', 'trip-orders'),
+    issueOfflineCustomer(mk(), key, device, 'B', 'trip-orders'),
+  ]);
+  assert.equal(a.code, b.code);
+  const cust = (await db.prepare('SELECT id FROM customers').bind().all()).results || [];
+  assert.equal(cust.length, 1);
+});
+
+test('owner approval migrates legacy hash lock before issuing second trial', async () => {
+  const e = env();
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 44)));
+  const oldDev = '7KD2M-QX9TP';
+  const newDev = 'ABCDE-FGHJK';
+  const dkeyOld = deviceKey(oldDev);
+  const t = 1;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('legacy-del', 'h0', 'trip-orders', 'trial', oldDev, dkeyOld, MACHINE_A, 'n0', '', '', '', 'delivered', 'OLD-CODE', t, t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind(dkeyOld, 'legacy-del', t).run();
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('pending-new', 'h9', 'trip-orders', 'trial', newDev, deviceKey(newDev), MACHINE_A, 'n9', '', '', '', 'pending', t, t).run();
+  const out = await approveRequest(e, 'pending-new', key);
+  assert.equal(out, null);
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('pending-new').first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'already_used');
+});
+
+test('TRIAL_DAYS above 14 refuses to sign offline trials', async () => {
+  const e = { ...env(), TRIAL_DAYS: '30' };
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 55)));
+  await assert.rejects(
+    () => issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders'),
+    /trial_days_out_of_range/,
+  );
+});

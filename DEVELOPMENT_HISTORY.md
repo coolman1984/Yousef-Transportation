@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Merge feat/simple-trial-activation into feat/licence-standard (2026-10-13)
+
+**What/why:** Resolved `server/licence.py` and `DEVELOPMENT_HISTORY.md` conflicts keeping PR #29 clock/bootstrap/review rules plus PR #31 paid hub-calendar recovery, calendar retry backoff, and hub time rate limiting. Hub poll catch-up is capped at eight seven-day steps per request so a stuck partial step cannot spin at 100% CPU; remaining days wait for the next scheduled retry.
+**Checks:** `python3 -m unittest discover -s tests`; `cd licence-hub && node --test`.
+**Next:** Push branch; PR #31 review.
+
 ## Paid hub calendar survives damaged profile clock (2026-10-13)
 
 **Branch/source:** `feat/licence-standard`, local session fix for REVIEW-time3 P1.
@@ -16,12 +22,53 @@
 **Checks:** `PYTHONDONTWRITEBYTECODE=1 python3 -W ignore::ResourceWarning -m unittest discover -s tests -p test_commercial_licence.py`: 39 passed, no skips. `test_assist.py`: 22 passed, including real paid hub expiry over HTTP, denied writes, preserved records, export/backup and restart persistence. Full Python discovery with Playwright and existing Chrome enabled in an isolated test virtual environment: 445 run, 443 passed, two expected skips (Windows-only open-SQLite rename check; absent owner's private workbook), no failures. `cd licence-hub && npm test`: 40 passed; plain `node --test`: 42 discovered/passed including helper files; corrected race regression passed 12 additional runs. `git diff --check`: clean.
 **Remaining/next:** Local commit only; no push, deployment, or Windows installer acceptance. Redeploy the hub and rebuild/verify the customer candidate separately. Built-in rate limiting is best effort per Worker isolate, not a global invocation-quota guarantee. The pre-existing contract-to-commercial 30-day upgrade allowance still uses `utcnow()`; this change does not claim hub-date enforcement for that separate allowance. The untracked review and `.model-fallback.log` remain untouched and uncommitted. No customer data or secrets were used.
 
+## Windows binary licence clock writes (2026-10-13)
+
+**What:** `os.O_BINARY` on profile/sealed file writes; read compat for CRLF clock separators and damaged auth keys; paid `activate()` bootstraps clock only when state is `missing`; CI journey DIAG removed.
+**Why:** windows-installer: text-mode `os.open` on Windows corrupted HMAC payloads (`\r\n` separator) so every activation read `corrupt`.
+**Checks:** `python3 -m unittest discover -s tests` from repo root.
+**Next:** PR review and merge.
+
+## Review 11 — paid bootstrap on fresh TO_HOME, block clock revive (2026-10-13)
+
+**What:** Fresh paid `activate()` writes the first clock record when no code was stored yet (CI profile marker + missing/corrupt state); `status()` never auto-creates a clock when a code or profile auth already exists; trial replay blocked via `auth_key_on_disk()` in `_licence_clock_past_initial_use()`; hub refuses `TRIAL_DAYS` outside 1..14; regressions for wiped paid clocks, trial replay, and frozen `utcnow` catch-up.
+**Why:** Review 11 / windows-installer: shared profile migration marker left paid activation at `state_corrupt`; removing auth from establishment reopened expired paid/trial clocks.
+**Checks:** `cd licence-hub && node --test` (44 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
+## CI journey fresh paid activation (2026-10-13)
+
+**What:** `_profile_clock_established()` no longer treats a profile auth key file alone as established (fixes windows-installer journey when an earlier CI step created auth under the same Windows user); `ci_signing_key.py` writes `studio:` kid; regression test for ci-test paid activate with orphan auth.
+**Why:** windows-installer `journey_exe.py first` returned `full=False` after valid standard activation on a fresh `TO_HOME`.
+**Checks:** `cd licence-hub && node --test`; `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
+## Review 10 — licence clock fail-closed hardening (2026-10-13)
+
+**What:** Trial replay blocked when code/auth/marker/flag show prior use but clock file is gone or sealed; fail-closed seals rewrite migration marker; hub days clamp forward up to seven days per poll (frozen clock catch-up); profile lock contention no longer seals healthy state; paid activation clears trial fail-closed seal; established profile never recreates clock from a near hub day after file delete.
+**Why:** Review 10: unsigned marker delete reopened trials, far hub days ignored forever on frozen PCs, lock errors sealed good trials, paid codes blocked by trial seal, deleted paid clock revived by near hub day.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (452 run, 40 skipped, 0 failures).
+**Next:** PR review and merge.
+
+## Review 9 — profile marker establishment, paid clock tamper, hub jump cap (2026-10-13)
+
+**What:** Profile migration marker counts as established clock state (assist.db flag clear no longer revives trials); paid licences deny `full` when established state file is missing without writing empty fail-closed seals; hub calendar days capped at `HUB_CALENDAR_MAX_JUMP_DAYS` per step; profile lock setup errors fail closed; Windows lock uses binary lock file with content.
+**Why:** Review 9: state-file bypass after flag delete, paid hub expiry dropped on file delete, unbounded hub day latch, lock errors escaping `status()`.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (448 run, 40 skipped, 0 failures).
+**Next:** PR review and merge; owner hub redeploy unchanged unless already on branch.
+
 ## Paid licence calendar protection (2026-10-13)
 
 **Branch/source:** `feat/simple-trial-activation` (PR #29), based on `1baa861`; licence protection for the commercial candidate (L1), no pilot acceptance claimed.
 **What/why:** Public, uncached `/licence/time` reuses the hub calendar helper without DB/secrets. Client checks every six hours for all editions, even expired-looking codes or open requests; failed attempts stay rate limited and trial watch polling continues. Forward-only hub days expire paid codes beyond signed grace with `full=False`; existing read/export/backup access remains. No usage counters, secrets or user data changed. Updated hub guide, release notes and test map.
 **Checks:** `cd tests && python3 -W ignore::ResourceWarning -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto`: 110 run, 109 pass, one Windows-only SQLite rename test skipped on Linux (commercial licence module: 34 pass). `cd licence-hub && node --test`: 40 pass; no `node_modules` present. `git diff --check`: clean.
 **Remaining/next:** Local commit only; no push/deployment. Updated hub deployment, rebuilt Windows installer and field verification remain necessary. Existing `.model-fallback.log` left untouched and uncommitted.
+## Review 8 — trial state integrity, hub idempotency, fail-closed reads (2026-10-13)
+
+**What:** Block trial activation and legacy migration after established profile clock; monotonic `max_seen`; profile file lock + migration marker on save; corrupt auth/state reads fail closed without raising; hub approve/offline transactional claim cleanup, same-request idempotent issue, owner-path legacy `h:` migration, per-env offline queue + DB-authoritative code return.
+**Why:** Codex review 8: missing-state replay, approval retry deleting winner locks, offline multi-instance duplicate codes, owner approve before migration, clock watermark rollback, damaged key crashes.
+**Checks:** `cd licence-hub && node --test` (40 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (107 pass, 1 skip).
+**Next:** Owner redeploy licence hub; commercial rebuild only if shipping these server fixes.
 
 ## Review 7 — fail-closed trial state, D1 transactions, owner recovery (2026-10-13)
 

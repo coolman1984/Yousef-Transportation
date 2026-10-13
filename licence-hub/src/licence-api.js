@@ -4,7 +4,14 @@ import { calendarDateInTz } from './calendar.js';
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
-const offlineTails = new Map();
+const defaultOfflineTails = new Map();
+
+function offlineTailMap(env) {
+  if (!env._offlineTails) {
+    env._offlineTails = defaultOfflineTails;
+  }
+  return env._offlineTails;
+}
 const WINDOW = 600;
 const TIME_IP_LIMIT = 120;
 const TIME_MAX_IPS = 5000;
@@ -19,6 +26,17 @@ const MAX_MACHINE = 128;
 const MAX_NONCE = 80;
 const MAX_PENDING_PER_IP = 8;
 const DEFAULT_PENDING_TTL_SEC = 900;
+const TRIAL_DAYS_MIN = 1;
+const TRIAL_DAYS_MAX = 14;
+
+/** Inclusive trial length the hub may sign (office reader caps at 14 regardless of env). */
+export function hubTrialDaysInclusive(raw) {
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days < TRIAL_DAYS_MIN || days > TRIAL_DAYS_MAX) {
+    throw new Error('trial_days_out_of_range');
+  }
+  return Math.floor(days);
+}
 
 async function sha256Hex(data) {
   const buf = typeof data === 'string' ? enc.encode(data) : data;
@@ -365,19 +383,26 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   stmts.push(env.DB.prepare(
     'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
   ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code));
+  stmts.push(env.DB.prepare(
+    'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
+  ).bind(requestId, requestId));
   const results = await env.DB.batch(stmts);
   const issued = results[locks.length]?.meta?.changes > 0;
   if (!issued) {
-    await env.DB.prepare('DELETE FROM machine_trials WHERE request_id = ?').bind(requestId).run();
+    const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+    if (existing?.code && existing.status === 'issued') {
+      return { ok: true, signed: signedFromRow(existing) };
+    }
     await env.DB.prepare(
       'UPDATE licence_requests SET code = NULL, status = ?, reason = ?, updated_at = ? WHERE id = ? AND code IS NULL',
     ).bind('refused', 'already_used', t, requestId).run();
-    return false;
+    return { ok: false };
   }
-  return true;
+  return { ok: true, signed };
 }
 
 export async function approveRequest(env, requestId, privateKey, options = {}) {
+  await migrateLegacyTrialLocks(env);
   const force = options.force === true;
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (!row || row.status === 'refused' || row.status === 'delivered') return null;
@@ -411,7 +436,7 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
   }
 
   const t = now();
-  const days = Number(env.TRIAL_DAYS || 14);
+  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
   const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   let signed;
   try {
@@ -423,9 +448,9 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     throw e;
   }
 
-  const ok = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, { shop: row.shop, kind: row.kind });
-  if (!ok) return null;
-  return signed;
+  const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, { shop: row.shop, kind: row.kind });
+  if (!outcome.ok) return null;
+  return outcome.signed || signed;
 }
 
 export async function refuseRequest(env, requestId, reason = 'refused') {
@@ -498,19 +523,32 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     throw new Error('already_used');
   }
 
-  const days = Number(env.TRIAL_DAYS || 14);
+  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
   const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
   const issueSql =
     'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ? WHERE id = ? AND code IS NULL AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
   const customerStmt = env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t);
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
+  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code);
+  const cleanupStmt = env.DB.prepare(
+    'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
+  ).bind(requestId, requestId);
   try {
-    await env.DB.batch([
+    const results = await env.DB.batch([
       env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
       customerStmt,
+      cleanupStmt,
     ]);
+    const issued = results[0]?.meta?.changes > 0;
+    if (!issued) {
+      const row = await waitForIssuedOffline(env, requestId);
+      if (row) {
+        await ensureCustomerRecord(env, row, signedFromRow(row), t);
+        return signedFromRow(row);
+      }
+      throw new Error('already_used');
+    }
   } catch (e) {
     const row = await waitForIssuedOffline(env, requestId);
     if (row) {
@@ -519,30 +557,27 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     }
     throw e;
   }
-  const row = await env.DB.prepare('SELECT code, status FROM licence_requests WHERE id = ?').bind(requestId).first();
-  if (!row?.code || row.status !== 'issued') {
-    const again = await waitForIssuedOffline(env, requestId);
-    if (again) {
-      await ensureCustomerRecord(env, again, signedFromRow(again), t);
-      return signedFromRow(again);
-    }
-    const retry = await env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId).run();
-    if (retry.meta?.changes) {
-      await ensureCustomerRecord(env, { shop }, signed, t);
-      return signed;
-    }
-    throw new Error('already_used');
+  const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+  if (row?.code && row.status === 'issued') {
+    await ensureCustomerRecord(env, row, signed, t);
+    return signedFromRow(row);
   }
-  return signed;
+  const again = await waitForIssuedOffline(env, requestId);
+  if (again) {
+    await ensureCustomerRecord(env, again, signedFromRow(again), t);
+    return signedFromRow(again);
+  }
+  throw new Error('already_used');
 }
 
 export function issueOfflineCustomer(env, privateKey, device, shop, productId, options = {}) {
   const dkey = deviceKey(device);
-  const prev = offlineTails.get(dkey) || Promise.resolve();
+  const tails = offlineTailMap(env);
+  const prev = tails.get(dkey) || Promise.resolve();
   const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, privateKey, device, shop, productId, options));
-  offlineTails.set(dkey, job);
+  tails.set(dkey, job);
   return job.finally(() => {
-    if (offlineTails.get(dkey) === job) offlineTails.delete(dkey);
+    if (tails.get(dkey) === job) tails.delete(dkey);
   });
 }
 

@@ -90,10 +90,12 @@ HUB_WATCH_KEY = 'licence_hub_watch'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
 HUB_CALENDAR_RETRY_SEC = 5 * 60
 HUB_CALENDAR_MAX_JUMP_DAYS = 7
+HUB_CALENDAR_CATCHUP_STEPS_PER_POLL = 8
 TRIAL_HUB_KIDS = frozenset({'trial-hub', 'trial_hub', 'hub-trial'})
 _hub_poll_mono = None
 _hub_retry_at_mono = None
 _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+_partial_hub_catchup = False
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -223,16 +225,72 @@ class Licence:
             return None
         return value
 
+    def _profile_clock_established(self):
+        """True once this office has used the sealed clock profile (not merely a shared OS profile auth file)."""
+        if self.a.kv('licence_clock_profile') == '1':
+            return True
+        if licence_state.migration_marker_exists():
+            return True
+        return False
+
+    def _licence_clock_past_initial_use(self):
+        """Licence or clock profile was used before (fail-closed when the clock file is gone)."""
+        if self._profile_clock_established():
+            return True
+        if (self.a.kv('licence_code') or '').strip():
+            return True
+        if licence_state.auth_key_on_disk():
+            return True
+        return False
+
+    def _stored_licence_code(self):
+        return bool((self.a.kv('licence_code') or '').strip())
+
+    def _clock_file_missing_or_corrupt(self):
+        status, _ = licence_state.read(self._state_bind())
+        return status in ('missing', 'corrupt')
+
+    def _disallow_automatic_clock_create(self):
+        """Never recreate a deleted clock from status() reads or hub notes."""
+        if not self._clock_file_missing_or_corrupt():
+            return False
+        if self._stored_licence_code():
+            return True
+        if licence_state.auth_key_on_disk():
+            return True
+        return False
+
+    def _licence_auth_usable(self):
+        """Auth key for sealing; never mint a new key when a licence code is already stored."""
+        if (self.a.kv('licence_code') or '').strip() and not licence_state.auth_key_on_disk():
+            return False
+        return licence_state.auth_available()
+
+    def _allow_clock_state_create(self):
+        if self._disallow_automatic_clock_create():
+            return False
+        if self._profile_clock_established():
+            return False
+        return True
+
+    def _seal_clock_state_if_missing_or_corrupt(self, bind):
+        status, _ = licence_state.read(bind)
+        if status in ('missing', 'corrupt') and self._trial_state_required() and self._licence_auth_usable():
+            licence_state.seal_fail_closed(bind, 'state_corrupt')
+
     def _migrate_clock_state_once(self):
         bind = self._state_bind()
+        if self._profile_clock_established():
+            status, _ = licence_state.read(bind)
+            if status in ('missing', 'corrupt'):
+                self._seal_clock_state_if_missing_or_corrupt(bind)
+            return
         status, _ = licence_state.read(bind)
         if status == 'ok':
             return
         if status == 'corrupt':
             if self._trial_state_required():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
-            return
-        if licence_state.migration_marker_exists():
             return
         legacy_max = self.a.kv('max_seen')
         legacy_latch = self.a.kv(TRIAL_EXPIRED_LATCH)
@@ -265,6 +323,10 @@ class Licence:
             if self._trial_state_required():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
             return licence_state.load(bind)
+        if status == 'missing' and self._profile_clock_established():
+            if self._trial_state_required():
+                self._seal_clock_state_if_missing_or_corrupt(bind)
+            return licence_state.load(bind) if self._trial_state_required() else None
         if not create:
             return None
         record = licence_state.empty_record()
@@ -315,8 +377,6 @@ class Licence:
     def _clock_state_ok(self):
         if self._paid_hub_calendar_required():
             return self._hub_calendar_max_day() is not None
-        if not self._trial_state_required():
-            return True
         bind = self._state_bind()
         status, record = licence_state.read(bind)
         if status == 'ok':
@@ -324,31 +384,45 @@ class Licence:
         if status == 'corrupt':
             return False
         if status == 'missing':
-            return self.a.kv('licence_clock_profile') != '1'
+            if self._stored_licence_code():
+                return False
+            if self._profile_clock_established():
+                return False
+            return not self._trial_state_required()
         return False
 
     def _read_max_seen(self):
-        trial = self._trial_state_required()
-        create = not trial and not self._paid_hub_calendar_required()
-        record = self._clock_record(create=create)
+        allow_create = (
+            not self._trial_state_required()
+            and not self._paid_hub_calendar_required()
+            and not self._disallow_automatic_clock_create()
+        )
+        record = self._clock_record(create=allow_create)
         if record is None:
             return None
         return parse(record.get('max_seen') or '')
 
     def _write_max_seen(self, when):
         bind = self._state_bind()
+        if licence_state.is_fail_closed(bind):
+            return
         profile = self.a.kv('licence_clock_profile') == '1'
 
         def updater(record):
+            prev = parse(record.get('max_seen') or '')
+            if prev and when <= prev:
+                return record
             record['max_seen'] = iso(when)
             record['fail_closed'] = False
             record.pop('fail_closed_reason', None)
             return record
 
-        if licence_state.mutate(bind, updater, create=not profile) is not None:
+        create = self._allow_clock_state_create() if not profile else False
+        if licence_state.mutate(bind, updater, create=create) is not None:
             self._note_profile_clock_established()
             return
         if not profile:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         if self._trial_state_required() or not self._paid_hub_calendar_required():
             licence_state.seal_fail_closed(bind, 'state_corrupt')
@@ -374,7 +448,7 @@ class Licence:
         except ValueError:
             return None
 
-    def _write_hub_calendar_max_day(self, hub_date):
+    def _write_hub_calendar_max_day(self, hub_date, recover_clock=False):
         bind = self._state_bind()
 
         def apply_hub(record):
@@ -391,10 +465,13 @@ class Licence:
             record.pop('fail_closed_reason', None)
             return record
 
-        saved = licence_state.mutate(bind, apply_hub, create=True)
-        if saved is None:
+        create = True if recover_clock else self._allow_clock_state_create()
+        saved = licence_state.mutate(bind, apply_hub, create=create)
+        if saved is None and recover_clock:
             saved = self._recover_clock_record(apply_hub)
         if saved is None:
+            if self._trial_state_required():
+                self._seal_clock_state_if_missing_or_corrupt(bind)
             return False
         self._note_profile_clock_established()
         self._note_hub_calendar_established()
@@ -409,8 +486,8 @@ class Licence:
             record['trial_latch'] = True
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         self._note_profile_clock_established()
 
@@ -467,8 +544,12 @@ class Licence:
             today = last.date()
         return today
 
-    def _note_hub_calendar_day(self, hub_day):
-        """Record hub business calendar progress without fabricating a UTC instant."""
+    def _note_hub_calendar_day(self, hub_day, recover_clock=False):
+        """Record hub business calendar progress without fabricating a UTC instant.
+
+        Returns True when the requested day is stored, False on failure or no-op,
+        and 'partial' when the hub day is ahead but only a capped step was stored.
+        """
         if not isinstance(hub_day, str) or len(hub_day) != 10:
             return False
         try:
@@ -477,13 +558,26 @@ class Licence:
             return False
         if hub_date.isoformat() != hub_day:
             return False
+        requested = hub_date
         current = self._hub_calendar_max_day()
         if current and hub_date <= current:
             return current == hub_date
-        if not self._write_hub_calendar_max_day(hub_date):
+        effective = date.today()
+        if current and current > effective:
+            effective = current
+        last = self._read_max_seen()
+        if last and last.date() > effective:
+            effective = last.date()
+        if hub_date > effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS):
+            hub_date = effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS)
+        if not self._write_hub_calendar_max_day(hub_date, recover_clock=recover_clock):
             return False
         stored = self._hub_calendar_max_day()
-        return stored == hub_date
+        if stored != hub_date:
+            return False
+        if requested > stored:
+            return 'partial'
+        return True
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -649,12 +743,21 @@ class Licence:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
         state_ok = self._clock_state_ok()
-        if self._trial_state_required() and not state_ok:
+        if not state_ok:
             bind = self._state_bind()
             status, _ = licence_state.read(bind)
-            if status == 'corrupt' or self.a.kv('licence_clock_profile') == '1':
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
-            result.update(state='invalid', full=False, reason='state_corrupt')
+            if self._trial_state_required():
+                if (
+                    status in ('missing', 'corrupt')
+                    or self.a.kv('licence_clock_profile') == '1'
+                    or licence_state.migration_marker_exists()
+                ) and self._licence_auth_usable():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                result.update(state='invalid', full=False, reason='state_corrupt')
+            elif self._stored_licence_code() and status in ('missing', 'corrupt'):
+                result.update(full=False, reason='state_corrupt')
+            elif self._profile_clock_established():
+                result.update(full=False, reason='state_corrupt')
             clock_back = False
         elif self._paid_hub_calendar_required() and not state_ok:
             result.update(state='invalid', full=False, reason='state_corrupt')
@@ -714,6 +817,22 @@ class Licence:
             raise ValueError(result['reason'] or 'invalid')
         if result['state'] == 'expired':
             raise ValueError('expired')
+        bind = self._state_bind()
+        had_code = self._stored_licence_code()
+        st, _ = licence_state.read(bind)
+        if result.get('edition') == 'trial' and self._licence_clock_past_initial_use():
+            if st in ('missing', 'corrupt') or licence_state.is_fail_closed(bind):
+                if self._licence_auth_usable():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                raise ValueError('state_corrupt')
+        elif result.get('edition') != 'trial':
+            if not had_code and st == 'missing':
+                if licence_state.auth_available():
+                    licence_state.save(licence_state.empty_record(), bind)
+                    self._note_profile_clock_established()
+            elif had_code and licence_state.is_fail_closed(bind):
+                if self._licence_auth_usable():
+                    licence_state.save(licence_state.empty_record(), bind)
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
         self._clear_trial_latch()
         if result.get('edition') == 'trial':
@@ -931,7 +1050,7 @@ class Licence:
             return None
 
     def _poll_hub_calendar(self):
-        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec
+        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec, _partial_hub_catchup
         url = self.hub()
         if not url:
             return
@@ -943,10 +1062,26 @@ class Licence:
             if not self._hub_calendar_sync_due():
                 return
         synced = False
+        noted = False
+        catchup_steps = 0
+        prev_stored = self._hub_calendar_max_day()
         try:
-            code, d = self._call('GET', url + '/licence/time')
-            if code == 200 and isinstance(d, dict):
-                synced = self._note_hub_calendar_day(d.get('calendar_day'))
+            while True:
+                code, d = self._call('GET', url + '/licence/time')
+                if code == 200 and isinstance(d, dict):
+                    noted = self._note_hub_calendar_day(d.get('calendar_day'), recover_clock=True)
+                    if noted == 'partial':
+                        _partial_hub_catchup = True
+                        stored = self._hub_calendar_max_day()
+                        if stored == prev_stored:
+                            break
+                        prev_stored = stored
+                        catchup_steps += 1
+                        if catchup_steps >= HUB_CALENDAR_CATCHUP_STEPS_PER_POLL:
+                            break
+                        continue
+                    synced = noted is True
+                break
             if synced:
                 with _lock:
                     _cache.clear()
@@ -957,6 +1092,8 @@ class Licence:
             _hub_poll_mono = now_mono
             _hub_retry_at_mono = None
             _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+        elif noted == 'partial':
+            _hub_retry_at_mono = now_mono
         else:
             _hub_retry_at_mono = now_mono + _hub_retry_delay_sec
             _hub_retry_delay_sec = min(_hub_retry_delay_sec * 2, HUB_CALENDAR_POLL_SEC)
@@ -970,7 +1107,8 @@ class Licence:
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
-            if code == 200 and isinstance(d, dict) and self._note_hub_calendar_day(d.get('calendar_day')):
+            if code == 200 and isinstance(d, dict) and self._note_hub_calendar_day(
+                    d.get('calendar_day'), recover_clock=True) is True:
                 with _lock:
                     _cache.clear()
             elif code == 401:
@@ -994,4 +1132,9 @@ class Licence:
             time.sleep(every)
 
     def start(self):
+        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec, _partial_hub_catchup
+        _hub_poll_mono = None
+        _hub_retry_at_mono = None
+        _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+        _partial_hub_catchup = False
         threading.Thread(target=self.loop, daemon=True, name='licence').start()

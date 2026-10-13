@@ -25,8 +25,9 @@ def main():
         serialization.NoEncryption()))
     public = base64.urlsafe_b64encode(private.public_key().public_bytes(
         serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip("=")
+    # studio: matches commercial kid policy; bare keys remain accepted by release_policy.py
     with open(env, "a", encoding="utf-8") as f:
-        f.write("TO_RELEASE_PUBLIC_KEYS=" + public + "\n")
+        f.write("TO_RELEASE_PUBLIC_KEYS=studio:" + public + "\n")
         f.write("TO_TEST_SIGNING_KEY_FILE=" + str(key_path) + "\n")
         f.write("TO_BUILD_CHANNEL=ci-test\n")
     print("Created ephemeral public verification key for CI test-build; NO customer release")

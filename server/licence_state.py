@@ -14,6 +14,7 @@ import os
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 
 import atrest
 
@@ -21,21 +22,27 @@ STATE_VERSION = 1
 STATE_FILE = 'licence-clock.v1'
 AUTH_FILE = 'licence-state-auth'
 MIGRATION_MARKER = 'licence-clock-migrated.v1'
+PROFILE_LOCK_FILE = 'licence-state.profile.lock'
 
 _io_lock = threading.RLock()
+_O_BINARY = getattr(os, 'O_BINARY', 0)
+
+
+class ProfileLockUnavailable(Exception):
+    """Profile lock file could not be opened or locked (another process or OS error)."""
 
 
 def _profile_dir():
     return atrest._profile_dir()
 
 
-def _auth_key():
+def _read_auth_key_bytes():
     directory = _profile_dir()
     os.makedirs(directory, mode=0o700, exist_ok=True)
     path = os.path.join(directory, AUTH_FILE)
     for _ in range(5):
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_BINARY, 0o600)
         except FileExistsError:
             break
         else:
@@ -54,13 +61,78 @@ def _auth_key():
         if len(data) == 32:
             break
         time.sleep(0.05)
+    if len(data) != 32 and len(data) >= 33:
+        fixed = data.replace(b'\r\n', b'\n')
+        if len(fixed) == 32:
+            data = fixed
     if len(data) != 32:
-        raise RuntimeError('licence state authentication file is damaged: ' + path)
+        return None
     try:
         os.chmod(path, 0o600)
     except OSError:
         pass
     return data
+
+
+def auth_key_on_disk():
+    """True when a valid 32-byte auth key file exists (never creates one)."""
+    path = os.path.join(_profile_dir(), AUTH_FILE)
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return False
+    return len(data) == 32
+
+
+def auth_available():
+    return _read_auth_key_bytes() is not None
+
+
+def _auth_key():
+    data = _read_auth_key_bytes()
+    if data is None:
+        path = os.path.join(_profile_dir(), AUTH_FILE)
+        raise RuntimeError('licence state authentication file is damaged: ' + path)
+    return data
+
+
+@contextmanager
+def _profile_file_lock():
+    """Serialize licence state writers that share one profile across data directories."""
+    directory = _profile_dir()
+    os.makedirs(directory, mode=0o700, exist_ok=True)
+    path = os.path.join(directory, PROFILE_LOCK_FILE)
+    f = None
+    try:
+        if os.name == 'nt':
+            if not os.path.exists(path) or os.path.getsize(path) < 1:
+                with open(path, 'wb') as init:
+                    init.write(b'\n')
+            f = open(path, 'r+b')
+            import msvcrt
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            f = open(path, 'a+')
+            import fcntl
+            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+        yield
+    except OSError as exc:
+        raise ProfileLockUnavailable(str(exc)) from exc
+    finally:
+        if f is not None:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            f.close()
 
 
 def _state_path():
@@ -86,6 +158,15 @@ def _seal(record):
     return payload + b'\n' + mac.encode('ascii')
 
 
+def _mac_ok(key, payload, mac):
+    expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+    try:
+        mac_text = mac.decode('ascii')
+    except UnicodeDecodeError:
+        return False
+    return hmac.compare_digest(mac_text, expected)
+
+
 def _open(blob, bind_tag):
     if not blob:
         return None
@@ -94,8 +175,14 @@ def _open(blob, bind_tag):
     if b'\n' not in blob:
         return None
     payload, mac = blob.rsplit(b'\n', 1)
-    expected = hmac.new(_auth_key(), payload, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(mac.decode('ascii'), expected):
+    key = _read_auth_key_bytes()
+    if key is None:
+        return None
+    if not _mac_ok(key, payload, mac) and payload.endswith(b'\r'):
+        payload = payload[:-1]
+        if not _mac_ok(key, payload, mac):
+            return None
+    elif not _mac_ok(key, payload, mac):
         return None
     try:
         record = json.loads(payload.decode('utf-8'))
@@ -117,6 +204,8 @@ def read(bind_tag):
         with open(path, 'rb') as f:
             record = _open(f.read(), bind_tag)
     except OSError:
+        return 'corrupt', None
+    except RuntimeError:
         return 'corrupt', None
     if record is None:
         return 'corrupt', None
@@ -144,35 +233,51 @@ def seal_fail_closed(bind_tag, reason='state_corrupt'):
         record['fail_closed'] = True
         record['fail_closed_reason'] = str(reason or 'state_corrupt')
         record['trial_latch'] = True
-        save(record, bind_tag)
+        if auth_available():
+            save(record, bind_tag)
+        mark_migration_done()
         return record
 
 
-def save(record, bind_tag):
+def _persist_record(record, bind_tag):
     record = dict(record)
     record['v'] = STATE_VERSION
     record['bind'] = bind_tag
     path = _state_path()
     atrest._write_0600(path, _seal(record))
+    if not record.get('fail_closed'):
+        mark_migration_done()
+
+
+def save(record, bind_tag):
+    try:
+        with _profile_file_lock():
+            _persist_record(record, bind_tag)
+    except ProfileLockUnavailable:
+        pass
 
 
 def mutate(bind_tag, updater, create=False):
     """Load, apply updater(record), save — serialized against concurrent writers."""
     with _io_lock:
-        status, record = read(bind_tag)
-        if status == 'ok' and record.get('fail_closed'):
+        try:
+            with _profile_file_lock():
+                status, record = read(bind_tag)
+                if status == 'ok' and record.get('fail_closed'):
+                    return None
+                if status == 'corrupt':
+                    return None
+                if status == 'missing':
+                    if not create:
+                        return None
+                    record = empty_record()
+                record = updater(dict(record))
+                if record is None:
+                    return None
+                _persist_record(record, bind_tag)
+                return record
+        except ProfileLockUnavailable:
             return None
-        if status == 'corrupt':
-            return None
-        if status == 'missing':
-            if not create:
-                return None
-            record = empty_record()
-        record = updater(dict(record))
-        if record is None:
-            return None
-        save(record, bind_tag)
-        return record
 
 
 def empty_record():

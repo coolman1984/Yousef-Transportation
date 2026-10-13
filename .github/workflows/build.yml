@@ -41,9 +41,12 @@ jobs:
       - name: Gateway tests (Worker + D1 stand-in)
         working-directory: gateway
         run: node --test --no-warnings test/gateway.test.js
+      - name: Licence hub tests
+        working-directory: licence-hub
+        run: npm test
       - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto test_release_policy test_commercial_licence
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto test_release_policy test_commercial_licence test_licence_hub_signer
       - name: Core journey on the source (killed without warning, then restarted)
         run: |
           python -m pip install cryptography

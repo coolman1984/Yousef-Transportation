@@ -13,6 +13,7 @@ const MAX_DEVICE = 32;
 const MAX_MACHINE = 128;
 const MAX_NONCE = 80;
 const MAX_PENDING_PER_IP = 8;
+const DEFAULT_PENDING_TTL_SEC = 900;
 
 async function sha256Hex(data) {
   const buf = typeof data === 'string' ? enc.encode(data) : data;
@@ -41,6 +42,10 @@ function products(env) {
   return new Set(String(env.LICENCE_PRODUCTS || 'trip-orders').split(',').map((s) => s.trim()).filter(Boolean));
 }
 
+function pendingTtl(env) {
+  return Number(env.PENDING_TTL_SEC || DEFAULT_PENDING_TTL_SEC);
+}
+
 function json(data, status = 200, extra = {}) {
   return new Response(JSON.stringify(data), {
     status,
@@ -55,21 +60,86 @@ export function deviceKey(device) {
   return norm;
 }
 
-async function trialUsedForDevice(env, deviceKeyNorm) {
-  const row = await env.DB.prepare('SELECT machine FROM machine_trials WHERE machine = ?').bind(deviceKeyNorm).first();
+export function deviceLockKey(dkey) {
+  return `d:${dkey}`;
+}
+
+export function machineLockKey(machineHash) {
+  return `h:${machineHash}`;
+}
+
+/** 64-hex SHA-256 machine tag from the office app, or null when malformed. */
+export function normalizeMachineHash(machine) {
+  const m = String(machine || '').toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(m)) return null;
+  return m;
+}
+
+function legacyLockRow(machine) {
+  const s = String(machine || '');
+  if (s.startsWith('d:') || s.startsWith('h:')) return s;
+  return deviceLockKey(s);
+}
+
+async function trialLockRow(env, lockId) {
+  const row = await env.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?').bind(lockId).first();
+  if (row) return row;
+  const legacy = legacyLockRow(lockId);
+  if (legacy !== lockId) {
+    return env.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?').bind(legacy).first();
+  }
+  return null;
+}
+
+/** Offline path: one trial per normalized device code only. */
+export async function trialUsedForDevice(env, deviceKeyNorm) {
+  const row = await trialLockRow(env, deviceLockKey(deviceKeyNorm));
   return Boolean(row);
 }
 
+/** Online path: refuse when device code or stable machine hash was already used. */
+export async function trialUsedOnline(env, deviceKeyNorm, machineHash) {
+  if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
+  if (machineHash && (await trialLockRow(env, machineLockKey(machineHash)))) return true;
+  return false;
+}
+
+async function expireStalePending(env) {
+  const cutoff = now() - pendingTtl(env);
+  const t = now();
+  await env.DB.prepare(
+    "UPDATE licence_requests SET status = 'expired', reason = 'pending_timeout', updated_at = ? WHERE status = 'pending' AND created_at < ?",
+  ).bind(t, cutoff).run();
+}
+
 async function openRequestForDevice(env, deviceKeyNorm) {
+  const cutoff = now() - pendingTtl(env);
   return env.DB.prepare(
-    "SELECT id FROM licence_requests WHERE device_key = ? AND status IN ('pending', 'approved') LIMIT 1",
-  ).bind(deviceKeyNorm).first();
+    "SELECT id FROM licence_requests WHERE device_key = ? AND status IN ('pending', 'approved') AND created_at >= ? LIMIT 1",
+  ).bind(deviceKeyNorm, cutoff).first();
+}
+
+function hubCalendarDay(env) {
+  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
+  return calendarDateInTz(new Date(), tz).iso;
+}
+
+async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
+  const locks = [deviceLockKey(dkey)];
+  if (machineHash) locks.push(machineLockKey(machineHash));
+  for (const lock of locks) {
+    const row = await trialLockRow(env, lock);
+    if (!row || row.request_id !== requestId) return false;
+  }
+  return true;
 }
 
 export async function handleLicence(request, env, url) {
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
   if (await limited(env, 'lic:ip:' + ip, 120)) return json({ error: 'rate' }, 429);
   if (!env.SESSION_SECRET) return json({ error: 'config' }, 503);
+
+  await expireStalePending(env);
 
   if (url.pathname === '/licence/request' && request.method === 'POST') {
     let body;
@@ -84,6 +154,7 @@ export async function handleLicence(request, env, url) {
     if (!['trial', 'monthly', 'permanent'].includes(body.kind)) return json({ field: 'kind' }, 400);
     let dkey;
     try { dkey = deviceKey(body.device); } catch { return json({ field: 'device' }, 400); }
+    const machineHash = normalizeMachineHash(body.machine);
 
     const poll = await derivePollToken(env.SESSION_SECRET, body.nonce);
     const pollHash = await sha256Hex(poll);
@@ -110,7 +181,7 @@ export async function handleLicence(request, env, url) {
       return json({ id, poll_token: poll, status: 'refused', reason: REASON_PAID_IN_STUDIO });
     }
 
-    if (await trialUsedForDevice(env, dkey)) {
+    if (await trialUsedOnline(env, dkey, machineHash)) {
       await env.DB.prepare(
         'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, body.shop.slice(0, 60), body.ref.slice(0, 60), body.version.slice(0, 40), 'refused', 'already_used', t, t).run();
@@ -139,8 +210,7 @@ export async function handleLicence(request, env, url) {
     const pollHash = await sha256Hex(token);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ? AND poll_token_hash = ?').bind(id, pollHash).first();
     if (!row) return json({}, 401);
-    const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
-    const calendarDay = calendarDateInTz(new Date(), tz);
+    const calendarDay = hubCalendarDay(env);
     if (row.status === 'pending') return json({ status: 'pending', stage: row.stage || '', calendar_day: calendarDay });
     if (row.status === 'approved') return json({ status: 'pending', stage: 'approved', calendar_day: calendarDay });
     if (row.status === 'issued' && row.code) return json({ status: 'issued', code: row.code, calendar_day: calendarDay });
@@ -194,6 +264,38 @@ function signedFromRow(row, signed = null) {
   };
 }
 
+async function clearTrialLocks(env, dkey, machineHash) {
+  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  if (machineHash) await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(machineLockKey(machineHash)).run();
+  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
+}
+
+async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force) {
+  if (force) await clearTrialLocks(env, dkey, machineHash);
+
+  const locks = [deviceLockKey(dkey)];
+  if (machineHash) locks.push(machineLockKey(machineHash));
+
+  const stmts = locks.map((lock) =>
+    env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
+  );
+  stmts.push(
+    env.DB.prepare(
+      'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ? WHERE id = ? AND code IS NULL AND status NOT IN (?, ?)',
+    ).bind('issued', 'approved', signed.code, t, requestId, 'refused', 'delivered'),
+  );
+  await env.DB.batch(stmts);
+
+  if (!(await locksOwnedByRequest(env, dkey, machineHash, requestId))) {
+    await env.DB.prepare(
+      'UPDATE licence_requests SET code = NULL, status = ?, reason = ?, updated_at = ? WHERE id = ?',
+    ).bind('refused', 'already_used', t, requestId).run();
+    return false;
+  }
+  const after = await env.DB.prepare('SELECT code, status FROM licence_requests WHERE id = ?').bind(requestId).first();
+  return Boolean(after?.code && after.status === 'issued');
+}
+
 export async function approveRequest(env, requestId, privateKey, options = {}) {
   const force = options.force === true;
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
@@ -204,10 +306,6 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     return { refused: true, reason: REASON_PAID_IN_STUDIO };
   }
 
-  if (row.status === 'issued' && row.code) {
-    return signedFromRow(row);
-  }
-
   let dkey;
   try {
     dkey = deviceKey(row.device_key || row.device);
@@ -215,8 +313,17 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     await refuseRequest(env, requestId, 'bad_device');
     throw new Error('bad_device_code');
   }
+  const machineHash = normalizeMachineHash(row.machine);
 
-  if (!force && (await trialUsedForDevice(env, dkey))) {
+  if (row.status === 'issued' && row.code) {
+    if (await locksOwnedByRequest(env, dkey, machineHash, requestId)) {
+      return signedFromRow(row);
+    }
+    await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, updated_at = ? WHERE id = ?')
+      .bind('approved', now(), requestId).run();
+  }
+
+  if (!force && (await trialUsedOnline(env, dkey, machineHash))) {
     await refuseRequest(env, requestId, 'already_used');
     return null;
   }
@@ -234,26 +341,9 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     throw e;
   }
 
-  const upd = await env.DB.prepare(
-    'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ? WHERE id = ? AND code IS NULL AND status NOT IN (?, ?)',
-  ).bind('issued', 'approved', signed.code, t, requestId, 'refused', 'delivered').run();
+  const ok = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force);
+  if (!ok) return null;
 
-  const after = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-  if (!after?.code) return null;
-  if (!upd.meta?.changes) return signedFromRow(after);
-
-  if (force) {
-    await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
-  }
-  await env.DB.prepare(
-    'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
-  ).bind(dkey, requestId, t).run();
-  const claim = await env.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?').bind(dkey).first();
-  if (!claim || claim.request_id !== requestId) {
-    await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, reason = ?, updated_at = ? WHERE id = ?')
-      .bind('refused', 'already_used', t, requestId).run();
-    return null;
-  }
   await env.DB.prepare(
     'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(crypto.randomUUID(), row.shop || '—', signed.device, row.kind, signed.serial, signed.first_day, signed.last_day, t).run();
@@ -275,12 +365,17 @@ export async function issueOfflineCustomer(env, privateKey, device, shop, produc
   const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
   const t = now();
-  if (force) {
-    await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
+  const requestId = 'offline:' + crypto.randomUUID();
+  const lock = deviceLockKey(dkey);
+  if (force) await clearTrialLocks(env, dkey, null);
+
+  await env.DB.batch([
+    env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
+  ]);
+  const claim = await trialLockRow(env, lock);
+  if (!claim || claim.request_id !== requestId) {
+    throw new Error('already_used');
   }
-  await env.DB.prepare(
-    'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id, at = excluded.at',
-  ).bind(dkey, 'offline:' + crypto.randomUUID(), t).run();
   await env.DB.prepare(
     'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t).run();
@@ -291,6 +386,7 @@ export async function issueOfflineCustomer(env, privateKey, device, shop, produc
 export async function purgeStaleCodes(env) {
   const days = Number(env.TRIAL_DAYS || 14);
   const cutoff = now() - days * 86400;
+  await expireStalePending(env);
   await env.DB.prepare(
     "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued')",
   ).bind(cutoff).run();

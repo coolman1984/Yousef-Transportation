@@ -57,6 +57,13 @@ export async function loadPending(host) {
         ok.disabled = false;
         return;
       }
+      if (res && res.ok && res.code) {
+        const box = document.createElement('div');
+        box.className = 'issued-box';
+        box.innerHTML = '<p class="muted">اقرأ هذا الكود للعميل:</p><p class="big-code" dir="ltr">' + escape(res.code) + '</p><button type="button" class="btn" data-copy>نسخ</button>';
+        box.querySelector('[data-copy]').addEventListener('click', () => navigator.clipboard.writeText(res.code));
+        li.append(box);
+      }
       loadPending(host);
     });
     const no = document.createElement('button');

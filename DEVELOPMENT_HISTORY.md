@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence-hub review fixes (2026-10-13)
+
+**What:** Online trial lock on device code + machine hash; atomic D1 batch claim with `ON CONFLICT DO NOTHING`; pending TTL; `calendar_day` as `YYYY-MM-DD`; owner approve shows code; trial-only `trial-hub` kid enforcement in `afcodes`/`licence`; sealed `max_seen`/expiry latch (HMAC from machine tag); active-trial hub calendar poll; wider clock tolerance for paid editions; docs split telemetry relay vs licence hub and trial key generation.
+**Why:** Review findings: second trial after `install_id` reset, stuck clock, race on approve/offline, poll squatting, and Studio key on Worker risk.
+**Checks:** `cd licence-hub && node --test` (29 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (94 pass, 1 skip).
+**Next:** Owner deploy trial-hub key on Cloudflare; point office `hub_url` at licence hub only.
+
 ## Grok licence-hub + trial clock review (2026-10-13)
 
 **What:** Device-keyed one-trial lock (online + offline), sign-before-claim approve, request validation and pending spam limits, trial expiry latch with 1h clock tolerance and hub `calendar_day`, ack clears codes + daily purge cron, HUB_SETUP points at `licence-hub/`, owner UI notes and force reissue, Arabic one-day trial strings.

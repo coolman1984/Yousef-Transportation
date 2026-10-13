@@ -200,7 +200,7 @@ class UpgradeGraceTest(unittest.TestCase):
             _seed_trips_db(d)
             with _CommercialLicence(d) as l:
                 l.status()
-                l.a.kv('max_seen', licence.iso(licence.utcnow() + timedelta(days=2)))
+                l._write_max_seen(licence.utcnow() + timedelta(hours=100))
                 with patch.object(licence, 'utcnow', return_value=licence.utcnow()):
                     st = l.status()
                 self.assertFalse(st['full'])
@@ -266,7 +266,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                 st = l.status()
                 self.assertEqual(st['state'], 'expired')
                 self.assertFalse(st['full'])
-                self.assertEqual(l.a.kv(licence.TRIAL_EXPIRED_LATCH), '1')
+                self.assertTrue(l._trial_latch_active())
                 with patch.object(l, '_effective_calendar_day', return_value=first):
                     licence._cache.clear()
                     st2 = l.status()
@@ -281,11 +281,84 @@ class TrialClockExpiryTest(unittest.TestCase):
             with _CommercialLicence(d, release_keys=(public,)) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
                 l.activate(code, manual=True)
-                future = (first + timedelta(days=40)).isoformat()
+                future = (first + timedelta(days=5)).isoformat()
                 l._note_hub_calendar_day(future)
-                seen = licence.parse(l.a.kv('max_seen'))
+                seen = l._read_max_seen()
                 self.assertIsNotNone(seen)
-                self.assertGreaterEqual(seen.date(), first + timedelta(days=40))
+                self.assertGreaterEqual(seen.date(), first + timedelta(days=5))
+
+    def test_frozen_local_clock_expires_after_hub_calendar_day(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            frozen = date_cls.today() - timedelta(days=10)
+            pem, public = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 3, device=l.device())['code']
+                with patch.object(l, '_effective_calendar_day', return_value=frozen):
+                    l.activate(code, manual=True)
+                    licence._cache.clear()
+                    st = l.status()
+                self.assertTrue(st['full'])
+                l._note_hub_calendar_day((frozen + timedelta(days=5)).isoformat())
+                licence._cache.clear()
+                st2 = l.status()
+                self.assertEqual(st2['state'], 'expired')
+                self.assertFalse(st2['full'])
+
+    def test_trial_latch_survives_deleting_kv_when_max_seen_is_sealed(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                l._note_hub_calendar_day((first + timedelta(days=5)).isoformat())
+                licence._cache.clear()
+                l.status()
+                l.a.kv(licence.TRIAL_EXPIRED_LATCH, delete=True)
+                licence._cache.clear()
+                st = l.status()
+                self.assertEqual(st['state'], 'expired')
+
+    def test_trial_hub_key_rejects_non_trial_editions(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = self._trial_keypair()
+            cfg = {'licence_keys': [f'trial-hub:{public}']}
+            with patch.object(licence, '_COMMERCIAL_BUILD', False):
+                lic = licence.Licence(_Assist(d), str(ROOT), str(d), cfg)
+                device = lic.device()
+                monthly = afcodes.issue_code(pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=device)['code']
+                verdict = lic._check(monthly, device, date_cls.today(), lic.trusted_keys())
+                self.assertEqual(verdict['state'], 'invalid')
+                self.assertEqual(verdict['reason'], 'trial_key_edition')
+
+    def test_paid_licence_allows_wider_clock_rollback_than_trial(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                first = date_cls.today()
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'standard', first, 30, device=l.device())['code']
+                l.activate(code, manual=True)
+                licence._cache.clear()
+                l._write_max_seen(licence.utcnow() + timedelta(hours=48))
+                with patch.object(licence, 'utcnow', return_value=licence.utcnow()):
+                    st = l.status()
+                self.assertTrue(st['full'], st)
+                trial_code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(trial_code, manual=True)
+                licence._cache.clear()
+                l._write_max_seen(licence.utcnow() + timedelta(hours=48))
+                with patch.object(licence, 'utcnow', return_value=licence.utcnow()):
+                    st_trial = l.status()
+                self.assertFalse(st_trial['full'])
+                self.assertEqual(st_trial['reason'], 'clock_back')
 
 
 class GraceNotLostByAccidentTest(unittest.TestCase):

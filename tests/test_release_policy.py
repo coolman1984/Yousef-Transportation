@@ -88,15 +88,21 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
         public = base64.urlsafe_b64encode(private.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip("=")
         device = "ABCDE-FGHJK"
+
+        class Data:
+            def kv(self, key, value=None, delete=False):
+                return None
+
+        lic = licence.Licence(Data(), str(ROOT), str(ROOT), {})
         with patch.object(licence, "_COMMERCIAL_BUILD", True):
             for edition in ("trial", "standard", "pro"):
                 with self.subTest(edition=edition):
                     unbound = afcodes.issue_code(pem, "trip-orders", edition, date.today(), 30)["code"]
-                    verdict = licence.Licence._check(unbound, device, date.today(), [public])
+                    verdict = lic._check(unbound, device, date.today(), [public])
                     self.assertEqual((verdict["state"], verdict["full"], verdict["reason"]),
                                      ("invalid", False, "device_required"))
                     bound = afcodes.issue_code(pem, "trip-orders", edition, date.today(), 30, device=device)["code"]
-                    self.assertTrue(licence.Licence._check(bound, device, date.today(), [public])["full"])
+                    self.assertTrue(lic._check(bound, device, date.today(), [public])["full"])
 
     def test_ci_build_is_conspicuously_not_for_customers(self):
         build = (ROOT / "tools" / "build_windows.py").read_text("utf-8")

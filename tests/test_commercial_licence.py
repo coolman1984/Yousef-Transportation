@@ -205,12 +205,12 @@ class CiTestFreshPaidActivationTest(unittest.TestCase):
             private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         ).decode().rstrip('=')
         variants = (
-            ('missing', lambda prof, bind: None),
+            ('missing', lambda prof, bind: None, True),
             ('corrupt', lambda prof, bind: open(
-                os.path.join(prof, licence_state.STATE_FILE), 'wb').write(b'not-a-licence-clock\n')),
-            ('fail_closed', lambda prof, bind: licence_state.seal_fail_closed(bind, 'state_corrupt')),
+                os.path.join(prof, licence_state.STATE_FILE), 'wb').write(b'not-a-licence-clock\n'), False),
+            ('fail_closed', lambda prof, bind: licence_state.seal_fail_closed(bind, 'state_corrupt'), False),
         )
-        for label, setup_clock in variants:
+        for label, setup_clock, expect_full in variants:
             with tempfile.TemporaryDirectory() as d:
                 holder = _CommercialLicence(
                     d, build_channel='ci-test', release_keys=(), studio_keys=(public,))
@@ -224,10 +224,10 @@ class CiTestFreshPaidActivationTest(unittest.TestCase):
                     code = afcodes.issue_code(
                         pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=l.device())['code']
                     st = l.activate(code, manual=True)
-                    self.assertTrue(st['full'], (label, st))
+                    self.assertEqual(st['full'], expect_full, (label, st))
                     licence._cache.clear()
                     again = l.status()
-                    self.assertTrue(again['full'], (label, again))
+                    self.assertEqual(again['full'], expect_full, (label, again))
 
 
 class InstallerChannelTest(unittest.TestCase):
@@ -1257,6 +1257,27 @@ class PaidClockStateTamperTest(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         l.activate(code, manual=True)
                     self.assertFalse(l.status()['full'])
+
+    def test_windows_text_mode_clock_file_reads_ok_and_writes_binary(self):
+        import licence_state
+
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(), studio_keys=())
+            with holder as l:
+                bind = l.machine_tag()
+                record = licence_state.empty_record()
+                licence_state.save(record, bind)
+                path = os.path.join(holder.profile_dir, licence_state.STATE_FILE)
+                blob = open(path, 'rb').read()
+                payload, mac = blob.rsplit(b'\n', 1)
+                with open(path, 'wb') as f:
+                    f.write(payload + b'\r\n' + mac)
+                self.assertEqual(licence_state.read(bind)[0], 'ok')
+                licence_state.save(record, bind)
+                blob2 = open(path, 'rb').read()
+                payload2, mac2 = blob2.rsplit(b'\n', 1)
+                self.assertNotIn(b'\r\n', blob2)
+                self.assertEqual(blob2, payload2 + b'\n' + mac2)
 
     def test_repaste_paid_code_does_not_replace_missing_clock_file(self):
         import licence_state

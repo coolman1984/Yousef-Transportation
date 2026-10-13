@@ -32,7 +32,7 @@ def _now():
 
 def write_atomic(path, data, mode=0o600):
     tmp = path + '.tmp'
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_BINARY', 0), mode)
     with os.fdopen(fd, 'wb') as f:
         f.write(data if isinstance(data, bytes) else data.encode('utf-8'))
         f.flush()

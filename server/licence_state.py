@@ -25,6 +25,7 @@ MIGRATION_MARKER = 'licence-clock-migrated.v1'
 PROFILE_LOCK_FILE = 'licence-state.profile.lock'
 
 _io_lock = threading.RLock()
+_O_BINARY = getattr(os, 'O_BINARY', 0)
 
 
 class ProfileLockUnavailable(Exception):
@@ -41,7 +42,7 @@ def _read_auth_key_bytes():
     path = os.path.join(directory, AUTH_FILE)
     for _ in range(5):
         try:
-            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_BINARY, 0o600)
         except FileExistsError:
             break
         else:
@@ -60,6 +61,10 @@ def _read_auth_key_bytes():
         if len(data) == 32:
             break
         time.sleep(0.05)
+    if len(data) != 32 and len(data) >= 33:
+        fixed = data.replace(b'\r\n', b'\n')
+        if len(fixed) == 32:
+            data = fixed
     if len(data) != 32:
         return None
     try:
@@ -153,6 +158,15 @@ def _seal(record):
     return payload + b'\n' + mac.encode('ascii')
 
 
+def _mac_ok(key, payload, mac):
+    expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
+    try:
+        mac_text = mac.decode('ascii')
+    except UnicodeDecodeError:
+        return False
+    return hmac.compare_digest(mac_text, expected)
+
+
 def _open(blob, bind_tag):
     if not blob:
         return None
@@ -164,12 +178,11 @@ def _open(blob, bind_tag):
     key = _read_auth_key_bytes()
     if key is None:
         return None
-    expected = hmac.new(key, payload, hashlib.sha256).hexdigest()
-    try:
-        mac_text = mac.decode('ascii')
-    except UnicodeDecodeError:
-        return None
-    if not hmac.compare_digest(mac_text, expected):
+    if not _mac_ok(key, payload, mac) and payload.endswith(b'\r'):
+        payload = payload[:-1]
+        if not _mac_ok(key, payload, mac):
+            return None
+    elif not _mac_ok(key, payload, mac):
         return None
     try:
         record = json.loads(payload.decode('utf-8'))

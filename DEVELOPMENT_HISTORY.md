@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Windows binary licence clock writes (2026-10-13)
+
+**What:** `os.O_BINARY` on profile/sealed file writes; read compat for CRLF clock separators and damaged auth keys; paid `activate()` bootstraps clock only when state is `missing`; CI journey DIAG removed.
+**Why:** windows-installer: text-mode `os.open` on Windows corrupted HMAC payloads (`\r\n` separator) so every activation read `corrupt`.
+**Checks:** `python3 -m unittest discover -s tests` from repo root.
+**Next:** PR review and merge.
+
 ## Review 11 — paid bootstrap on fresh TO_HOME, block clock revive (2026-10-13)
 
 **What:** Fresh paid `activate()` writes the first clock record when no code was stored yet (CI profile marker + missing/corrupt state); `status()` never auto-creates a clock when a code or profile auth already exists; trial replay blocked via `auth_key_on_disk()` in `_licence_clock_past_initial_use()`; hub refuses `TRIAL_DAYS` outside 1..14; regressions for wiped paid clocks, trial replay, and frozen `utcnow` catch-up.

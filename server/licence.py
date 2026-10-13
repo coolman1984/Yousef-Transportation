@@ -755,11 +755,11 @@ class Licence:
                     licence_state.seal_fail_closed(bind, 'state_corrupt')
                 raise ValueError('state_corrupt')
         elif result.get('edition') != 'trial':
-            if not had_code and (st in ('missing', 'corrupt') or licence_state.is_fail_closed(bind)):
+            if not had_code and st == 'missing':
                 if licence_state.auth_available():
                     licence_state.save(licence_state.empty_record(), bind)
                     self._note_profile_clock_established()
-            elif licence_state.is_fail_closed(bind):
+            elif had_code and licence_state.is_fail_closed(bind):
                 if self._licence_auth_usable():
                     licence_state.save(licence_state.empty_record(), bind)
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))

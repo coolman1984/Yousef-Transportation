@@ -206,5 +206,34 @@ class UpgradeGraceTest(unittest.TestCase):
                 self.assertFalse(st['full'])
 
 
+
+class EncryptedTripsDbGraceTest(unittest.TestCase):
+    """With TRIPORDERS_ENCRYPT=1 trips.db is SQLCipher: an upgrading office must still get its grace."""
+
+    def test_prior_contract_office_with_encrypted_db_gets_grace(self):
+        try:
+            import sqlcipher3  # noqa: F401
+        except ImportError:
+            self.skipTest('sqlcipher3 not installed')
+        import atrest
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as prof:
+            env = {'TRIPORDERS_ENCRYPT': '1', 'TRIPORDERS_DPAPI_DIR': prof, 'XDG_CONFIG_HOME': prof}
+            with patch.dict(os.environ, env):
+                conn = atrest.connect(os.path.join(d, 'trips.db'), isolation_level=None)
+                conn.executescript("""
+                    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+                    INSERT INTO meta VALUES ('initialized', '2020-01-01T00:00:00');
+                    CREATE TABLE trips (id TEXT PRIMARY KEY, deleted INTEGER NOT NULL DEFAULT 0);
+                    INSERT INTO trips VALUES ('t1', 0);
+                """)
+                conn.close()
+                self.assertFalse(atrest.is_plain_sqlite(os.path.join(d, 'trips.db')))
+                licence._cache.clear()
+                with _CommercialLicence(d) as l:
+                    st = l.status()
+                    self.assertTrue(st.get('upgrade_grace'), st)
+                    self.assertTrue(st['full'])
+                    self.assertEqual(l._trips_meta(licence.UPGRADE_GRACE_EVER_META), '1')
+
 if __name__ == "__main__":
     unittest.main()

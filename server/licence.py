@@ -38,6 +38,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import afcodes
+import atrest  # trips.db is SQLCipher when TRIPORDERS_ENCRYPT=1
 
 
 def _distributed_runtime():
@@ -179,7 +180,7 @@ class Licence:
         if not os.path.exists(path):
             return False
         try:
-            conn = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
+            conn = atrest.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
             try:
                 # A fresh install also gets 'initialized' and sample trips on its first boot, so only an
                 # office whose database was initialised well before this commercial build first ran counts.
@@ -195,7 +196,7 @@ class Licence:
                 return initialised < datetime.now() - timedelta(hours=UPGRADE_PRIOR_DATA_MIN_AGE_HOURS)
             finally:
                 conn.close()
-        except sqlite3.Error:
+        except Exception:  # sqlcipher3 raises its own error types
             return False
 
     def _trips_meta(self, key):
@@ -203,13 +204,13 @@ class Licence:
         if not os.path.exists(trips):
             return None
         try:
-            conn = sqlite3.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
+            conn = atrest.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
             try:
                 row = conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
                 return row[0] if row else None
             finally:
                 conn.close()
-        except sqlite3.Error:
+        except Exception:  # sqlcipher3 raises its own error types
             return None
 
     def _set_trips_meta(self, key, value):
@@ -217,12 +218,12 @@ class Licence:
         if not os.path.exists(trips):
             return
         try:
-            conn = sqlite3.connect(trips, isolation_level=None)
+            conn = atrest.connect(trips, isolation_level=None)
             conn.execute(
                 'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
                 (key, value))
             conn.close()
-        except sqlite3.Error:
+        except Exception:  # sqlcipher3 raises its own error types
             pass
 
     def _upgrade_grace_consumed(self):

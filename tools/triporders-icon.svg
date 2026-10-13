@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" role="img" aria-label="Trip Orders">
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0d9488"/>
+      <stop offset="55%" stop-color="#1e6feb"/>
+      <stop offset="100%" stop-color="#14245c"/>
+    </linearGradient>
+    <linearGradient id="road" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="100%" stop-color="#e8f4ff" stop-opacity="0.85"/>
+    </linearGradient>
+  </defs>
+  <rect width="256" height="256" rx="56" fill="url(#bg)"/>
+  <path d="M48 168 Q128 108 208 168" fill="none" stroke="url(#road)" stroke-width="22" stroke-linecap="round"/>
+  <circle cx="72" cy="156" r="14" fill="#ffffff"/>
+  <circle cx="184" cy="156" r="14" fill="#ffffff"/>
+  <path d="M118 92 L138 72 L162 96 L152 118 L124 118 Z" fill="#ffffff" opacity="0.92"/>
+  <path d="M138 118 L138 148" stroke="#ffffff" stroke-width="10" stroke-linecap="round"/>
+</svg>

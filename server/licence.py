@@ -197,7 +197,7 @@ class Licence:
             finally:
                 conn.close()
         except Exception:  # sqlcipher3 raises its own error types
-            return False
+            return None  # unknown (locked/busy/unreadable): decide on a later check, never consume the grace for it
 
     def _trips_meta(self, key):
         trips = self._trips_db_path()
@@ -275,8 +275,8 @@ class Licence:
         if self.a.kv('licence_code'):
             return None
         if self._seen_now():
-            self._mark_upgrade_grace_consumed()
-            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+            # clock behind the last seen time: locked while it lasts, but a corrected clock gets the grace back
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'clock_back'}
         if self._upgrade_grace_consumed():
             return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
         started = self._read_grace_started()
@@ -284,14 +284,19 @@ class Licence:
             if self._trips_meta(UPGRADE_GRACE_EVER_META) == '1' or self.a.kv('upgrade_grace_started_at'):
                 self._mark_upgrade_grace_consumed()
                 return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
-            if not self._has_prior_office_data():
+            prior = self._has_prior_office_data()
+            if prior is None:
+                return None
+            if not prior:
                 # decided once, on first sight: a fresh install never becomes eligible later
                 self._mark_upgrade_grace_consumed()
                 return None
             started = self._write_grace_started(utcnow())
         end = started + timedelta(days=UPGRADE_GRACE_DAYS)
         now = utcnow()
-        if now < started or now >= end:
+        if now < started:
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'clock_back'}
+        if now >= end:
             self._mark_upgrade_grace_consumed()
             return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
         days_left = max(0, (end.date() - now.date()).days)

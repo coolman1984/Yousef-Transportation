@@ -235,5 +235,30 @@ class EncryptedTripsDbGraceTest(unittest.TestCase):
                     self.assertTrue(st['full'])
                     self.assertEqual(l._trips_meta(licence.UPGRADE_GRACE_EVER_META), '1')
 
+
+class GraceNotLostByAccidentTest(unittest.TestCase):
+    def test_unreadable_db_on_first_check_does_not_consume_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            _seed_trips_db(d)
+            licence._cache.clear()
+            with _CommercialLicence(d) as l:
+                with patch.object(licence.Licence, '_has_prior_office_data', return_value=None):
+                    self.assertFalse(l.status()['full'])
+                self.assertFalse(l._upgrade_grace_consumed())
+                licence._cache.clear()
+                st = l.status()
+                self.assertTrue(st['full'] and st.get('upgrade_grace'), st)
+
+    def test_clock_back_locks_but_corrected_clock_restores_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            _seed_trips_db(d)
+            licence._cache.clear()
+            with _CommercialLicence(d) as l:
+                with patch.object(licence.Licence, '_seen_now', return_value=True):
+                    self.assertFalse(l.status()['full'])
+                self.assertFalse(l._upgrade_grace_consumed())
+                licence._cache.clear()
+                self.assertTrue(l.status()['full'])
+
 if __name__ == "__main__":
     unittest.main()

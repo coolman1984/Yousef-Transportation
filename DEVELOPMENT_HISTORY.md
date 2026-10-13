@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Review 7 — fail-closed trial state, D1 transactions, owner recovery (2026-10-13)
+
+**What:** Profile licence clock seals permanently on corrupt/missing established state (no `_seen_now` revival); serialized `licence_state.mutate`; hub D1 awaits + batch issue/customer + loser lock cleanup + offline resume queue; legacy `h:` backfill; owner `/undelivered` list; HUB_SETUP base64url public key; README commercial vs relay URLs; assist tests use isolated profile dir.
+**Why:** Codex review 7: corruption reopened trials, async D1 offline break, partial approval locks, undelivered code UX, doc drift.
+**Checks:** `cd licence-hub && node --test` (37 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (102 pass, 1 skip).
+**Next:** Owner redeploy licence hub; rebuild commercial installers if policy docs changed only (no new keys required).
+
 ## Review 6 — trial policy, clock state, hub transactions (2026-10-13)
 
 **What:** Commercial `TO_RELEASE_PUBLIC_KEYS` embeds `trial-hub` vs `studio` kids (`TRIAL_ONLY_PUBLIC_KEYS`); profile-bound authenticated licence clock state (`licence_state.py`) fails closed on corrupt/missing trial state; hub calendar separate from UTC watermark; monotonic hub poll scheduling; conditional SQL issue on approve; status hides orphan issued codes; legacy `machine_trials` migration; offline idempotent issue/recovery; owner issued-code panel + `/owner/api/issued`; `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` separate from telemetry `hub_url`.

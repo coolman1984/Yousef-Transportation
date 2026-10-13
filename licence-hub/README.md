@@ -4,7 +4,7 @@
 
 Template Cloudflare Worker for online licence requests and an owner approval dashboard. **Nothing here deploys from CI by default** — configure `wrangler.toml` and set secrets in Cloudflare only.
 
-This worker is **not** the factory telemetry relay (`/ingest`). Deploy it on its own URL; point the office `hub_url` here only for online trial activation.
+This worker is **not** the factory telemetry relay (`/ingest`). Deploy it on its own URL. In the office app set **`licence_hub_url`** / `FACTORY_LICENCE_HUB_URL` to this Worker for online trials. Keep **`hub_url`** for the telemetry relay unless telemetry is disabled.
 
 ## What it does / ماذا يفعل
 
@@ -53,9 +53,9 @@ npx wrangler secret put TELEGRAM_CHAT_ID
 npx wrangler deploy
 ```
 
-ضع المفتاح **العام** في `licence_keys.txt` بصيغة `trial-hub:<public>` للنسخة التي تفرض الأكواد. مفتاح Licence Studio يبقى kid مختلفًا للاشتراكات المدفوعة.
+للنسخ **التجارية**: ادمج المفتاح العام في `TO_RELEASE_PUBLIC_KEYS` عند البناء (`trial-hub:<public>` و `studio:<public>`) — لا يُقرأ `licence_keys.txt` في المثبّت المباع. لنسخ **المصدر/العقد** فقط: ضع `trial-hub:<public>` في `licence_keys.txt`. مفتاح Licence Studio يبقى kid مختلفًا للاشتراكات المدفوعة.
 
-Put the matching **public** key in `licence_keys.txt` as `trial-hub:<public>` for builds that enforce codes. Licence Studio uses a different kid for paid editions; remove a public key in a release to revoke a Worker key.
+For **commercial** installers embed trusted keys at build time via `TO_RELEASE_PUBLIC_KEYS` (`trial-hub:<public>` and `studio:<public>`) — sold builds ignore `licence_keys.txt`. For **source/contract** installs only, put `trial-hub:<public>` in `licence_keys.txt`. Licence Studio uses a different kid for paid editions.
 
 See also `docs/HUB_SETUP.md` for how this worker differs from the telemetry relay.
 

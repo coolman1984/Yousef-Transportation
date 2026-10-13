@@ -33,7 +33,7 @@ The licence hub must **not** use the same private key as Licence Studio. Generat
 ```bash
 # Example — run on the owner's PC; never commit the PEM or paste it in chat
 openssl genpkey -algorithm ED25519 -out trial-hub.pem
-openssl pkey -in trial-hub.pem -pubout -outform DER | tail -c 32 | base64 -w0
+openssl pkey -in trial-hub.pem -pubout -outform DER | tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '='
 ```
 
 1. Deploy **licence hub** with `npx wrangler secret put LICENCE_SIGNING_KEY` ← PKCS#8 PEM of **trial-hub.pem** only.

@@ -86,7 +86,7 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
 
 
     def test_commercial_policy_rejects_unbound_signed_trial_and_monthly_codes(self):
-        from datetime import date
+        from datetime import date, timedelta
         from unittest.mock import patch
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -115,7 +115,7 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
                     self.assertTrue(lic._check(bound, device, date.today(), [public])["full"])
 
     def test_commercial_policy_rejects_hub_signed_paid_codes(self):
-        from datetime import date
+        from datetime import date, timedelta
         from unittest.mock import patch
         from cryptography.hazmat.primitives import serialization
         from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -144,6 +144,14 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
             self.assertTrue(lic._check(trial_ok, device, date.today(), lic.trusted_keys())["full"])
             long_trial = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 20, device=device)["code"]
             self.assertEqual(lic._check(long_trial, device, date.today(), lic.trusted_keys())["reason"], "trial_key_days")
+            graced = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 14, device=device, grace_days=60)["code"]
+            self.assertEqual(lic._check(graced, device, date.today() + timedelta(days=70), lic.trusted_keys())["reason"], "trial_key_days")
+            self.assertEqual(lic._check(graced, device, date.today(), lic.trusted_keys())["reason"], "trial_key_days")
+            with patch.object(afcodes, "_device_tag", lambda code: b"\0" * 6):
+                unbound = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 14, device=device)["code"]
+            self.assertFalse(lic._check(unbound, device, date.today(), lic.trusted_keys())["full"])
+            self.assertEqual(afcodes.read_code(unbound, [hub_pub], "trip-orders", device=device,
+                                               trial_only_keys=frozenset({hub_pub})).reason, "trial_key_unbound")
             monthly = afcodes.issue_code(hub_pem, "trip-orders", "standard", date.today(), 30, device=device)["code"]
             self.assertEqual(lic._check(monthly, device, date.today(), lic.trusted_keys())["reason"], "trial_key_edition")
             paid = afcodes.issue_code(studio_pem, "trip-orders", "standard", date.today(), 30, device=device)["code"]

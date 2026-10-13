@@ -28,8 +28,36 @@ export function showIssuedCode(host, code, requestId) {
   if (requestId) panel.dataset.requestId = requestId;
 }
 
+export async function loadUndelivered(host) {
+  await session();
+  const data = await api('/undelivered');
+  if (!data) return;
+  const wrap = host.querySelector('[data-undelivered-wrap]');
+  const ul = host.querySelector('[data-undelivered]');
+  if (!wrap || !ul) return;
+  ul.innerHTML = '';
+  if (!data.items.length) {
+    wrap.hidden = true;
+    return;
+  }
+  wrap.hidden = false;
+  data.items.forEach((item) => {
+    const li = document.createElement('li');
+    const when = new Date(item.updated_at * 1000).toLocaleString('ar-EG');
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted" dir="ltr">' + escape(item.device) + '</div><div class="muted">' + when + '</div></div>';
+    const btn = document.createElement('button');
+    btn.className = 'btn primary';
+    btn.type = 'button';
+    btn.textContent = 'عرض الكود';
+    btn.addEventListener('click', () => showIssuedCode(host, item.code, item.id));
+    li.append(btn);
+    ul.append(li);
+  });
+}
+
 export async function loadPending(host) {
   await session();
+  await loadUndelivered(host);
   const data = await api('/pending');
   if (!data) return;
   const ul = host.querySelector('[data-pending]');

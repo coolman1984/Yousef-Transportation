@@ -1,3 +1,5 @@
-import { loadPending } from '/owner/app.js';
+import { loadPending, loadUndelivered } from '/owner/app.js';
 
-loadPending(document.getElementById('root'));
+const root = document.getElementById('root');
+loadUndelivered(root);
+loadPending(root);

@@ -4,6 +4,7 @@ import { calendarDateInTz } from './calendar.js';
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
+const offlineTails = new Map();
 const WINDOW = 600;
 
 const REQUIRED = ['product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
@@ -89,7 +90,7 @@ async function trialLockRow(env, lockId) {
 
 /** Backfill d:/h: locks from pre-prefix machine_trials rows (upgrade-safe). */
 export async function migrateLegacyTrialLocks(env) {
-  const rows = env.DB.prepare(
+  const rows = await env.DB.prepare(
     "SELECT machine, request_id, at FROM machine_trials WHERE machine NOT LIKE 'd:%' AND machine NOT LIKE 'h:%'",
   ).bind().all();
   for (const row of rows.results || []) {
@@ -97,6 +98,13 @@ export async function migrateLegacyTrialLocks(env) {
     await env.DB.prepare(
       'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
     ).bind(prefixed, row.request_id, row.at).run();
+    const req = await env.DB.prepare('SELECT machine FROM licence_requests WHERE id = ?').bind(row.request_id).first();
+    const machineHash = normalizeMachineHash(req?.machine);
+    if (machineHash) {
+      await env.DB.prepare(
+        'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
+      ).bind(machineLockKey(machineHash), row.request_id, row.at).run();
+    }
   }
 }
 
@@ -292,7 +300,24 @@ async function clearTrialLocks(env, dkey, machineHash) {
   await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
 }
 
-async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force) {
+async function waitForIssuedOffline(env, requestId, attempts = 30) {
+  for (let i = 0; i < attempts; i++) {
+    const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+    if (row?.code && row.status === 'issued') return row;
+    if (i > 0) await new Promise((r) => setTimeout(r, 5));
+  }
+  return null;
+}
+
+async function ensureCustomerRecord(env, row, signed, t) {
+  const existing = await env.DB.prepare('SELECT id FROM customers WHERE device = ?').bind(signed.device).first();
+  if (existing) return;
+  await env.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(crypto.randomUUID(), row.shop || '—', signed.device, row.kind || 'trial', signed.serial, signed.first_day, signed.last_day, t).run();
+}
+
+async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, meta = {}) {
   if (force) await clearTrialLocks(env, dkey, machineHash);
 
   const locks = [deviceLockKey(dkey)];
@@ -309,9 +334,15 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
     issueBinds.push(machineLockKey(machineHash), requestId);
   }
   stmts.push(env.DB.prepare(issueSql).bind(...issueBinds));
+  const shop = meta.shop || '—';
+  const kind = meta.kind || 'trial';
+  stmts.push(env.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t));
   const results = await env.DB.batch(stmts);
-  const issued = results[results.length - 1]?.meta?.changes > 0;
+  const issued = results[locks.length]?.meta?.changes > 0;
   if (!issued) {
+    await env.DB.prepare('DELETE FROM machine_trials WHERE request_id = ?').bind(requestId).run();
     await env.DB.prepare(
       'UPDATE licence_requests SET code = NULL, status = ?, reason = ?, updated_at = ? WHERE id = ? AND code IS NULL',
     ).bind('refused', 'already_used', t, requestId).run();
@@ -341,6 +372,7 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
 
   if (row.status === 'issued' && row.code) {
     if (await locksOwnedByRequest(env, dkey, machineHash, requestId)) {
+      await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
     await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, updated_at = ? WHERE id = ?')
@@ -365,12 +397,8 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     throw e;
   }
 
-  const ok = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force);
+  const ok = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, { shop: row.shop, kind: row.kind });
   if (!ok) return null;
-
-  await env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(crypto.randomUUID(), row.shop || '—', signed.device, row.kind, signed.serial, signed.first_day, signed.last_day, t).run();
   return signed;
 }
 
@@ -379,7 +407,7 @@ export async function refuseRequest(env, requestId, reason = 'refused') {
     .bind('refused', reason, now(), requestId).run();
 }
 
-export async function issueOfflineCustomer(env, privateKey, device, shop, productId, options = {}) {
+async function issueOfflineCustomerInner(env, privateKey, device, shop, productId, options = {}) {
   const force = options.force === true;
   const dkey = deviceKey(device);
   const requestId = 'offline:' + dkey;
@@ -388,15 +416,20 @@ export async function issueOfflineCustomer(env, privateKey, device, shop, produc
   if (existing?.code && existing.status === 'issued') {
     const claim = await trialLockRow(env, lock);
     if (claim && claim.request_id === requestId) {
+      await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
       return signedFromRow(existing);
     }
   }
+  let ownsLock = false;
   if (!force && (await trialUsedForDevice(env, dkey))) {
+    const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (row?.code && row.status === 'issued') {
+      await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
-    throw new Error('already_used');
+    if (claim?.request_id === requestId) ownsLock = true;
+    else throw new Error('already_used');
   }
   const t = now();
   if (force) await clearTrialLocks(env, dkey, null);
@@ -405,26 +438,35 @@ export async function issueOfflineCustomer(env, privateKey, device, shop, produc
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
   ).bind(requestId, 'offline', productId, 'trial', device, dkey, '', 'offline-' + dkey, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
 
-  const ins = env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
-    .bind(lock, requestId, t).run();
-  if (!ins.meta.changes) {
-    const claim = await trialLockRow(env, lock);
-    if (claim?.request_id === requestId) {
-      const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-      if (row?.code && row.status === 'issued') {
-        return signedFromRow(row);
+  if (!ownsLock) {
+    const ins = await env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
+      .bind(lock, requestId, t).run();
+    if (!ins.meta.changes) {
+      const claim = await trialLockRow(env, lock);
+      if (claim?.request_id === requestId) {
+        const row = await waitForIssuedOffline(env, requestId);
+        if (row) {
+          await ensureCustomerRecord(env, row, signedFromRow(row), t);
+          return signedFromRow(row);
+        }
+        ownsLock = true;
+      } else {
+        const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+        if (row?.code && row.status === 'issued') {
+          await ensureCustomerRecord(env, row, signedFromRow(row), t);
+          return signedFromRow(row);
+        }
+        throw new Error('already_used');
       }
+    } else {
+      ownsLock = true;
     }
-    const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-    if (row?.code && row.status === 'issued') {
-      return signedFromRow(row);
-    }
-    throw new Error('already_used');
   }
   const claim = await trialLockRow(env, lock);
   if (!claim || claim.request_id !== requestId) {
-    const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-    if (row?.code && row.status === 'issued') {
+    const row = await waitForIssuedOffline(env, requestId);
+    if (row) {
+      await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }
     throw new Error('already_used');
@@ -435,22 +477,47 @@ export async function issueOfflineCustomer(env, privateKey, device, shop, produc
   const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
   const issueSql =
     'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ? WHERE id = ? AND code IS NULL AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
-  await env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId).run();
+  const customerStmt = env.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t);
+  try {
+    await env.DB.batch([
+      env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
+      customerStmt,
+    ]);
+  } catch (e) {
+    const row = await waitForIssuedOffline(env, requestId);
+    if (row) {
+      await ensureCustomerRecord(env, row, signedFromRow(row), t);
+      return signedFromRow(row);
+    }
+    throw e;
+  }
   const row = await env.DB.prepare('SELECT code, status FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (!row?.code || row.status !== 'issued') {
-    const again = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-    if (again?.code && again.status === 'issued') {
+    const again = await waitForIssuedOffline(env, requestId);
+    if (again) {
+      await ensureCustomerRecord(env, again, signedFromRow(again), t);
       return signedFromRow(again);
+    }
+    const retry = await env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId).run();
+    if (retry.meta?.changes) {
+      await ensureCustomerRecord(env, { shop }, signed, t);
+      return signed;
     }
     throw new Error('already_used');
   }
-  const customer = await env.DB.prepare('SELECT id FROM customers WHERE device = ?').bind(signed.device).first();
-  if (!customer) {
-    await env.DB.prepare(
-      'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
-    ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t).run();
-  }
   return signed;
+}
+
+export function issueOfflineCustomer(env, privateKey, device, shop, productId, options = {}) {
+  const dkey = deviceKey(device);
+  const prev = offlineTails.get(dkey) || Promise.resolve();
+  const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, privateKey, device, shop, productId, options));
+  offlineTails.set(dkey, job);
+  return job.finally(() => {
+    if (offlineTails.get(dkey) === job) offlineTails.delete(dkey);
+  });
 }
 
 /** Drop activation codes from delivered rows older than TRIAL_DAYS (scheduled). */

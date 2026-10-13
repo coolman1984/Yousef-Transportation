@@ -51,6 +51,12 @@ async function ownerApi(request, env, url, session) {
     if (!row || row.status !== 'issued' || !row.code) return json({ error: 'not_found' }, 404);
     return json({ ok: true, code: row.code, device: row.device });
   }
+  if (path === '/undelivered' && request.method === 'GET') {
+    const rows = await env.DB.prepare(
+      "SELECT id, shop, device, code, updated_at FROM licence_requests WHERE status = 'issued' AND code IS NOT NULL ORDER BY updated_at DESC LIMIT 50",
+    ).all();
+    return json({ items: rows.results || [] });
+  }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
       "SELECT r.id, r.kind, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",

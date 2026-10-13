@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Review 11 — paid bootstrap on fresh TO_HOME, block clock revive (2026-10-13)
+
+**What:** Fresh paid `activate()` writes the first clock record when no code was stored yet (CI profile marker + missing/corrupt state); `status()` never auto-creates a clock when a code or profile auth already exists; trial replay blocked via `auth_key_on_disk()` in `_licence_clock_past_initial_use()`; hub refuses `TRIAL_DAYS` outside 1..14; regressions for wiped paid clocks, trial replay, and frozen `utcnow` catch-up.
+**Why:** Review 11 / windows-installer: shared profile migration marker left paid activation at `state_corrupt`; removing auth from establishment reopened expired paid/trial clocks.
+**Checks:** `cd licence-hub && node --test` (44 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
 ## CI journey fresh paid activation (2026-10-13)
 
 **What:** `_profile_clock_established()` no longer treats a profile auth key file alone as established (fixes windows-installer journey when an earlier CI step created auth under the same Windows user); `ci_signing_key.py` writes `studio:` kid; regression test for ci-test paid activate with orphan auth.

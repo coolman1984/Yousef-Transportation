@@ -22,6 +22,17 @@ const MAX_MACHINE = 128;
 const MAX_NONCE = 80;
 const MAX_PENDING_PER_IP = 8;
 const DEFAULT_PENDING_TTL_SEC = 900;
+const TRIAL_DAYS_MIN = 1;
+const TRIAL_DAYS_MAX = 14;
+
+/** Inclusive trial length the hub may sign (office reader caps at 14 regardless of env). */
+export function hubTrialDaysInclusive(raw) {
+  const days = Number(raw);
+  if (!Number.isFinite(days) || days < TRIAL_DAYS_MIN || days > TRIAL_DAYS_MAX) {
+    throw new Error('trial_days_out_of_range');
+  }
+  return Math.floor(days);
+}
 
 async function sha256Hex(data) {
   const buf = typeof data === 'string' ? enc.encode(data) : data;
@@ -404,7 +415,7 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
   }
 
   const t = now();
-  const days = Number(env.TRIAL_DAYS || 14);
+  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
   const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   let signed;
   try {
@@ -491,7 +502,7 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     throw new Error('already_used');
   }
 
-  const days = Number(env.TRIAL_DAYS || 14);
+  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
   const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
   const issueSql =

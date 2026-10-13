@@ -521,3 +521,12 @@ test('owner approval migrates legacy hash lock before issuing second trial', asy
   assert.equal(row.status, 'refused');
   assert.equal(row.reason, 'already_used');
 });
+
+test('TRIAL_DAYS above 14 refuses to sign offline trials', async () => {
+  const e = { ...env(), TRIAL_DAYS: '30' };
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 55)));
+  await assert.rejects(
+    () => issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders'),
+    /trial_days_out_of_range/,
+  );
+});

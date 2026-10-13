@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from unittest.mock import patch
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -187,6 +187,47 @@ class CiTestFreshPaidActivationTest(unittest.TestCase):
                     pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=l.device())['code']
                 st = l.activate(code, manual=True)
                 self.assertTrue(st['full'], st)
+
+    def test_ci_test_paid_with_profile_migration_marker_and_bad_clock_state(self):
+        try:
+            from cryptography.hazmat.primitives import serialization
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            self.skipTest('cryptography not installed')
+        import afcodes
+        import licence_state
+        from datetime import date as date_cls
+
+        private = Ed25519PrivateKey.generate()
+        pem = private.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        public = base64.urlsafe_b64encode(
+            private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        ).decode().rstrip('=')
+        variants = (
+            ('missing', lambda prof, bind: None),
+            ('corrupt', lambda prof, bind: open(
+                os.path.join(prof, licence_state.STATE_FILE), 'wb').write(b'not-a-licence-clock\n')),
+            ('fail_closed', lambda prof, bind: licence_state.seal_fail_closed(bind, 'state_corrupt')),
+        )
+        for label, setup_clock in variants:
+            with tempfile.TemporaryDirectory() as d:
+                holder = _CommercialLicence(
+                    d, build_channel='ci-test', release_keys=(), studio_keys=(public,))
+                prof = holder.profile_dir
+                os.makedirs(prof, mode=0o700, exist_ok=True)
+                licence_state.mark_migration_done()
+                bind = None
+                with holder as l:
+                    bind = l.machine_tag()
+                    setup_clock(prof, bind)
+                    code = afcodes.issue_code(
+                        pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=l.device())['code']
+                    st = l.activate(code, manual=True)
+                    self.assertTrue(st['full'], (label, st))
+                    licence._cache.clear()
+                    again = l.status()
+                    self.assertTrue(again['full'], (label, again))
 
 
 class InstallerChannelTest(unittest.TestCase):
@@ -930,6 +971,7 @@ class LicenceClockStateTest(unittest.TestCase):
     def test_frozen_clock_catches_up_via_repeated_far_hub_polls(self):
         import afcodes
         frozen = date(2026, 3, 1)
+        frozen_utc = datetime(2026, 3, 1, 12, 0, 0)
 
         class FrozenDate(date):
             @classmethod
@@ -938,16 +980,21 @@ class LicenceClockStateTest(unittest.TestCase):
 
         pem, public = TrialClockExpiryTest()._trial_keypair()
         far_day = (frozen + timedelta(days=30)).isoformat()
+        jump = licence.HUB_CALENDAR_MAX_JUMP_DAYS
         with tempfile.TemporaryDirectory() as d:
             with _CommercialLicence(d, release_keys=(), studio_keys=(public,)) as l:
-                with patch.object(licence, 'date', FrozenDate):
+                with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
                     issued = afcodes.issue_code(
                         pem, licence.PRODUCT_ID, 'standard', frozen, 14, grace_days=3, device=l.device())
                     l.activate(issued['code'], manual=True)
                     end = date.fromisoformat(issued['last_day']) + timedelta(days=3)
                     target = (end + timedelta(days=1)).isoformat()
                     while l._hub_calendar_max_day() is None or l._hub_calendar_max_day().isoformat() < target:
+                        prev = l._hub_calendar_max_day() or frozen
                         l._note_hub_calendar_day(far_day)
+                        seen = l._hub_calendar_max_day()
+                        self.assertIsNotNone(seen)
+                        self.assertEqual((seen - prev).days, jump)
                     licence._cache.clear()
                     st = l.status()
                     self.assertEqual(st['state'], 'expired')
@@ -1102,6 +1149,132 @@ class PaidClockStateTamperTest(unittest.TestCase):
                         st = l.status()
                     self.assertFalse(st['full'])
                     self.assertEqual(licence_state.read(l.machine_tag())[0], 'missing')
+
+    def _wipe_clock_establishment_keep_paid_code(self, l, holder):
+        import licence_state
+        prof = holder.profile_dir
+        for name in (licence_state.STATE_FILE, licence_state.MIGRATION_MARKER):
+            path = os.path.join(prof, name)
+            if os.path.exists(path):
+                os.remove(path)
+        l.a.kv('licence_clock_profile', delete=True)
+
+    def test_wiped_clock_establishment_cannot_revive_expired_paid(self):
+        import licence_state
+        import afcodes
+        frozen = date(2026, 9, 4)
+        frozen_utc = datetime(2026, 9, 4, 12, 0, 0)
+
+        class FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return frozen
+
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(), studio_keys=(public,))
+            with holder as l:
+                with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                    issued = afcodes.issue_code(
+                        pem, licence.PRODUCT_ID, 'standard', frozen, 30, grace_days=3, device=l.device())
+                    l.activate(issued['code'], manual=True)
+                    end = date.fromisoformat(issued['last_day']) + timedelta(days=3)
+                    _step_hub_calendar_to(l, (end + timedelta(days=1)).isoformat())
+                    licence._cache.clear()
+                    self.assertFalse(l.status()['full'])
+                    self._wipe_clock_establishment_keep_paid_code(l, holder)
+                    licence._cache.clear()
+                    with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                        st = l.status()
+                    self.assertFalse(st['full'])
+                    auth_path = os.path.join(holder.profile_dir, licence_state.AUTH_FILE)
+                    os.remove(auth_path)
+                    licence._cache.clear()
+                    with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                        st2 = l.status()
+                    self.assertFalse(st2['full'])
+
+    def test_wiped_clock_establishment_near_hub_day_stays_locked(self):
+        import afcodes
+        frozen = date(2026, 9, 4)
+        frozen_utc = datetime(2026, 9, 4, 12, 0, 0)
+
+        class FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return frozen
+
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(), studio_keys=(public,))
+            with holder as l:
+                with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                    issued = afcodes.issue_code(
+                        pem, licence.PRODUCT_ID, 'standard', frozen, 30, grace_days=3, device=l.device())
+                    l.activate(issued['code'], manual=True)
+                    end = date.fromisoformat(issued['last_day']) + timedelta(days=3)
+                    _step_hub_calendar_to(l, (end + timedelta(days=1)).isoformat())
+                    licence._cache.clear()
+                    self.assertFalse(l.status()['full'])
+                    self._wipe_clock_establishment_keep_paid_code(l, holder)
+                    near = (frozen + timedelta(days=3)).isoformat()
+                    l._note_hub_calendar_day(near)
+                    licence._cache.clear()
+                    with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                        st = l.status()
+                    self.assertFalse(st['full'])
+
+    def test_expired_trial_cannot_replay_after_code_row_deleted_with_auth_left(self):
+        import licence_state
+        import afcodes
+        frozen = date(2026, 4, 1)
+        frozen_utc = datetime(2026, 4, 1, 12, 0, 0)
+
+        class FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return frozen
+
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
+                    code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 3, device=l.device())['code']
+                    l.activate(code, manual=True)
+                    _step_hub_calendar_to(l, (frozen + timedelta(days=5)).isoformat())
+                    licence._cache.clear()
+                    self.assertFalse(l.status()['full'])
+                    prof = holder.profile_dir
+                    for name in (licence_state.STATE_FILE, licence_state.MIGRATION_MARKER):
+                        path = os.path.join(prof, name)
+                        if os.path.exists(path):
+                            os.remove(path)
+                    l.a.kv('licence_clock_profile', delete=True)
+                    l.a.kv('licence_code', delete=True)
+                    licence._cache.clear()
+                    self.assertTrue(licence_state.auth_key_on_disk())
+                    with self.assertRaises(ValueError):
+                        l.activate(code, manual=True)
+                    self.assertFalse(l.status()['full'])
+
+    def test_repaste_paid_code_does_not_replace_missing_clock_file(self):
+        import licence_state
+        import afcodes
+        from datetime import date as date_cls
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(), studio_keys=(public,))
+            with holder as l:
+                paid = afcodes.issue_code(
+                    pem, licence.PRODUCT_ID, 'standard', date_cls.today(), 30, device=l.device())['code']
+                l.activate(paid, manual=True)
+                os.remove(os.path.join(holder.profile_dir, licence_state.STATE_FILE))
+                licence._cache.clear()
+                st = l.activate(paid, manual=True)
+                self.assertFalse(st['full'])
+                self.assertEqual(st.get('reason'), 'state_corrupt')
+                self.assertEqual(licence_state.read(l.machine_tag())[0], 'missing')
 
 
 if __name__ == "__main__":

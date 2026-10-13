@@ -407,7 +407,10 @@ test('losing concurrent approval releases partial device locks', async () => {
   const locks = await e.DB.prepare('SELECT machine, request_id FROM machine_trials').bind().all();
   const deviceLocks = (locks.results || []).filter((r) => r.machine.startsWith('d:'));
   assert.equal(deviceLocks.length, 1);
-  const online = await postRequest(e, body({ device: devB, machine: MACHINE_B, nonce: 'n-free' }));
+  const loserDevice = a?.code ? devB : devA;
+  const winnerDevice = a?.code ? devA : devB;
+  assert.equal(deviceLocks[0].machine, deviceLockKey(deviceKey(winnerDevice)));
+  const online = await postRequest(e, body({ device: loserDevice, machine: MACHINE_B, nonce: 'n-free' }));
   assert.equal(online.data.status, 'pending');
 });
 

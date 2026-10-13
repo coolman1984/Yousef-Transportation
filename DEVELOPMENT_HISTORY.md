@@ -1,6 +1,33 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Merge origin/main into feat/licence-standard (2026-10-13)
+
+**What/why:** Merged `main` into PR #31 branch after `feat/simple-trial-activation` merge; kept licence-standard hub catch-up cap and paid calendar recovery.
+**Checks:** `timeout 900 python3 -W ignore::ResourceWarning -m unittest discover -s tests`; `cd licence-hub && timeout 300 node --test`.
+**Next:** Push branch; PR #31 review.
+
+## Merge feat/simple-trial-activation into feat/licence-standard (2026-10-13)
+
+**What/why:** Resolved `server/licence.py` and `DEVELOPMENT_HISTORY.md` conflicts keeping PR #29 clock/bootstrap/review rules plus PR #31 paid hub-calendar recovery, calendar retry backoff, and hub time rate limiting. Hub poll catch-up is capped at eight seven-day steps per request so a stuck partial step cannot spin at 100% CPU; remaining days wait for the next scheduled retry.
+**Checks:** `python3 -m unittest discover -s tests`; `cd licence-hub && node --test`.
+**Next:** Push branch; PR #31 review.
+
+## Paid hub calendar survives damaged profile clock (2026-10-13)
+
+**Branch/source:** `feat/licence-standard`, local session fix for REVIEW-time3 P1.
+**What/why:** After a hub business day was stored once, a missing or corrupt `licence-clock.v1` must not restore paid editing or count a calendar fetch as synced when the day did not persist. Assist marks `licence_hub_calendar_established` on first successful hub-day write; paid offices with that marker but no readable hub day stay read/export/backup only until the hub day is written again. Poll skips the six-hour success window while recovery is due; corrupt/sealed clock files are overwritten with the fetched hub day instead of empty fail-closed seals. Never-online paid PCs without a stored hub day are unchanged.
+**Checks:** `python3 -m unittest tests.test_commercial_licence` (42 pass). `cd licence-hub && node --test` (42 pass).
+**Next:** Local commit only; no push.
+
+## Calendar failure recovery and public time protection (2026-10-13)
+
+**Branch/source:** `feat/simple-trial-activation`, based on `5b8380a`; commercial candidate protection (L1), no pilot acceptance claimed. Implemented directly in this session without delegated coding tools.
+**What/why:** Failed/invalid public calendar checks now retry after five minutes, doubling up to the six-hour successful-check interval. Only valid synchronization advances the success timestamp; success resets failure backoff. HTTP protocol errors (including truncated success/error bodies) and non-object JSON become transport failures; only canonical calendar dates can update the forward-only watermark. Trial watch fallback survives public-check failures, and activation/calendar operations have independent exception boundaries. Retry timers schedule network requests only; no licence runtime, usage or lockout counters were added. Business records, codes, signed paid grace, and read/export/backup permissions are preserved.
+**Hub:** Public time GET uses the existing fixed-window pattern (120 requests/IP/600 seconds) in dedicated bounded memory, without D1 or secrets; 429 includes `Retry-After`. Deployment notes describe its per-isolate scope and recommended edge protection. Separately corrected the pre-existing approval-race test defect: select the actual loser rather than always assuming device B lost.
+**Checks:** `PYTHONDONTWRITEBYTECODE=1 python3 -W ignore::ResourceWarning -m unittest discover -s tests -p test_commercial_licence.py`: 39 passed, no skips. `test_assist.py`: 22 passed, including real paid hub expiry over HTTP, denied writes, preserved records, export/backup and restart persistence. Full Python discovery with Playwright and existing Chrome enabled in an isolated test virtual environment: 445 run, 443 passed, two expected skips (Windows-only open-SQLite rename check; absent owner's private workbook), no failures. `cd licence-hub && npm test`: 40 passed; plain `node --test`: 42 discovered/passed including helper files; corrected race regression passed 12 additional runs. `git diff --check`: clean.
+**Remaining/next:** Local commit only; no push, deployment, or Windows installer acceptance. Redeploy the hub and rebuild/verify the customer candidate separately. Built-in rate limiting is best effort per Worker isolate, not a global invocation-quota guarantee. The pre-existing contract-to-commercial 30-day upgrade allowance still uses `utcnow()`; this change does not claim hub-date enforcement for that separate allowance. The untracked review and `.model-fallback.log` remain untouched and uncommitted. No customer data or secrets were used.
+
 ## Windows binary licence clock writes (2026-10-13)
 
 **What:** `os.O_BINARY` on profile/sealed file writes; read compat for CRLF clock separators and damaged auth keys; paid `activate()` bootstraps clock only when state is `missing`; CI journey DIAG removed.

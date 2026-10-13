@@ -1,5 +1,7 @@
 """Commercial licence fail-closed runtime, installer channel separation, and contract-upgrade grace."""
 import base64
+import http.client
+import io
 import json
 import os
 import pathlib
@@ -8,6 +10,7 @@ import sqlite3
 import sys
 import tempfile
 import unittest
+import urllib.error
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta
 from unittest.mock import patch
@@ -17,6 +20,19 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 import licence  # noqa: E402
+
+
+def hub_response(payload, status=200, missing_bytes=0):
+    """Real HTTP parser over an in-memory socket, including short Content-Length bodies."""
+    class Socket:
+        def makefile(self, *args):
+            return io.BytesIO(
+                f'HTTP/1.1 {status} Test\r\nContent-Length: {len(payload) + missing_bytes}\r\n\r\n'.encode()
+                + payload)
+
+    response = http.client.HTTPResponse(Socket())
+    response.begin()
+    return response
 
 
 def key_blob(seed=b"a"):
@@ -69,6 +85,8 @@ class _CommercialLicence:
         import atrest
         atrest._MASTER = None
         licence._hub_poll_mono = None
+        licence._hub_retry_at_mono = None
+        licence._hub_retry_delay_sec = licence.HUB_CALENDAR_RETRY_SEC
         self.lic = licence.Licence(_Assist(data_dir), str(ROOT), str(data_dir), {})
 
     def __enter__(self):
@@ -96,6 +114,14 @@ def _step_hub_calendar_to(lic_obj, target):
             return
         nxt = min(target, base + timedelta(days=licence.HUB_CALENDAR_MAX_JUMP_DAYS))
         lic_obj._note_hub_calendar_day(nxt.isoformat())
+
+
+def _hub_poll_calendar_response(lic_obj, target):
+    """Simulate a hub /licence/time body while respecting per-step jump caps."""
+    if isinstance(target, date):
+        target = target.isoformat()
+    _step_hub_calendar_to(lic_obj, target)
+    return 200, {'calendar_day': target}
 
 
 def _seed_trips_db(data_dir):
@@ -428,6 +454,63 @@ class TrialClockExpiryTest(unittest.TestCase):
                 self.assertEqual(l._hub_calendar_max_day(), hub_day)
                 self.assertTrue(l.status()['full'])
 
+    def test_transport_and_shape_failures_keep_trial_watch_fallback(self):
+        import afcodes
+        first = date.today()
+        pem, public = self._trial_keypair()
+        failures = [
+            lambda: hub_response(b'{}', missing_bytes=10),
+            lambda: hub_response(b'[]'),
+            lambda: hub_response(b'null'),
+            lambda: hub_response(b'"text"'),
+            lambda: hub_response(b'{broken'),
+            lambda: hub_response(b'\xff'),
+            lambda: hub_response(b'{"calendar_day": []}'),
+            lambda: hub_response(b'{"calendar_day": "2026-02-30"}'),
+            lambda: urllib.error.HTTPError('https://hub.test/licence/time', 503, 'busy', {},
+                                          hub_response(b'{}', missing_bytes=10)),
+        ]
+        for failure in failures:
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
+                with _CommercialLicence(d, release_keys=(public,)) as l:
+                    l.a.kv('licence_hub_url', 'https://hub.test')
+                    code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14,
+                                              device=l.device())['code']
+                    l.activate(code, manual=True)
+                    l._hub_watch({'id': 'r1', 'poll_token': 'tok'})
+                    last_good = first + timedelta(days=1)
+                    l._note_hub_calendar_day(last_good.isoformat())
+                    fallback_day = first + timedelta(days=2)
+                    fallback = hub_response(json.dumps({'calendar_day': fallback_day.isoformat()}).encode())
+                    with patch.object(licence.urllib.request, 'urlopen', side_effect=[failure(), fallback]) as call:
+                        l._poll_hub_calendar()
+                    self.assertEqual([c.args[0].full_url for c in call.call_args_list], [
+                        'https://hub.test/licence/time', 'https://hub.test/licence/status?id=r1'])
+                    self.assertEqual(l._hub_calendar_max_day(), fallback_day)
+                    self.assertTrue(l.status()['full'])
+                    self.assertIsNone(licence._hub_poll_mono)
+                    self.assertIsNotNone(licence._hub_retry_at_mono)
+
+    def test_invalid_watch_response_preserves_last_good_date_and_watch(self):
+        import afcodes
+        first = date.today()
+        pem, public = self._trial_keypair()
+        with tempfile.TemporaryDirectory() as d, _CommercialLicence(d, release_keys=(public,)) as l:
+            l.a.kv('licence_hub_url', 'https://hub.test')
+            l.activate(afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14,
+                                         device=l.device())['code'], manual=True)
+            watch = {'id': 'r1', 'poll_token': 'tok'}
+            l._hub_watch(watch)
+            last_good = first + timedelta(days=1)
+            l._note_hub_calendar_day(last_good.isoformat())
+            before = l.status()
+            with patch.object(licence.urllib.request, 'urlopen', side_effect=[
+                    hub_response(b'null'), hub_response(b'[]')]):
+                l._poll_hub_calendar()
+            self.assertEqual(l._hub_calendar_max_day(), last_good)
+            self.assertEqual(l._hub_watch(), watch)
+            self.assertEqual(l.status(), before)
+
     def test_frozen_local_clock_expires_after_hub_calendar_day(self):
         with tempfile.TemporaryDirectory() as d:
             from datetime import date as date_cls
@@ -571,19 +654,132 @@ class PaidHubCalendarTest(unittest.TestCase):
             self.assertEqual(l._effective_calendar_day(), frozen)
             self.assertEqual(l.status(), before)
 
-    def test_network_failure_leaves_status_unchanged_and_limits_retries(self):
-        with self._paid() as (l, _, _):
+    def test_offline_startup_recovers_after_five_minutes_and_resets_cadence(self):
+        with self._paid() as (l, frozen, end):
+            l._note_hub_calendar_day(frozen.isoformat())
             before = l.status()
-            with patch.object(l, '_call', side_effect=ConnectionError('offline')) as call:
+            target = (end + timedelta(days=1)).isoformat()
+
+            def call_side_effect(*_a, **_k):
+                if not hasattr(call_side_effect, 'n'):
+                    call_side_effect.n = 0
+                call_side_effect.n += 1
+                if call_side_effect.n == 1:
+                    raise ConnectionError('offline')
+                if call_side_effect.n == 2:
+                    return _hub_poll_calendar_response(l, target)
+                raise ConnectionError('offline again')
+
+            with patch.object(l, '_call', side_effect=call_side_effect) as call:
                 with patch.object(licence.time, 'monotonic', return_value=100):
                     l._poll_hub_calendar()
                     l._poll_hub_calendar()
+                self.assertIsNone(licence._hub_poll_mono)
+                self.assertEqual(l._hub_calendar_max_day(), frozen)
+                self.assertEqual(l.status(), before)
+                with patch.object(licence.time, 'monotonic', return_value=399):
+                    l._poll_hub_calendar()
                 call.assert_called_once_with('GET', 'https://hub.test/licence/time')
-                with patch.object(licence.time, 'monotonic', return_value=100 + licence.HUB_CALENDAR_POLL_SEC):
+                with patch.object(licence.time, 'monotonic', return_value=400):
                     l._poll_hub_calendar()
                 self.assertEqual(call.call_count, 2)
-            self.assertIsNone(l._hub_calendar_max_day())
+                self.assertEqual(l.status()['state'], 'expired')
+                self.assertFalse(l.status()['full'])
+                with patch.object(licence.time, 'monotonic', return_value=400 + licence.HUB_CALENDAR_POLL_SEC - 1):
+                    l._poll_hub_calendar()
+                self.assertEqual(call.call_count, 2)
+                with patch.object(licence.time, 'monotonic', return_value=400 + licence.HUB_CALENDAR_POLL_SEC):
+                    l._poll_hub_calendar()
+                self.assertEqual(call.call_count, 3)
+                self.assertEqual(licence._hub_retry_at_mono, 400 + licence.HUB_CALENDAR_POLL_SEC + 300)
+
+    def test_failed_checks_back_off_to_six_hours_without_changing_access(self):
+        with self._paid() as (l, frozen, _):
+            l._note_hub_calendar_day(frozen.isoformat())
+            before = l.status()
+            now = 100
+            with patch.object(l, '_call', side_effect=ConnectionError('offline')) as call:
+                for attempt, delay in enumerate([300, 600, 1200, 2400, 4800, 9600, 19200, 21600, 21600], 1):
+                    with patch.object(licence.time, 'monotonic', return_value=now):
+                        l._poll_hub_calendar()
+                    self.assertEqual(call.call_count, attempt)
+                    self.assertEqual(licence._hub_retry_at_mono, now + delay)
+                    with patch.object(licence.time, 'monotonic', return_value=now + delay - 1):
+                        l._poll_hub_calendar()
+                    self.assertEqual(call.call_count, attempt)
+                    now += delay
+            self.assertIsNone(licence._hub_poll_mono)
+            self.assertEqual(l._hub_calendar_max_day(), frozen)
             self.assertEqual(l.status(), before)
+
+    def test_http_and_invalid_calendar_responses_retry_without_touching_last_good_date(self):
+        failures = [(status, {}) for status in (429, 500, 503)] + [
+            (200, shape) for shape in (None, [], 'text', {}, {'calendar_day': None},
+                {'calendar_day': 20260217}, {'calendar_day': []}, {'calendar_day': '2026-02-30'},
+                {'calendar_day': '20260217'}, {'calendar_day': '2026-02-17extra'})]
+        for failure in failures:
+            with self.subTest(failure=failure), self._paid() as (l, frozen, end):
+                l._note_hub_calendar_day(frozen.isoformat())
+                before = l.status()
+                failed_response = hub_response(json.dumps(failure[1]).encode())
+                if failure[0] != 200:
+                    failed_response = urllib.error.HTTPError('https://hub.test/licence/time', failure[0],
+                                                            'busy', {}, failed_response)
+                target = (end + timedelta(days=1)).isoformat()
+                calls = {'n': 0}
+
+                def urlopen_side_effect(*_a, **_k):
+                    calls['n'] += 1
+                    if calls['n'] == 1:
+                        if isinstance(failed_response, BaseException):
+                            raise failed_response
+                        return failed_response
+                    return hub_response(json.dumps({'calendar_day': target}).encode())
+
+                with patch.object(licence.urllib.request, 'urlopen', side_effect=urlopen_side_effect) as call:
+                    with patch.object(licence.time, 'monotonic', return_value=100):
+                        l._poll_hub_calendar()
+                    self.assertEqual(l._hub_calendar_max_day(), frozen)
+                    self.assertEqual(l.status(), before)
+                    self.assertIsNone(licence._hub_poll_mono)
+                    with patch.object(licence.time, 'monotonic', return_value=400):
+                        for _ in range(12):
+                            l._poll_hub_calendar()
+                            licence._partial_hub_catchup = False
+                            if not l.status()['full']:
+                                break
+                    self.assertGreaterEqual(call.call_count, 2)
+                    self.assertFalse(l.status()['full'])
+
+    def test_loop_checks_calendar_even_when_real_activation_step_raises(self):
+        for failure in (http.client.IncompleteRead(b'{}', 10), (200, []), RuntimeError('activation')):
+            with self.subTest(failure=failure), self._paid() as (l, _, end):
+                l._state({'status': 'waiting', 'kind': 'monthly', 'id': 'r1', 'poll_token': 'tok',
+                          'created_at': licence.iso(), 'nonce': 'test'})
+                l.stop = False
+
+                def finish_iteration(_):
+                    l.stop = True
+
+                target = (end + timedelta(days=1)).isoformat()
+
+                def call_side_effect(*_a, **_k):
+                    if not hasattr(call_side_effect, 'n'):
+                        call_side_effect.n = 0
+                    call_side_effect.n += 1
+                    if call_side_effect.n == 1:
+                        if isinstance(failure, BaseException):
+                            raise failure
+                        return failure
+                    return _hub_poll_calendar_response(l, target)
+
+                with patch.object(l, '_call', side_effect=call_side_effect) as call, \
+                        patch.object(licence.time, 'sleep', side_effect=finish_iteration):
+                    l.loop()
+                self.assertEqual([c.args[1] for c in call.call_args_list], [
+                    'https://hub.test/licence/status?id=r1', 'https://hub.test/licence/time'])
+                self.assertEqual(l.status()['state'], 'expired')
+                self.assertFalse(l.status()['full'])
 
     def test_paid_poll_is_limited_and_hub_day_never_moves_back(self):
         with self._paid() as (l, frozen, end):
@@ -634,6 +830,76 @@ class PaidHubCalendarTest(unittest.TestCase):
                 l.a.kv('licence_hub_url', delete=True)
                 l._poll_hub_calendar()
             call.assert_not_called()
+
+    def test_never_online_paid_without_hub_day_stays_editable(self):
+        with self._paid() as (l, _, _):
+            self.assertIsNone(l._hub_calendar_max_day())
+            self.assertNotEqual(l.a.kv(licence.HUB_CALENDAR_ESTABLISHED_KEY), '1')
+            st = l.status()
+            self.assertTrue(st['full'])
+            self.assertIn(st['state'], ('active', 'grace'))
+
+    def test_deleted_clock_file_after_hub_day_locks_until_poll_recovers(self):
+        import licence_state
+        with self._paid() as (l, frozen, end):
+            expired_day = (end + timedelta(days=1)).isoformat()
+            _step_hub_calendar_to(l, expired_day)
+            licence._cache.clear()
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
+            path = os.path.join(
+                pathlib.Path(os.environ['TRIPORDERS_DPAPI_DIR']), licence_state.STATE_FILE)
+            os.remove(path)
+            licence._cache.clear()
+            st = l.status()
+            self.assertFalse(st['full'])
+            self.assertEqual(st['reason'], 'state_corrupt')
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+                with patch.object(licence.time, 'monotonic', return_value=101):
+                    l._poll_hub_calendar()
+                    while licence._partial_hub_catchup:
+                        licence._partial_hub_catchup = False
+                        l._poll_hub_calendar()
+            self.assertGreaterEqual(call.call_count, 1)
+            licence._cache.clear()
+            self.assertEqual(l._hub_calendar_max_day(), date.fromisoformat(expired_day))
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
+
+    def test_corrupt_clock_file_recovers_hub_day_and_does_not_fake_sync(self):
+        import licence_state
+        with self._paid() as (l, _, end):
+            expired_day = (end + timedelta(days=1)).isoformat()
+            _step_hub_calendar_to(l, expired_day)
+            path = os.path.join(
+                pathlib.Path(os.environ['TRIPORDERS_DPAPI_DIR']), licence_state.STATE_FILE)
+            with open(path, 'r+b') as f:
+                data = bytearray(f.read())
+                data[10] ^= 0xFF
+                f.seek(0)
+                f.write(data)
+            licence._cache.clear()
+            self.assertFalse(l.status()['full'])
+            self.assertIsNone(l._hub_calendar_max_day())
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+                with patch.object(licence.time, 'monotonic', return_value=200):
+                    l._poll_hub_calendar()
+                    while licence._partial_hub_catchup:
+                        licence._partial_hub_catchup = False
+                        l._poll_hub_calendar()
+            self.assertGreaterEqual(call.call_count, 1)
+            self.assertEqual(licence._hub_poll_mono, 200)
+            licence._cache.clear()
+            self.assertEqual(l._hub_calendar_max_day(), date.fromisoformat(expired_day))
+            self.assertEqual(l.status()['state'], 'expired')
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call2:
+                with patch.object(licence.time, 'monotonic',
+                                  return_value=200 + licence.HUB_CALENDAR_POLL_SEC):
+                    l._poll_hub_calendar()
+            call2.assert_called_once()
+            licence._cache.clear()
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
 
 
 class GraceNotLostByAccidentTest(unittest.TestCase):
@@ -801,16 +1067,18 @@ class LicenceClockStateTest(unittest.TestCase):
                     calls.append(url)
                     return 200, {'calendar_day': future_day, 'status': 'pending'}
 
-                licence._hub_poll_mono = None
                 with patch.object(l, '_effective_calendar_day', return_value=frozen):
                     with patch.object(l, '_call', side_effect=fake_call):
                         with patch.object(licence, 'utcnow', return_value=licence.parse('2020-01-01T00:00:00Z')):
-                            l._poll_hub_calendar()
-                            licence._hub_poll_mono = None
-                            l._poll_hub_calendar()
-                            l._poll_hub_calendar()
+                            with patch.object(licence.time, 'monotonic', return_value=100):
+                                l._poll_hub_calendar()
+                            with patch.object(licence.time, 'monotonic', return_value=100 + licence.HUB_CALENDAR_POLL_SEC):
+                                l._poll_hub_calendar()
+                                l._poll_hub_calendar()
                 self.assertEqual(calls, [
-                    'https://hub.test/licence/time', 'https://hub.test/licence/status?id=r1',
+                    'https://hub.test/licence/time', 'https://hub.test/licence/time',
+                    'https://hub.test/licence/time',
+                    'https://hub.test/licence/status?id=r1',
                     'https://hub.test/licence/time', 'https://hub.test/licence/status?id=r1',
                 ])
                 licence._cache.clear()

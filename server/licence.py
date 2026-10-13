@@ -24,6 +24,7 @@ The hub address is public configuration: FACTORY_HUB_URL, `hub_url` in config.js
 """
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import pathlib
@@ -84,11 +85,17 @@ ACTIVE = ('sending', 'waiting', 'failed')
 CLOCK_TOLERANCE_HOURS_TRIAL = 1
 CLOCK_TOLERANCE_HOURS_PAID = 72
 TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
+HUB_CALENDAR_ESTABLISHED_KEY = 'licence_hub_calendar_established'
 HUB_WATCH_KEY = 'licence_hub_watch'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
+HUB_CALENDAR_RETRY_SEC = 5 * 60
 HUB_CALENDAR_MAX_JUMP_DAYS = 7
+HUB_CALENDAR_CATCHUP_STEPS_PER_POLL = 8
 TRIAL_HUB_KIDS = frozenset({'trial-hub', 'trial_hub', 'hub-trial'})
 _hub_poll_mono = None
+_hub_retry_at_mono = None
+_hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+_partial_hub_catchup = False
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -342,6 +349,20 @@ class Licence:
     def _note_profile_clock_established(self):
         self.a.kv('licence_clock_profile', '1')
 
+    def _note_hub_calendar_established(self):
+        self.a.kv(HUB_CALENDAR_ESTABLISHED_KEY, '1')
+
+    def _paid_hub_calendar_required(self):
+        if self._trial_state_required():
+            return False
+        if not (self.a.kv('licence_code') or ''):
+            return False
+        return self.a.kv(HUB_CALENDAR_ESTABLISHED_KEY) == '1'
+
+    def _hub_calendar_sync_due(self):
+        """Re-fetch when a paid PC once stored a hub day but the profile clock no longer has it."""
+        return self._paid_hub_calendar_required() and self._hub_calendar_max_day() is None
+
     def _trial_state_required(self):
         code = self.a.kv('licence_code') or ''
         if not code:
@@ -354,6 +375,8 @@ class Licence:
         return r.terms.get('edition') == 'trial'
 
     def _clock_state_ok(self):
+        if self._paid_hub_calendar_required():
+            return self._hub_calendar_max_day() is not None
         bind = self._state_bind()
         status, record = licence_state.read(bind)
         if status == 'ok':
@@ -369,7 +392,11 @@ class Licence:
         return False
 
     def _read_max_seen(self):
-        allow_create = not self._trial_state_required() and not self._disallow_automatic_clock_create()
+        allow_create = (
+            not self._trial_state_required()
+            and not self._paid_hub_calendar_required()
+            and not self._disallow_automatic_clock_create()
+        )
         record = self._clock_record(create=allow_create)
         if record is None:
             return None
@@ -379,18 +406,38 @@ class Licence:
         bind = self._state_bind()
         if licence_state.is_fail_closed(bind):
             return
+        profile = self.a.kv('licence_clock_profile') == '1'
 
         def updater(record):
             prev = parse(record.get('max_seen') or '')
             if prev and when <= prev:
                 return record
             record['max_seen'] = iso(when)
+            record['fail_closed'] = False
+            record.pop('fail_closed_reason', None)
             return record
 
-        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+        create = self._allow_clock_state_create() if not profile else False
+        if licence_state.mutate(bind, updater, create=create) is not None:
+            self._note_profile_clock_established()
+            return
+        if not profile:
             self._seal_clock_state_if_missing_or_corrupt(bind)
             return
-        self._note_profile_clock_established()
+        if self._trial_state_required() or not self._paid_hub_calendar_required():
+            licence_state.seal_fail_closed(bind, 'state_corrupt')
+
+    def _recover_clock_record(self, updater):
+        """Persist clock state when the profile file is missing or unreadable."""
+        bind = self._state_bind()
+        status, record = licence_state.read(bind)
+        if status == 'ok':
+            record = dict(record)
+        else:
+            record = licence_state.empty_record()
+        record = updater(record)
+        licence_state.save(record, bind)
+        return record
 
     def _hub_calendar_max_day(self):
         record = self._clock_record(create=False)
@@ -401,12 +448,10 @@ class Licence:
         except ValueError:
             return None
 
-    def _write_hub_calendar_max_day(self, hub_date):
+    def _write_hub_calendar_max_day(self, hub_date, recover_clock=False):
         bind = self._state_bind()
-        if licence_state.is_fail_closed(bind):
-            return
 
-        def updater(record):
+        def apply_hub(record):
             current = record.get('hub_calendar_max')
             if current:
                 try:
@@ -416,12 +461,21 @@ class Licence:
                 except ValueError:
                     pass
             record['hub_calendar_max'] = hub_date.isoformat()
+            record['fail_closed'] = False
+            record.pop('fail_closed_reason', None)
             return record
 
-        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
-            self._seal_clock_state_if_missing_or_corrupt(bind)
-            return
+        create = True if recover_clock else self._allow_clock_state_create()
+        saved = licence_state.mutate(bind, apply_hub, create=create)
+        if saved is None and recover_clock:
+            saved = self._recover_clock_record(apply_hub)
+        if saved is None:
+            if self._trial_state_required():
+                self._seal_clock_state_if_missing_or_corrupt(bind)
+            return False
         self._note_profile_clock_established()
+        self._note_hub_calendar_established()
+        return True
 
     def _trial_latch_set(self):
         bind = self._state_bind()
@@ -490,17 +544,24 @@ class Licence:
             today = last.date()
         return today
 
-    def _note_hub_calendar_day(self, hub_day):
-        """Record hub business calendar progress without fabricating a UTC instant."""
-        if not hub_day or not isinstance(hub_day, str):
-            return
+    def _note_hub_calendar_day(self, hub_day, recover_clock=False):
+        """Record hub business calendar progress without fabricating a UTC instant.
+
+        Returns True when the requested day is stored, False on failure or no-op,
+        and 'partial' when the hub day is ahead but only a capped step was stored.
+        """
+        if not isinstance(hub_day, str) or len(hub_day) != 10:
+            return False
         try:
-            hub_date = date.fromisoformat(hub_day[:10])
+            hub_date = date.fromisoformat(hub_day)
         except ValueError:
-            return
+            return False
+        if hub_date.isoformat() != hub_day:
+            return False
+        requested = hub_date
         current = self._hub_calendar_max_day()
         if current and hub_date <= current:
-            return
+            return current == hub_date
         effective = date.today()
         if current and current > effective:
             effective = current
@@ -509,7 +570,14 @@ class Licence:
             effective = last.date()
         if hub_date > effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS):
             hub_date = effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS)
-        self._write_hub_calendar_max_day(hub_date)
+        if not self._write_hub_calendar_max_day(hub_date, recover_clock=recover_clock):
+            return False
+        stored = self._hub_calendar_max_day()
+        if stored != hub_date:
+            return False
+        if requested > stored:
+            return 'partial'
+        return True
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -691,6 +759,9 @@ class Licence:
             elif self._profile_clock_established():
                 result.update(full=False, reason='state_corrupt')
             clock_back = False
+        elif self._paid_hub_calendar_required() and not state_ok:
+            result.update(state='invalid', full=False, reason='state_corrupt')
+            clock_back = False
         else:
             clock_back = self._seen_now(result.get('edition'))
         if result.get('reason') == 'state_corrupt':
@@ -831,14 +902,20 @@ class Licence:
                                      headers={'Content-Type': 'application/json', 'User-Agent': f'TripOrders/{VERSION}',
                                               **({'Authorization': 'Bearer ' + token} if token else {})})
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.status, json.loads(r.read().decode('utf-8') or '{}')
-        except urllib.error.HTTPError as e:
             try:
-                return e.code, json.loads(e.read().decode('utf-8') or '{}')
-            except ValueError:
-                return e.code, {}
-        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    code, data = r.status, json.loads(r.read().decode('utf-8') or '{}')
+            except urllib.error.HTTPError as e:
+                with e:
+                    code = e.code
+                    try:
+                        data = json.loads(e.read().decode('utf-8') or '{}')
+                    except ValueError:
+                        data = {}
+            if not isinstance(data, dict):
+                raise ValueError('response_object')
+            return code, data
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise ConnectionError(e.__class__.__name__) from None
 
     @staticmethod
@@ -973,23 +1050,53 @@ class Licence:
             return None
 
     def _poll_hub_calendar(self):
-        global _hub_poll_mono
+        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec, _partial_hub_catchup
         url = self.hub()
         if not url:
             return
         now_mono = time.monotonic()
-        if _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
-            return
-        # Limit attempts by process time even when the PC clock freezes or the network fails.
-        _hub_poll_mono = now_mono
+        if _hub_retry_at_mono is not None:
+            if now_mono < _hub_retry_at_mono:
+                return
+        elif _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
+            if not self._hub_calendar_sync_due():
+                return
+        synced = False
+        noted = False
+        catchup_steps = 0
+        prev_stored = self._hub_calendar_max_day()
         try:
-            code, d = self._call('GET', url + '/licence/time')
-            if code == 200:
-                self._note_hub_calendar_day(d.get('calendar_day'))
+            while True:
+                code, d = self._call('GET', url + '/licence/time')
+                if code == 200 and isinstance(d, dict):
+                    noted = self._note_hub_calendar_day(d.get('calendar_day'), recover_clock=True)
+                    if noted == 'partial':
+                        _partial_hub_catchup = True
+                        stored = self._hub_calendar_max_day()
+                        if stored == prev_stored:
+                            break
+                        prev_stored = stored
+                        catchup_steps += 1
+                        if catchup_steps >= HUB_CALENDAR_CATCHUP_STEPS_PER_POLL:
+                            break
+                        continue
+                    synced = noted is True
+                break
+            if synced:
                 with _lock:
                     _cache.clear()
         except ConnectionError:
             pass
+        # These timers only schedule network checks; they never measure use or decide expiry.
+        if synced:
+            _hub_poll_mono = now_mono
+            _hub_retry_at_mono = None
+            _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+        elif noted == 'partial':
+            _hub_retry_at_mono = now_mono
+        else:
+            _hub_retry_at_mono = now_mono + _hub_retry_delay_sec
+            _hub_retry_delay_sec = min(_hub_retry_delay_sec * 2, HUB_CALENDAR_POLL_SEC)
 
         watch = self._hub_watch()
         if not watch or not watch.get('id') or not watch.get('poll_token'):
@@ -1000,8 +1107,8 @@ class Licence:
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
-            if code == 200:
-                self._note_hub_calendar_day(d.get('calendar_day'))
+            if code == 200 and isinstance(d, dict) and self._note_hub_calendar_day(
+                    d.get('calendar_day'), recover_clock=True) is True:
                 with _lock:
                     _cache.clear()
             elif code == 401:
@@ -1016,10 +1123,18 @@ class Licence:
                 st = self._state()
                 if st and st.get('status') in ACTIVE + ('issued',):
                     self.step()
+            except Exception:  # noqa: BLE001 - activation must not prevent calendar checks
+                pass
+            try:
                 self._poll_hub_calendar()
             except Exception:  # noqa: BLE001 - never let this reach the program
                 pass
             time.sleep(every)
 
     def start(self):
+        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec, _partial_hub_catchup
+        _hub_poll_mono = None
+        _hub_retry_at_mono = None
+        _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+        _partial_hub_catchup = False
         threading.Thread(target=self.loop, daemon=True, name='licence').start()

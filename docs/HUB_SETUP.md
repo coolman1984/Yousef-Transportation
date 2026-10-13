@@ -15,7 +15,7 @@ Nothing is set up by default. Telemetry requires office consent (Settings → Pr
 | Problem report (`/ingest`) | the person wrote it and pressed send after the preview | telemetry relay address and the install token |
 | Usage counts, error fingerprints, backup/sync results (`/ingest`) | only after the **office and the person** agreed | telemetry relay address and the install token |
 | Licence request (`/licence/request`, `/licence/status`, `/licence/ack`) | the administrator pressed "Activate" for an online trial | **licence hub** address (`licence_hub_url` / `FACTORY_LICENCE_HUB_URL`, or `hub_url` when telemetry is off) |
-| Calendar check (`GET /licence/time`) | at most once every six hours per running process, including paid or expired licences; disabled in practice mode | licence hub address only; no activation code, device identifier or token is sent |
+| Calendar check (`GET /licence/time`) | every six hours after a valid response; failed checks retry after five minutes, doubling up to six hours; includes paid or expired licences; disabled in practice mode | licence hub address only; no activation code, device identifier or token is sent |
 
 Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screenshots. A licence request may include the **organisation name** you type on the Licence tab (`shop`, up to 60 characters; if left blank the program sends the site name from settings). That name is not part of the signed activation code. Other typed text is not sent. Telemetry uses only the factory taxonomy `server/aftelemetry_events.json` (byte-identical to the factory copy).
 
@@ -28,6 +28,16 @@ Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screens
 - **Commercial installers:** trusted public keys and which keys are **trial-only** are compiled into the program at build time (`TO_RELEASE_PUBLIC_KEYS` with `trial-hub:` and `studio:` kids). Customer `licence_keys.txt` cannot change that policy.
 
 The calendar response uses `LICENCE_CALENDAR_TZ` (default `Africa/Cairo`) and only moves the effective licence day forward. A paid licence past its last day plus its signed grace period becomes expired: editing stops, while reading, exporting and backing up remain available under existing permissions. Network failures leave the calendar unchanged. Redeploy the updated hub and rebuild the customer app to enable this protection.
+
+Activation processing and calendar checking have separate failure boundaries. HTTP errors, truncated responses, non-object JSON and invalid dates leave the last good date intact and schedule a retry. The trial status watch still runs when the public calendar check fails. Retry timers only schedule requests; they do not measure usage or determine expiry.
+
+### Public calendar route protection
+
+`GET /licence/time` uses the existing fixed-window limiter pattern: **120 requests per IP per 600 seconds**, keyed by Cloudflare's `CF-Connecting-IP`. Its dedicated in-memory buckets avoid D1 reads/writes and need no session or signing secrets. Rejected requests return HTTP 429 with `Retry-After` until the next window; responses remain uncached. At most 5,000 IP buckets are held per window; when full, new IPs receive 429 until the next window. Normal office retries and offices sharing one IP have room within the limit.
+
+This is best-effort protection per Worker isolate. A new isolate starts with empty buckets, so it is not a global quota guarantee and does not prevent Worker invocations. For a publicly advertised hub, the recommended deployment is a custom domain with a Cloudflare WAF rate-limiting rule before Worker execution: match GET and path `/licence/time`, count by IP, and block excess requests. Use the period supported by the account and a generous equivalent threshold for shared offices; keep the rule scoped to this route. Verify the deployed rule's allowed/blocked responses before relying on it for invocation-quota protection. See [Cloudflare rate-limiting rules](https://developers.cloudflare.com/waf/rate-limiting-rules/) and [Worker limits](https://developers.cloudflare.com/workers/platform/limits/). No edge settings or deployment are changed by this repository update.
+
+Redeploying the Worker enables the built-in protection without new bindings. `cd licence-hub && npm test` exercises the real Worker handler: 120 allowed requests, throttling, separate IPs, window reset, bounded bucket storage, and no D1/secret access. The approval-race regression selects the actual loser rather than assuming an execution order.
 
 ### Trial-only hub signing key (separate from Licence Studio)
 

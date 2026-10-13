@@ -127,7 +127,11 @@ def first(home, cmd):
         assert denied['key'] == 'err.licence', denied
         assert app.call('GET', '/api/state')['version'] is not None, 'reading must work without a licence'
         code = afcodes.issue_code(pem, 'trip-orders', 'standard', date.today(), 30, lic['device'], 3)['code']
-        assert app.call('POST', '/api/licence/activate', {'code': code})['full'] is True
+        activated = app.call('POST', '/api/licence/activate', {'code': code})
+        if activated.get('full') is not True:
+            print('DIAG activate response:', json.dumps(activated, default=str), flush=True)
+            print('DIAG licence status:', json.dumps(app.call('GET', '/api/licence'), default=str), flush=True)
+        assert activated.get('full') is True, activated
         app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists})
         trip = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'Journey Factory'})
         backup = app.call('POST', '/api/backups', {})['name']

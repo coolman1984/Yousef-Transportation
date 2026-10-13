@@ -152,6 +152,10 @@ async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
 }
 
 export async function handleLicence(request, env, url) {
+  if (url.pathname === '/licence/time' && request.method === 'GET') {
+    return json({ calendar_day: hubCalendarDay(env) });
+  }
+
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
   if (await limited(env, 'lic:ip:' + ip, 120)) return json({ error: 'rate' }, 429);
   if (!env.SESSION_SECRET) return json({ error: 'config' }, 503);

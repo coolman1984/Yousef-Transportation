@@ -7,6 +7,7 @@ import {
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
+import { calendarDateInTz } from '../src/calendar.js';
 
 const SECRET = 'test-session-secret-0123456789abcdef';
 const MACHINE_A = 'a'.repeat(64);
@@ -195,6 +196,25 @@ test('status returns calendar_day as YYYY-MM-DD string', async () => {
   const { data } = await postRequest(e, body());
   const st = await getStatus(e, data.id, data.poll_token);
   assert.match(st.data.calendar_day, /^\d{4}-\d{2}-\d{2}$/);
+});
+
+test('time returns the hub calendar day without auth, secrets, or database access', async () => {
+  for (const tz of [undefined, 'Pacific/Kiritimati', 'America/Los_Angeles']) {
+    const e = {
+      LICENCE_CALENDAR_TZ: tz,
+      get DB() { assert.fail('time must not access the database'); },
+      get SESSION_SECRET() { assert.fail('time must not read secrets'); },
+    };
+    const req = new Request('https://hub.test/licence/time');
+    const before = calendarDateInTz(new Date(), tz || 'Africa/Cairo').iso;
+    const res = await handleLicence(req, e, new URL(req.url));
+    const data = await res.json();
+    const after = calendarDateInTz(new Date(), tz || 'Africa/Cairo').iso;
+    assert.equal(res.status, 200);
+    assert.equal(res.headers.get('Cache-Control'), 'no-store');
+    assert.deepEqual(Object.keys(data), ['calendar_day']);
+    assert.ok([before, after].includes(data.calendar_day));
+  }
 });
 
 test('ack clears stored activation code', async () => {

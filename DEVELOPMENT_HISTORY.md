@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Paid licence calendar protection (2026-10-13)
+
+**Branch/source:** `feat/simple-trial-activation` (PR #29), based on `1baa861`; licence protection for the commercial candidate (L1), no pilot acceptance claimed.
+**What/why:** Public, uncached `/licence/time` reuses the hub calendar helper without DB/secrets. Client checks every six hours for all editions, even expired-looking codes or open requests; failed attempts stay rate limited and trial watch polling continues. Forward-only hub days expire paid codes beyond signed grace with `full=False`; existing read/export/backup access remains. No usage counters, secrets or user data changed. Updated hub guide, release notes and test map.
+**Checks:** `cd tests && python3 -W ignore::ResourceWarning -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto`: 110 run, 109 pass, one Windows-only SQLite rename test skipped on Linux (commercial licence module: 34 pass). `cd licence-hub && node --test`: 40 pass; no `node_modules` present. `git diff --check`: clean.
+**Remaining/next:** Local commit only; no push/deployment. Updated hub deployment, rebuilt Windows installer and field verification remain necessary. Existing `.model-fallback.log` left untouched and uncommitted.
+
 ## Review 7 — fail-closed trial state, D1 transactions, owner recovery (2026-10-13)
 
 **What:** Profile licence clock seals permanently on corrupt/missing established state (no `_seen_now` revival); serialized `licence_state.mutate`; hub D1 awaits + batch issue/customer + loser lock cleanup + offline resume queue; legacy `h:` backfill; owner `/undelivered` list; HUB_SETUP base64url public key; README commercial vs relay URLs; assist tests use isolated profile dir.

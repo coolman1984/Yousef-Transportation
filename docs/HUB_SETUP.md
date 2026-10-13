@@ -5,9 +5,9 @@ Trip Orders can use **two different Cloudflare Workers** (different URLs). They 
 | Worker | Role | Typical URL config |
 |---|---|---|
 | **Telemetry relay** (`Apps-Factory/templates/telemetry-relay`) | Problem reports (`/ingest`), usage counts, crash fingerprints | `hub_url` / `FACTORY_HUB_URL` (Settings → Privacy & help) |
-| **Licence hub** (`licence-hub/` in this repository) | Online trial requests (`/licence/request`, `/licence/status`, `/licence/ack`) and the owner approval UI | `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` (or the same `hub_url` only when telemetry is disabled) |
+| **Licence hub** (`licence-hub/` in this repository) | Online trial requests, licence calendar checks (`/licence/time`) and the owner approval UI | `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` (or the same `hub_url` only when telemetry is disabled) |
 
-Nothing is set up by default and **nothing leaves the PC** until the office agrees (Settings → Privacy & help) and an address (+ token for telemetry) is configured.
+Nothing is set up by default. Telemetry requires office consent (Settings → Privacy & help), an address and a token. Configuring a licence hub enables its calendar checks; trial activation sends a request when the administrator presses **Activate**.
 
 ## What goes to the hub
 | What | When | Needs |
@@ -15,16 +15,19 @@ Nothing is set up by default and **nothing leaves the PC** until the office agre
 | Problem report (`/ingest`) | the person wrote it and pressed send after the preview | telemetry relay address and the install token |
 | Usage counts, error fingerprints, backup/sync results (`/ingest`) | only after the **office and the person** agreed | telemetry relay address and the install token |
 | Licence request (`/licence/request`, `/licence/status`, `/licence/ack`) | the administrator pressed "Activate" for an online trial | **licence hub** address (`licence_hub_url` / `FACTORY_LICENCE_HUB_URL`, or `hub_url` when telemetry is off) |
+| Calendar check (`GET /licence/time`) | at most once every six hours per running process, including paid or expired licences; disabled in practice mode | licence hub address only; no activation code, device identifier or token is sent |
 
 Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screenshots. A licence request may include the **organisation name** you type on the Licence tab (`shop`, up to 60 characters; if left blank the program sends the site name from settings). That name is not part of the signed activation code. Other typed text is not sent. Telemetry uses only the factory taxonomy `server/aftelemetry_events.json` (byte-identical to the factory copy).
 
 ## Configure (nothing is committed to the repository)
 - **Telemetry relay address:** environment variable `FACTORY_HUB_URL` or `"hub_url"` in `config.json`, or Settings → Privacy & help → Help service. It must be `https://`.
-- **Licence hub address:** environment variable `FACTORY_LICENCE_HUB_URL` or `"licence_hub_url"` in `config.json`. When omitted, the program falls back to `hub_url` for online trial activation only.
+- **Licence hub address:** environment variable `FACTORY_LICENCE_HUB_URL` or `"licence_hub_url"` in `config.json`. When omitted, the program falls back to `hub_url` for online trial activation and licence calendar checks.
 - **Mutually exclusive on one URL:** if `hub_url` points at the licence hub, problem reports and usage counts will not reach a telemetry relay (that Worker has no `/ingest`). Either disable telemetry for that installation or configure **two** addresses as above.
 - **Install token** (given by the factory control centre for telemetry): typed once in Settings → Privacy & help → Help service, or `TO_HUB_TOKEN`. It is kept only in `data/assist.db` on this PC, never shown again, never logged, never written to the backups.
 - **Licence public keys (contract / source installs):** one or more `kid:key` lines in `licence_keys.txt` next to `config.json` (or `TO_LICENCE_KEYS`, or `"licence_keys"` in `config.json`). With no key the program is "licence by contract" and nothing is enforced.
 - **Commercial installers:** trusted public keys and which keys are **trial-only** are compiled into the program at build time (`TO_RELEASE_PUBLIC_KEYS` with `trial-hub:` and `studio:` kids). Customer `licence_keys.txt` cannot change that policy.
+
+The calendar response uses `LICENCE_CALENDAR_TZ` (default `Africa/Cairo`) and only moves the effective licence day forward. A paid licence past its last day plus its signed grace period becomes expired: editing stops, while reading, exporting and backing up remain available under existing permissions. Network failures leave the calendar unchanged. Redeploy the updated hub and rebuild the customer app to enable this protection.
 
 ### Trial-only hub signing key (separate from Licence Studio)
 

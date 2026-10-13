@@ -414,7 +414,7 @@ class Licence:
         return now < last - tol
 
     def _effective_calendar_day(self, today=None):
-        """Latest calendar day used for trial expiry (local, UTC watermark, or hub business day)."""
+        """Latest calendar day used for licence expiry (local, UTC watermark, or hub business day)."""
         today = today or date.today()
         hub_max = self._hub_calendar_max_day()
         if hub_max and hub_max > today:
@@ -875,25 +875,34 @@ class Licence:
 
     def _poll_hub_calendar(self):
         global _hub_poll_mono
-        watch = self._hub_watch()
         url = self.hub()
-        if not watch or not url or not watch.get('id') or not watch.get('poll_token'):
-            return
-        st = self.status()
-        if st.get('edition') != 'trial':
-            self._hub_watch(clear=True)
-            return
-        if st.get('state') in ('expired', 'invalid', 'none'):
-            self._hub_watch(clear=True)
+        if not url:
             return
         now_mono = time.monotonic()
         if _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
+            return
+        # Limit attempts by process time even when the PC clock freezes or the network fails.
+        _hub_poll_mono = now_mono
+        try:
+            code, d = self._call('GET', url + '/licence/time')
+            if code == 200:
+                self._note_hub_calendar_day(d.get('calendar_day'))
+                with _lock:
+                    _cache.clear()
+        except ConnectionError:
+            pass
+
+        watch = self._hub_watch()
+        if not watch or not watch.get('id') or not watch.get('poll_token'):
+            return
+        st = self.status()
+        if st.get('edition') != 'trial' or st.get('state') in ('expired', 'invalid', 'none'):
+            self._hub_watch(clear=True)
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
             if code == 200:
                 self._note_hub_calendar_day(d.get('calendar_day'))
-                _hub_poll_mono = now_mono
                 with _lock:
                     _cache.clear()
             elif code == 401:
@@ -908,8 +917,7 @@ class Licence:
                 st = self._state()
                 if st and st.get('status') in ACTIVE + ('issued',):
                     self.step()
-                else:
-                    self._poll_hub_calendar()
+                self._poll_hub_calendar()
             except Exception:  # noqa: BLE001 - never let this reach the program
                 pass
             time.sleep(every)

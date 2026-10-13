@@ -82,6 +82,12 @@ Name: "thispconly"; Description: "{cm:ThisPcOnly}"; Flags: unchecked
 ; only SYSTEM, the administrators and ONE operator account (the person who installs, or /OPERATOR=DOMAIN\name) may read or write it.
 Name: "{commonappdata}\TripOrders"; Permissions: admins-full system-full; Flags: uninsneveruninstall
 
+[InstallDelete]
+; Remove files from older pilot builds; never touch %ProgramData%\TripOrders.
+Type: files; Name: "{app}\open_in_browser.bat"
+Type: files; Name: "{app}\TripOrders.url"
+Type: filesandordirs; Name: "{app}\legacy_web"
+
 [Files]
 Source: "..\build\to_main.dist\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 

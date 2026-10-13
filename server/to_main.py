@@ -1,7 +1,8 @@
 """Entry point of the installed program (TripOrders.exe, built by tools/build_windows.py).
 
-  TripOrders.exe                 start the system and open it in the browser
-  TripOrders.exe --background    start the system without opening the browser (used when Windows starts)
+  TripOrders.exe                 start the system and open it in its own window (WebView2; browser fallback)
+  TripOrders.exe --background    start the system without opening a window (used when Windows starts)
+  TripOrders.exe --browser       open in the default browser instead of the desktop window
   TripOrders.exe tool <command>  maintenance tools of server/nodectl.py (status, verify, rebuild, reset-admin, restore-set <backup folder>,
                            export-authority <file>, import-authority <file>) - run it from a command window
 
@@ -34,7 +35,7 @@ def main(argv):
         import nodectl
         return nodectl.main(argv[1:])
     import app
-    app.main(background='--background' in argv)
+    app.main(background='--background' in argv, desktop='--browser' not in argv)
     return 0
 
 

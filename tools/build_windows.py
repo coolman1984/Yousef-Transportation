@@ -7,6 +7,7 @@ Steps: pack the web pages into server/_assets.py, draw the icon, compile the pro
     python tools/build_windows.py            needs: pip install nuitka ordered-set zstandard cryptography, and Inno Setup 6
     sqlcipher3 (pip install sqlcipher3-binary) is optional. Omit it unless the build is meant to run with TRIPORDERS_ENCRYPT=1.
     A build without that package still runs when the flag is unset.
+    pip install pillow pywebview for the desktop window and the application icon.
 """
 import glob
 import pathlib
@@ -40,6 +41,9 @@ def compile_program(v4):
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
          f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets', '--include-module=_release_policy',
+         '--include-module=desktop_shell', '--include-module=config_migrate', 
+         '--include-package-data=webview',
+         f'--include-data-files={os.path.join(BUILD, "triporders.ico")}=triporders.ico',
          '--include-data-files=' + os.path.join('server', 'aftelemetry_events.json') + '=aftelemetry_events.json',
          '--include-data-files=' + os.path.join('server', 'afguide_ar_lexicon.json') + '=afguide_ar_lexicon.json',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'to_main.py')])

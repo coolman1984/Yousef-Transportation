@@ -96,10 +96,17 @@ TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf
 
 
 def load_config():
+    from config_migrate import migrate_config
+
     cfg = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding='utf-8') as f:
             cfg.update(json.load(f))
+        if migrate_config(cfg):
+            tmp = CONFIG_PATH + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(cfg, f, indent=2)
+            os.replace(tmp, CONFIG_PATH)
     else:
         with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
             json.dump(cfg, f, indent=2)
@@ -1409,18 +1416,127 @@ class Server(ThreadingHTTPServer):
             self._slots.release()
 
 
-def main(background=False):
+def _open_ui(port, desktop_window, on_closed=None):
+    url = f'http://localhost:{port}/'
+    if desktop_window:
+        import desktop_shell
+        if desktop_shell.webview_runtime_available():
+            desktop_shell.run_window(url, on_closed or (lambda: None))
+            return
+        say('WebView2 was not found; opening Trip Orders in your default browser.')
+    if CFG.get('open_browser', True):
+        webbrowser.open(url)
+
+
+def _shutdown_services():
+    if GATE:
+        GATE.stop()
+    if LIC:
+        LIC.stop = True
+    if ASSIST:
+        ASSIST.close()
+    if SYNC:
+        SYNC.shutdown()
+    if JOURNAL:
+        JOURNAL.flush_activity()
+    say('Server stopped')
+
+
+def _print_banner(port, desktop_window):
+    print('=' * 64)
+    print(' Trip Orders is running')
+    print(f' This PC:        http://localhost:{port}/')
+    for u in lan_urls(port):
+        print(f' Other PCs:      {u}')
+    print(f' This PC:        "{NODE.name}" ({NODE.role}, id {NODE.id}), sync port {SYNC.port}')
+    print(f' Data folder:    {DATA_DIR}')
+    print(f' Backups folder: {BACKUPS.dir}')
+    if not AUTH.has_users():
+        print(' FIRST START: open http://localhost:%d/ on THIS PC to create the' % port)
+        print('              administrator account (not possible from other PCs).')
+    print(f' Version {VERSION} - {COPYRIGHT}')
+    if desktop_window:
+        print(' Close the Trip Orders window to stop the system.')
+    else:
+        print(' Keep this window open. Close it to stop the system.')
+    print('=' * 64, flush=True)
+
+
+def _serve(httpd, desktop_window, port, background):
+    say('Server started')
+    if background:
+        try:
+            httpd.serve_forever()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            _shutdown_services()
+        return
+    if desktop_window:
+        import desktop_shell
+        ready = threading.Event()
+        err = []
+
+        def _run():
+            try:
+                httpd.serve_forever()
+            except Exception as e:
+                err.append(e)
+            finally:
+                ready.set()
+
+        threading.Thread(target=_run, name='triporders-http', daemon=True).start()
+        if not desktop_shell.wait_for_server(port):
+            say('The server did not become ready in time.')
+            httpd.shutdown()
+            _shutdown_services()
+            return
+        try:
+            _open_ui(port, True, on_closed=httpd.shutdown)
+        finally:
+            httpd.server_close()
+            ready.wait(timeout=30)
+            _shutdown_services()
+        return
+    if CFG.get('open_browser', True):
+        threading.Timer(0.8, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _shutdown_services()
+
+
+def main(background=False, desktop=False):
+    import desktop_shell
+
+    desktop_window = desktop_shell.should_use_desktop_window(CFG, background, desktop)
     port = int(CFG['port'])
     if not INSTANCE:
-        print('The system is already running on this PC. Opening it in the browser.')
+        print('The system is already running on this PC.')
         if not background:
+            if desktop_window and desktop_shell.exit_if_duplicate_instance():
+                return
+            if desktop_window and desktop_shell.webview_runtime_available():
+                if desktop_shell.wait_for_server(port):
+                    desktop_shell.run_window(f'http://localhost:{port}/', lambda: None)
+                    return
+            if desktop_window:
+                say('WebView2 was not found; opening Trip Orders in your default browser.')
             webbrowser.open(f'http://localhost:{port}/')
+        return
+    if desktop_window and desktop_shell.exit_if_duplicate_instance():
         return
     try:
         httpd = Server((CFG['host'], port), Handler)
     except OSError:
-        print(f'Port {port} is already in use - the system is probably already running. Opening it in the browser.')
-        if not background:  # a second start (e.g. the desktop icon while it runs in the background) just opens it
+        print(f'Port {port} is already in use - the system is probably already running.')
+        if not background:
+            if desktop_window and desktop_shell.webview_runtime_available():
+                if desktop_shell.wait_for_server(port):
+                    desktop_shell.run_window(f'http://localhost:{port}/', lambda: None)
+                    return
             webbrowser.open(f'http://localhost:{port}/')
         return
 
@@ -1436,35 +1552,8 @@ def main(background=False):
     GATE.start()
     ASSIST.start()
     LIC.start()
-
-    print('=' * 64)
-    print(' Trip Orders is running')
-    print(f' This PC:        http://localhost:{port}/')
-    for u in lan_urls(port):
-        print(f' Other PCs:      {u}')
-    print(f' This PC:        "{NODE.name}" ({NODE.role}, id {NODE.id}), sync port {SYNC.port}')
-    print(f' Data folder:    {DATA_DIR}')
-    print(f' Backups folder: {BACKUPS.dir}')
-    if not AUTH.has_users():
-        print(' FIRST START: open http://localhost:%d/ on THIS PC to create the' % port)
-        print('              administrator account (not possible from other PCs).')
-    print(f' Version {VERSION} - {COPYRIGHT}')
-    print(' Keep this window open. Close it to stop the system.')
-    print('=' * 64, flush=True)
-    say('Server started')
-    if CFG.get('open_browser', True) and not background:
-        threading.Timer(0.8, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
-    try:
-        httpd.serve_forever()
-    except KeyboardInterrupt:
-        pass
-    finally:
-        GATE.stop()
-        LIC.stop = True
-        ASSIST.close()
-        SYNC.shutdown()
-        JOURNAL.flush_activity()
-        say('Server stopped')
+    _print_banner(port, desktop_window)
+    _serve(httpd, desktop_window, port, background)
 
 
 if __name__ == '__main__':

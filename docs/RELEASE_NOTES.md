@@ -3,6 +3,7 @@
 
 # Next (not released yet)
 
+- **Windows desktop window:** Trip Orders opens in its own window on this PC (not a separate browser tab). A second click brings the open window to the front. Use `TripOrders.exe --browser` if you prefer the old behaviour.
 - **Commercial upgrade:** offices moving from the contract build get about 30 days of full editing while device-bound licence codes are prepared (`upgrade_grace` in licence status). See `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`.
 
 # Trip Orders 1.1.2

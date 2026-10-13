@@ -76,12 +76,30 @@ export async function loadSession(env, sessionSecret, request) {
   return row;
 }
 
+export function originAllowed(request) {
+  const url = new URL(request.url);
+  const origin = request.headers.get('Origin');
+  if (origin) return origin === url.origin;
+  const site = request.headers.get('Sec-Fetch-Site');
+  if (site === 'same-origin' || site === 'same-site') return true;
+  const referer = request.headers.get('Referer');
+  if (referer) {
+    try {
+      return new URL(referer).origin === url.origin;
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+/** CSRF token must be in header or JSON body; cookie alone is not enough. */
 export function csrfOk(session, request, body) {
   const header = request.headers.get('X-CSRF-Token') || '';
-  const form = body && body.csrf;
-  const cookies = parseCookies(request);
-  const token = header || form || cookies[CSRF_COOKIE] || '';
-  return token && session.csrf && token === session.csrf;
+  const form = body && typeof body.csrf === 'string' ? body.csrf : '';
+  const token = header || form;
+  if (!token || !session.csrf || token !== session.csrf) return false;
+  return originAllowed(request);
 }
 
 export async function createSession(env, sessionSecret, hours) {

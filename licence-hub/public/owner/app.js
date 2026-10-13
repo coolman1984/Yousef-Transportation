@@ -31,16 +31,22 @@ export async function loadPending(host) {
   data.items.forEach((item) => {
     const li = document.createElement('li');
     const when = new Date(item.created_at * 1000).toLocaleString('ar-EG');
-    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(item.kind) + ' · ' + escape(item.device) + '</div><div class="muted">' + when + '</div></div>';
+    const kindLabel = kindLabelAr(item.kind);
+    const paidNote = item.kind !== 'trial' ? '<div class="err">الاشتراك الشهري والدائم يُصدر من Licence Studio فقط — لا يمكن الموافقة من هنا.</div>' : '';
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · ' + escape(item.device) + '</div>' + paidNote + '<div class="muted">' + when + '</div></div>';
     const row = document.createElement('div');
     row.className = 'row';
     const ok = document.createElement('button');
     ok.className = 'btn primary';
     ok.type = 'button';
-    ok.textContent = 'موافق';
+    ok.textContent = 'موافق — تجربة';
+    ok.disabled = item.kind !== 'trial';
     ok.addEventListener('click', async () => {
       ok.disabled = true;
-      await api('/approve', { method: 'POST', headers: headers(), body: JSON.stringify({ id: item.id, csrf }) });
+      const res = await api('/approve', { method: 'POST', headers: headers(), body: JSON.stringify({ id: item.id, csrf }) });
+      if (res && res.error === 'paid_in_licence_studio') {
+        alert('هذا الطلب اشتراك مدفوع — استخدم Licence Studio على جهاز المكتب.');
+      }
       loadPending(host);
     });
     const no = document.createElement('button');
@@ -96,4 +102,11 @@ export function wireOffline(form, out) {
 
 function escape(s) {
   return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function kindLabelAr(kind) {
+  if (kind === 'trial') return 'تجربة';
+  if (kind === 'monthly') return 'شهري (Licence Studio)';
+  if (kind === 'permanent') return 'دائم (Licence Studio)';
+  return kind;
 }

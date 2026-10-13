@@ -1,4 +1,4 @@
-import { handleLicence, approveRequest, refuseRequest, issueOfflineCustomer } from './licence-api.js';
+import { handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, REASON_PAID_IN_STUDIO } from './licence-api.js';
 import { importSigningKey } from './afcodes.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -14,12 +14,23 @@ const HEADERS = {
 
 const now = () => Math.floor(Date.now() / 1000);
 
+function withSecurityHeaders(response) {
+  const headers = new Headers(response.headers);
+  Object.entries(HEADERS).forEach(([k, v]) => headers.set(k, v));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
+}
+
 function html(body, status = 200, extra = {}) {
   return new Response(body, { status, headers: { ...HEADERS, 'Content-Type': 'text/html; charset=utf-8', ...extra } });
 }
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), { status, headers: { ...HEADERS, 'Content-Type': 'application/json; charset=utf-8' } });
+}
+
+async function fetchOwnerAsset(env, request, url) {
+  const res = await env.ASSETS.fetch(request);
+  return withSecurityHeaders(res);
 }
 
 async function signingKey(env) {
@@ -61,6 +72,9 @@ async function ownerApi(request, env, url, session) {
     const key = await signingKey(env);
     const signed = await approveRequest(env, body.id, key);
     if (!signed) return json({ error: 'not_found' }, 404);
+    if (signed.refused) {
+      return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: 'paid_in_studio' }, 400);
+    }
     return json({ ok: true, code: signed.code });
   }
   if (path === '/refuse') {
@@ -77,6 +91,12 @@ async function ownerApi(request, env, url, session) {
   }
   return json({ error: 'not_found' }, 404);
 }
+
+const PUBLIC_OWNER_PATHS = new Set([
+  '/owner/login.html',
+  '/owner/login.js',
+  '/owner/style.css',
+]);
 
 async function ownerPages(request, env, url) {
   const sessionSecret = env.SESSION_SECRET;
@@ -116,13 +136,24 @@ async function ownerPages(request, env, url) {
     return ownerApi(request, env, url, session);
   }
 
-  if (url.pathname === '/owner/' || url.pathname === '/owner/index.html') {
+  if (url.pathname === '/owner/index.html') {
+    return Response.redirect(new URL('/owner/', url.origin).toString(), 308);
+  }
+
+  if (url.pathname === '/owner/' || url.pathname === '/owner/customers.html' || url.pathname === '/owner/offline.html') {
     const session = await loadSession(env, sessionSecret, request);
     if (!session) return Response.redirect(new URL('/owner/login.html', url.origin).toString(), 302);
-    return env.ASSETS.fetch(new URL('/owner/index.html', url.origin));
+    const assetPath = url.pathname === '/owner/' ? '/owner/index.html' : url.pathname;
+    return fetchOwnerAsset(env, new Request(new URL(assetPath, url.origin)), url);
   }
+
   if (url.pathname.startsWith('/owner/')) {
-    return env.ASSETS.fetch(request);
+    if (PUBLIC_OWNER_PATHS.has(url.pathname)) {
+      return fetchOwnerAsset(env, request, url);
+    }
+    const session = await loadSession(env, sessionSecret, request);
+    if (!session) return Response.redirect(new URL('/owner/login.html', url.origin).toString(), 302);
+    return fetchOwnerAsset(env, request, url);
   }
   return null;
 }

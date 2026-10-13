@@ -1,4 +1,6 @@
 // AF licence codes — byte-compatible with server/afcodes.py (verify in Trip Orders with the matching public key).
+import { calendarDateInTz, addCalendarDays, DEFAULT_CALENDAR_TZ } from './calendar.js';
+
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const DOMAIN = new TextEncoder().encode('AF-LICENCE-CODE/1');
 const VERSION = 1;
@@ -49,8 +51,9 @@ function deviceTag(code) {
   return crypto.subtle.digest('SHA-256', enc.encode('AF-DEVICE-TAG/1|' + norm)).then((d) => new Uint8Array(d).slice(0, 6));
 }
 
-function dayNum(d) {
-  const n = Math.floor((Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()) - EPOCH_MS) / 86400000);
+function dayNumFromIso(iso) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const n = Math.floor((Date.UTC(y, m - 1, d) - EPOCH_MS) / 86400000);
   if (n < 0 || n > 65535) throw new Error('date_out_of_range');
   return n;
 }
@@ -73,17 +76,15 @@ function packPayload(fields) {
   return new Uint8Array(buf);
 }
 
+/** Import Ed25519 private key — PKCS#8 PEM only (same as Licence Studio / server/afcodes.py). */
 export async function importSigningKey(secret) {
   const raw = secret.trim();
-  if (raw.includes('BEGIN')) {
-    const pem = raw.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
-    const der = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0));
-    return crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, true, ['sign']);
+  if (!raw.includes('BEGIN')) {
+    throw new Error('signing_key_pem_required');
   }
-  const pad = raw + '='.repeat((4 - (raw.length % 4)) % 4);
-  const seed = Uint8Array.from(atob(pad.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-  if (seed.length !== 32) throw new Error('bad_signing_key');
-  return crypto.subtle.importKey('raw', seed, { name: 'Ed25519' }, true, ['sign']);
+  const pem = raw.replace(/-----[^-]+-----/g, '').replace(/\s/g, '');
+  const der = Uint8Array.from(atob(pem), (c) => c.charCodeAt(0));
+  return crypto.subtle.importKey('pkcs8', der, { name: 'Ed25519' }, true, ['sign']);
 }
 
 export async function publicKeyB64Url(privateKey) {
@@ -98,12 +99,11 @@ async function keyTagFromPrivate(privateKey) {
   return hash.slice(0, 2);
 }
 
-/** Sign a device-bound trial code (edition trial, `days` calendar days inclusive). */
-export async function issueTrialCode(privateKey, productId, device, days = 14, firstDay = new Date()) {
-  const issued = new Date();
-  const first = new Date(Date.UTC(firstDay.getUTCFullYear(), firstDay.getUTCMonth(), firstDay.getUTCDate()));
-  const last = new Date(first);
-  last.setUTCDate(last.getUTCDate() + days - 1);
+/** Sign a device-bound trial code (edition trial, `days` calendar days inclusive in `timeZone`). */
+export async function issueTrialCode(privateKey, productId, device, days = 14, when = new Date(), timeZone = DEFAULT_CALENDAR_TZ) {
+  const issuedIso = calendarDateInTz(when, timeZone).iso;
+  const firstIso = issuedIso;
+  const lastIso = addCalendarDays(firstIso, days);
   const serial = crypto.getRandomValues(new Uint8Array(4));
   const [ptag, dtag, ktag] = await Promise.all([
     productTag(productId),
@@ -114,9 +114,9 @@ export async function issueTrialCode(privateKey, productId, device, days = 14, f
     version: VERSION,
     productTag: ptag,
     edition: EDITION_TRIAL,
-    issued: dayNum(issued),
-    first: dayNum(first),
-    last: dayNum(last),
+    issued: dayNumFromIso(issuedIso),
+    first: dayNumFromIso(firstIso),
+    last: dayNumFromIso(lastIso),
     grace: 0,
     deviceTag: dtag,
     serial,
@@ -135,8 +135,8 @@ export async function issueTrialCode(privateKey, productId, device, days = 14, f
   return {
     code,
     serial: [...serial].map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase(),
-    first_day: first.toISOString().slice(0, 10),
-    last_day: last.toISOString().slice(0, 10),
+    first_day: firstIso,
+    last_day: lastIso,
     edition: 'trial',
     product: productId,
     device: group(normalize(device), 5),

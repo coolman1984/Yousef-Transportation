@@ -4,7 +4,8 @@ import os
 import subprocess
 import sys
 import unittest
-from datetime import date
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
@@ -16,7 +17,8 @@ class LicenceHubSignerTest(unittest.TestCase):
         script = os.path.join(ROOT, 'licence-hub', 'test', 'export_code.mjs')
         out = subprocess.check_output(['node', script], cwd=ROOT, text=True)
         data = json.loads(out)
-        result = afcodes.read_code(data['code'], [data['public']], 'trip-orders', device=data['device'], today=date.today())
+        cairo_today = datetime.now(ZoneInfo('Africa/Cairo')).date()
+        result = afcodes.read_code(data['code'], [data['public']], 'trip-orders', device=data['device'], today=cairo_today)
         self.assertTrue(result.valid)
         self.assertEqual(result.state, 'active')
         self.assertEqual(result.terms.get('edition'), 'trial')

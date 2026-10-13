@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence-hub security review fixes (2026-10-13)
+
+**What:** Hub hardening from independent review: atomic machine claim before signing (approve retry returns same code); monthly/permanent refused at request and approve (trial only online); deterministic poll token on nonce replay; CSRF requires header/body token plus Origin/same-site check; owner HTML served at `/owner/` with security headers and external boot scripts; PKCS#8 PEM signing key only; trial calendar days in `LICENCE_CALENDAR_TZ` (default Africa/Cairo). Tests in `licence-hub/test/*.test.js`.
+**Why:** P1/P2 findings could issue duplicate trials, wrong edition, or strand approved licences.
+**Checks:** `node --check licence-hub/src`, `cd licence-hub && npm test`, `tests/test_licence_hub_signer.py` (Cairo today).
+
 ## Licence tab review fixes + licence-hub Worker template (2026-10-13)
 
 **What:** Licence tab keeps device code, paste box and Details during an active trial; one **Activate** button (paste wins, else online trial); request status/refused/failed and **Retry** on the main card with polling while the hub retries; paste survives poll redraw; `shop` on Details requests and in the preview; English day singular; formal Arabic strings; Details border token. New `licence-hub/` Cloudflare Worker template (hub protocol, owner RTL dashboard, Ed25519 signing compatible with `server/afcodes.py`). `docs/HUB_SETUP.md` privacy wording for organisation name.

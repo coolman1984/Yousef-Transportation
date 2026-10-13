@@ -10,8 +10,8 @@ Template Cloudflare Worker for online licence requests and an owner approval das
 - Same protocol as the office app (`server/licence.py`, exercised by `tests/test_assist.py`).
 - لوحة المالك على `/owner` (عربي، RTL): موافقة على الطلبات، تفعيل يدوي برقم الجهاز، قائمة العملاء.
 - Owner dashboard at `/owner` (Arabic, RTL): pending requests, offline device entry, customer list.
-- توقيع كود تجربة 14 يومًا (منتج `trip-orders`) بـ Ed25519 في Worker — متوافق مع `server/afcodes.py`.
-- Signs 14-day trial codes (`trip-orders`) with Ed25519 in the Worker — byte-compatible with `server/afcodes.py`.
+- توقيع **تجربة فقط** 14 يومًا (منتج `trip-orders`) بـ Ed25519 في Worker — متوافق مع `server/afcodes.py`. الطلبات الشهرية/الدائمة تُرفض هنا؛ الإصدار المدفوع من Licence Studio.
+- Signs **trial-only** 14-day codes (`trip-orders`) with Ed25519 in the Worker — byte-compatible with `server/afcodes.py`. Monthly/permanent online requests are refused; paid editions stay in Licence Studio.
 
 **بديل التوقيع:** Licence Studio على جهاز المالك يبقى الطريقة الأكثر أمانًا للتوقيع؛ هذا القالب يوازن بين الراحة (موافقة من الهاتف) ومخاطر سر التوقيع على Cloudflare (انظر أدناه).
 

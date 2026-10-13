@@ -38,6 +38,7 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import afcodes
+import atrest  # trips.db is SQLCipher when TRIPORDERS_ENCRYPT=1
 
 
 def _distributed_runtime():
@@ -179,7 +180,7 @@ class Licence:
         if not os.path.exists(path):
             return False
         try:
-            conn = sqlite3.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
+            conn = atrest.connect(pathlib.Path(path).resolve().as_uri() + '?mode=ro', uri=True)
             try:
                 # A fresh install also gets 'initialized' and sample trips on its first boot, so only an
                 # office whose database was initialised well before this commercial build first ran counts.
@@ -195,21 +196,21 @@ class Licence:
                 return initialised < datetime.now() - timedelta(hours=UPGRADE_PRIOR_DATA_MIN_AGE_HOURS)
             finally:
                 conn.close()
-        except sqlite3.Error:
-            return False
+        except Exception:  # sqlcipher3 raises its own error types
+            return None  # unknown (locked/busy/unreadable): decide on a later check, never consume the grace for it
 
     def _trips_meta(self, key):
         trips = self._trips_db_path()
         if not os.path.exists(trips):
             return None
         try:
-            conn = sqlite3.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
+            conn = atrest.connect(pathlib.Path(trips).resolve().as_uri() + '?mode=ro', uri=True)
             try:
                 row = conn.execute('SELECT value FROM meta WHERE key=?', (key,)).fetchone()
                 return row[0] if row else None
             finally:
                 conn.close()
-        except sqlite3.Error:
+        except Exception:  # sqlcipher3 raises its own error types
             return None
 
     def _set_trips_meta(self, key, value):
@@ -217,12 +218,12 @@ class Licence:
         if not os.path.exists(trips):
             return
         try:
-            conn = sqlite3.connect(trips, isolation_level=None)
+            conn = atrest.connect(trips, isolation_level=None)
             conn.execute(
                 'INSERT INTO meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO NOTHING',
                 (key, value))
             conn.close()
-        except sqlite3.Error:
+        except Exception:  # sqlcipher3 raises its own error types
             pass
 
     def _upgrade_grace_consumed(self):
@@ -274,8 +275,8 @@ class Licence:
         if self.a.kv('licence_code'):
             return None
         if self._seen_now():
-            self._mark_upgrade_grace_consumed()
-            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
+            # clock behind the last seen time: locked while it lasts, but a corrected clock gets the grace back
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'clock_back'}
         if self._upgrade_grace_consumed():
             return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
         started = self._read_grace_started()
@@ -283,14 +284,19 @@ class Licence:
             if self._trips_meta(UPGRADE_GRACE_EVER_META) == '1' or self.a.kv('upgrade_grace_started_at'):
                 self._mark_upgrade_grace_consumed()
                 return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
-            if not self._has_prior_office_data():
+            prior = self._has_prior_office_data()
+            if prior is None:
+                return None
+            if not prior:
                 # decided once, on first sight: a fresh install never becomes eligible later
                 self._mark_upgrade_grace_consumed()
                 return None
             started = self._write_grace_started(utcnow())
         end = started + timedelta(days=UPGRADE_GRACE_DAYS)
         now = utcnow()
-        if now < started or now >= end:
+        if now < started:
+            return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'clock_back'}
+        if now >= end:
             self._mark_upgrade_grace_consumed()
             return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'upgrade_grace_expired'}
         days_left = max(0, (end.date() - now.date()).days)

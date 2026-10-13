@@ -206,5 +206,59 @@ class UpgradeGraceTest(unittest.TestCase):
                 self.assertFalse(st['full'])
 
 
+
+class EncryptedTripsDbGraceTest(unittest.TestCase):
+    """With TRIPORDERS_ENCRYPT=1 trips.db is SQLCipher: an upgrading office must still get its grace."""
+
+    def test_prior_contract_office_with_encrypted_db_gets_grace(self):
+        try:
+            import sqlcipher3  # noqa: F401
+        except ImportError:
+            self.skipTest('sqlcipher3 not installed')
+        import atrest
+        with tempfile.TemporaryDirectory() as d, tempfile.TemporaryDirectory() as prof:
+            env = {'TRIPORDERS_ENCRYPT': '1', 'TRIPORDERS_DPAPI_DIR': prof, 'XDG_CONFIG_HOME': prof}
+            with patch.dict(os.environ, env):
+                conn = atrest.connect(os.path.join(d, 'trips.db'), isolation_level=None)
+                conn.executescript("""
+                    CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT);
+                    INSERT INTO meta VALUES ('initialized', '2020-01-01T00:00:00');
+                    CREATE TABLE trips (id TEXT PRIMARY KEY, deleted INTEGER NOT NULL DEFAULT 0);
+                    INSERT INTO trips VALUES ('t1', 0);
+                """)
+                conn.close()
+                self.assertFalse(atrest.is_plain_sqlite(os.path.join(d, 'trips.db')))
+                licence._cache.clear()
+                with _CommercialLicence(d) as l:
+                    st = l.status()
+                    self.assertTrue(st.get('upgrade_grace'), st)
+                    self.assertTrue(st['full'])
+                    self.assertEqual(l._trips_meta(licence.UPGRADE_GRACE_EVER_META), '1')
+
+
+class GraceNotLostByAccidentTest(unittest.TestCase):
+    def test_unreadable_db_on_first_check_does_not_consume_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            _seed_trips_db(d)
+            licence._cache.clear()
+            with _CommercialLicence(d) as l:
+                with patch.object(licence.Licence, '_has_prior_office_data', return_value=None):
+                    self.assertFalse(l.status()['full'])
+                self.assertFalse(l._upgrade_grace_consumed())
+                licence._cache.clear()
+                st = l.status()
+                self.assertTrue(st['full'] and st.get('upgrade_grace'), st)
+
+    def test_clock_back_locks_but_corrected_clock_restores_grace(self):
+        with tempfile.TemporaryDirectory() as d:
+            _seed_trips_db(d)
+            licence._cache.clear()
+            with _CommercialLicence(d) as l:
+                with patch.object(licence.Licence, '_seen_now', return_value=True):
+                    self.assertFalse(l.status()['full'])
+                self.assertFalse(l._upgrade_grace_consumed())
+                licence._cache.clear()
+                self.assertTrue(l.status()['full'])
+
 if __name__ == "__main__":
     unittest.main()

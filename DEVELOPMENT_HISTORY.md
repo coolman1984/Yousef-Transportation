@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Paid hub calendar survives damaged profile clock (2026-10-13)
+
+**Branch/source:** `feat/licence-standard`, local session fix for REVIEW-time3 P1.
+**What/why:** After a hub business day was stored once, a missing or corrupt `licence-clock.v1` must not restore paid editing or count a calendar fetch as synced when the day did not persist. Assist marks `licence_hub_calendar_established` on first successful hub-day write; paid offices with that marker but no readable hub day stay read/export/backup only until the hub day is written again. Poll skips the six-hour success window while recovery is due; corrupt/sealed clock files are overwritten with the fetched hub day instead of empty fail-closed seals. Never-online paid PCs without a stored hub day are unchanged.
+**Checks:** `python3 -m unittest tests.test_commercial_licence` (42 pass). `cd licence-hub && node --test` (42 pass).
+**Next:** Local commit only; no push.
+
 ## Calendar failure recovery and public time protection (2026-10-13)
 
 **Branch/source:** `feat/simple-trial-activation`, based on `5b8380a`; commercial candidate protection (L1), no pilot acceptance claimed. Implemented directly in this session without delegated coding tools.

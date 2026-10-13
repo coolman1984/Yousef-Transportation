@@ -85,6 +85,7 @@ ACTIVE = ('sending', 'waiting', 'failed')
 CLOCK_TOLERANCE_HOURS_TRIAL = 1
 CLOCK_TOLERANCE_HOURS_PAID = 72
 TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
+HUB_CALENDAR_ESTABLISHED_KEY = 'licence_hub_calendar_established'
 HUB_WATCH_KEY = 'licence_hub_watch'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
 HUB_CALENDAR_RETRY_SEC = 5 * 60
@@ -286,6 +287,20 @@ class Licence:
     def _note_profile_clock_established(self):
         self.a.kv('licence_clock_profile', '1')
 
+    def _note_hub_calendar_established(self):
+        self.a.kv(HUB_CALENDAR_ESTABLISHED_KEY, '1')
+
+    def _paid_hub_calendar_required(self):
+        if self._trial_state_required():
+            return False
+        if not (self.a.kv('licence_code') or ''):
+            return False
+        return self.a.kv(HUB_CALENDAR_ESTABLISHED_KEY) == '1'
+
+    def _hub_calendar_sync_due(self):
+        """Re-fetch when a paid PC once stored a hub day but the profile clock no longer has it."""
+        return self._paid_hub_calendar_required() and self._hub_calendar_max_day() is None
+
     def _trial_state_required(self):
         code = self.a.kv('licence_code') or ''
         if not code:
@@ -298,6 +313,8 @@ class Licence:
         return r.terms.get('edition') == 'trial'
 
     def _clock_state_ok(self):
+        if self._paid_hub_calendar_required():
+            return self._hub_calendar_max_day() is not None
         if not self._trial_state_required():
             return True
         bind = self._state_bind()
@@ -311,24 +328,42 @@ class Licence:
         return False
 
     def _read_max_seen(self):
-        record = self._clock_record(create=not self._trial_state_required())
+        trial = self._trial_state_required()
+        create = not trial and not self._paid_hub_calendar_required()
+        record = self._clock_record(create=create)
         if record is None:
             return None
         return parse(record.get('max_seen') or '')
 
     def _write_max_seen(self, when):
         bind = self._state_bind()
-        if licence_state.is_fail_closed(bind):
-            return
+        profile = self.a.kv('licence_clock_profile') == '1'
 
         def updater(record):
             record['max_seen'] = iso(when)
+            record['fail_closed'] = False
+            record.pop('fail_closed_reason', None)
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=not profile) is not None:
+            self._note_profile_clock_established()
             return
-        self._note_profile_clock_established()
+        if not profile:
+            return
+        if self._trial_state_required() or not self._paid_hub_calendar_required():
+            licence_state.seal_fail_closed(bind, 'state_corrupt')
+
+    def _recover_clock_record(self, updater):
+        """Persist clock state when the profile file is missing or unreadable."""
+        bind = self._state_bind()
+        status, record = licence_state.read(bind)
+        if status == 'ok':
+            record = dict(record)
+        else:
+            record = licence_state.empty_record()
+        record = updater(record)
+        licence_state.save(record, bind)
+        return record
 
     def _hub_calendar_max_day(self):
         record = self._clock_record(create=False)
@@ -341,10 +376,8 @@ class Licence:
 
     def _write_hub_calendar_max_day(self, hub_date):
         bind = self._state_bind()
-        if licence_state.is_fail_closed(bind):
-            return
 
-        def updater(record):
+        def apply_hub(record):
             current = record.get('hub_calendar_max')
             if current:
                 try:
@@ -354,12 +387,18 @@ class Licence:
                 except ValueError:
                     pass
             record['hub_calendar_max'] = hub_date.isoformat()
+            record['fail_closed'] = False
+            record.pop('fail_closed_reason', None)
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
-            return
+        saved = licence_state.mutate(bind, apply_hub, create=True)
+        if saved is None:
+            saved = self._recover_clock_record(apply_hub)
+        if saved is None:
+            return False
         self._note_profile_clock_established()
+        self._note_hub_calendar_established()
+        return True
 
     def _trial_latch_set(self):
         bind = self._state_bind()
@@ -440,9 +479,11 @@ class Licence:
             return False
         current = self._hub_calendar_max_day()
         if current and hub_date <= current:
-            return True
-        self._write_hub_calendar_max_day(hub_date)
-        return True
+            return current == hub_date
+        if not self._write_hub_calendar_max_day(hub_date):
+            return False
+        stored = self._hub_calendar_max_day()
+        return stored == hub_date
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -613,6 +654,9 @@ class Licence:
             status, _ = licence_state.read(bind)
             if status == 'corrupt' or self.a.kv('licence_clock_profile') == '1':
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
+            result.update(state='invalid', full=False, reason='state_corrupt')
+            clock_back = False
+        elif self._paid_hub_calendar_required() and not state_ok:
             result.update(state='invalid', full=False, reason='state_corrupt')
             clock_back = False
         else:
@@ -896,7 +940,8 @@ class Licence:
             if now_mono < _hub_retry_at_mono:
                 return
         elif _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
-            return
+            if not self._hub_calendar_sync_due():
+                return
         synced = False
         try:
             code, d = self._call('GET', url + '/licence/time')

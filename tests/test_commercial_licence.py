@@ -674,6 +674,74 @@ class PaidHubCalendarTest(unittest.TestCase):
                 l._poll_hub_calendar()
             call.assert_not_called()
 
+    def test_never_online_paid_without_hub_day_stays_editable(self):
+        with self._paid() as (l, _, _):
+            self.assertIsNone(l._hub_calendar_max_day())
+            self.assertNotEqual(l.a.kv(licence.HUB_CALENDAR_ESTABLISHED_KEY), '1')
+            st = l.status()
+            self.assertTrue(st['full'])
+            self.assertIn(st['state'], ('active', 'grace'))
+
+    def test_deleted_clock_file_after_hub_day_locks_until_poll_recovers(self):
+        import licence_state
+        with self._paid() as (l, frozen, end):
+            expired_day = (end + timedelta(days=1)).isoformat()
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})):
+                with patch.object(licence.time, 'monotonic', return_value=100):
+                    l._poll_hub_calendar()
+            licence._cache.clear()
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
+            path = os.path.join(
+                pathlib.Path(os.environ['TRIPORDERS_DPAPI_DIR']), licence_state.STATE_FILE)
+            os.remove(path)
+            licence._cache.clear()
+            st = l.status()
+            self.assertFalse(st['full'])
+            self.assertEqual(st['reason'], 'state_corrupt')
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+                with patch.object(licence.time, 'monotonic', return_value=101):
+                    l._poll_hub_calendar()
+            call.assert_called_once_with('GET', 'https://hub.test/licence/time')
+            licence._cache.clear()
+            self.assertEqual(l._hub_calendar_max_day(), date.fromisoformat(expired_day))
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
+
+    def test_corrupt_clock_file_recovers_hub_day_and_does_not_fake_sync(self):
+        import licence_state
+        with self._paid() as (l, _, end):
+            expired_day = (end + timedelta(days=1)).isoformat()
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})):
+                with patch.object(licence.time, 'monotonic', return_value=100):
+                    l._poll_hub_calendar()
+            path = os.path.join(
+                pathlib.Path(os.environ['TRIPORDERS_DPAPI_DIR']), licence_state.STATE_FILE)
+            with open(path, 'r+b') as f:
+                data = bytearray(f.read())
+                data[10] ^= 0xFF
+                f.seek(0)
+                f.write(data)
+            licence._cache.clear()
+            self.assertFalse(l.status()['full'])
+            self.assertIsNone(l._hub_calendar_max_day())
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+                with patch.object(licence.time, 'monotonic', return_value=200):
+                    l._poll_hub_calendar()
+            self.assertEqual(call.call_count, 1)
+            self.assertEqual(licence._hub_poll_mono, 200)
+            licence._cache.clear()
+            self.assertEqual(l._hub_calendar_max_day(), date.fromisoformat(expired_day))
+            self.assertEqual(l.status()['state'], 'expired')
+            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call2:
+                with patch.object(licence.time, 'monotonic',
+                                  return_value=200 + licence.HUB_CALENDAR_POLL_SEC):
+                    l._poll_hub_calendar()
+            call2.assert_called_once()
+            licence._cache.clear()
+            self.assertEqual(l.status()['state'], 'expired')
+            self.assertFalse(l.status()['full'])
+
 
 class GraceNotLostByAccidentTest(unittest.TestCase):
     def test_unreadable_db_on_first_check_does_not_consume_grace(self):

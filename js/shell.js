@@ -101,6 +101,10 @@
         renderRoute();
       });
       renderRoute();
+      TO.get('/api/licence').then(function (lic) {
+        if (TO.me) TO.me.licence = lic;
+        if (TO.licenceBanner) TO.licenceBanner();
+      }, function () { /* read-only users still get the shell */ });
       if (!TO.prefs.data.welcomed) setTimeout(function () { TO.slides.open(true); }, 500);
     },
     stop: function () { shellReady = false; }

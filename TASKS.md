@@ -3,6 +3,7 @@
 
 ## Current work queue — first sale
 
+- [x] Paid licence calendar protection (PR #29, 2026-10-13): public hub `/licence/time`, six-hour checks independent of trial watches, paid expiry beyond signed grace. Test map: `test_commercial_licence.PaidHubCalendarTest`, existing trial scheduler test, `licence-hub/test/licence-api.test.js`. Local tests only; hub deployment and rebuilt Windows candidate remain unverified.
 - [ ] Offline customer protection (PR #21, security/offline-commercial-licensing-20261012): key-pinned commercial installer, no customer source/debug artifacts, operator gateway excluded, CI-only ephemeral test keys. Code on PR; close only after green Windows acceptance and independent security review. Strong encrypted SQLite/Cloudflare backups are **separate follow-up work**, not delivered by this PR.
 
 

@@ -23,6 +23,7 @@ Asking the company from the licence screen (online activation through the factor
 The hub address is public configuration: FACTORY_HUB_URL, `hub_url` in config.json, or the Settings box. No secret is needed for a request.
 """
 import hashlib
+import hmac
 import json
 import os
 import pathlib
@@ -54,13 +55,24 @@ def _distributed_runtime():
 # In installed customer builds this generated module is compiled into TripOrders.exe.
 # Never load commercial trust anchors from writable user configuration.
 try:
-    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS, BUILD_CHANNEL as _BUILD_CHANNEL
+    from _release_policy import (
+        COMMERCIAL_BUILD as _COMMERCIAL_BUILD,
+        TRUSTED_KEYS as _RELEASE_KEYS,
+        BUILD_CHANNEL as _BUILD_CHANNEL,
+        TRUSTED_KEY_ENTRIES as _RELEASE_KEY_ENTRIES,
+        TRIAL_ONLY_PUBLIC_KEYS as _RELEASE_TRIAL_ONLY,
+        MAX_TRIAL_DAYS as _RELEASE_MAX_TRIAL_DAYS,
+    )
 except ImportError:
     # Compiled binaries must never silently drop into contract mode if a release
     # policy module is missing due to a damaged build.
     _COMMERCIAL_BUILD = _distributed_runtime()
     _RELEASE_KEYS = ()
+    _RELEASE_KEY_ENTRIES = ()
+    _RELEASE_TRIAL_ONLY = frozenset()
+    _RELEASE_MAX_TRIAL_DAYS = 14
     _BUILD_CHANNEL = 'commercial' if _COMMERCIAL_BUILD else 'source'
+import licence_state
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -69,7 +81,14 @@ BACKOFF = (60, 300, 900, 3600)
 POLL = ((600, 20), (3600, 120), (10 ** 9, 600))
 SENT_FIELDS = ('product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version')
 ACTIVE = ('sending', 'waiting', 'failed')
-CLOCK_TOLERANCE_HOURS = 24
+CLOCK_TOLERANCE_HOURS_TRIAL = 1
+CLOCK_TOLERANCE_HOURS_PAID = 72
+TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
+HUB_WATCH_KEY = 'licence_hub_watch'
+HUB_CALENDAR_POLL_SEC = 6 * 3600
+HUB_CALENDAR_MAX_JUMP_DAYS = 7
+TRIAL_HUB_KIDS = frozenset({'trial-hub', 'trial_hub', 'hub-trial'})
+_hub_poll_mono = None
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -131,20 +150,305 @@ class Licence:
         self.stop = False
 
     # ---------------------------------------------------------------- keys, device, state
-    def trusted_keys(self):
+    def _trusted_key_entries(self):
         if _COMMERCIAL_BUILD:
-            return list(_RELEASE_KEYS)  # pinned in the compiled program; customer config/env ignored
-        keys = [k.strip() for k in os.environ.get('TO_LICENCE_KEYS', '').split(',') if k.strip()]
-        keys += [str(k).split(':', 1)[-1].strip() for k in (self.cfg.get('licence_keys') or []) if str(k).strip()]
+            if _RELEASE_KEY_ENTRIES:
+                return list(_RELEASE_KEY_ENTRIES)
+            return [('', k) for k in _RELEASE_KEYS]
+        entries = []
+        for raw in os.environ.get('TO_LICENCE_KEYS', '').split(','):
+            raw = raw.strip()
+            if not raw:
+                continue
+            if ':' in raw and len(raw.split(':', 1)[0]) <= 40:
+                kid, key = raw.split(':', 1)
+                entries.append((kid.strip(), key.strip()))
+            else:
+                entries.append(('', raw))
+        for raw in (self.cfg.get('licence_keys') or []):
+            text = str(raw).strip()
+            if not text:
+                continue
+            if ':' in text and len(text.split(':', 1)[0]) <= 40:
+                kid, key = text.split(':', 1)
+                entries.append((kid.strip(), key.strip()))
+            else:
+                entries.append(('', text))
         for folder in (self.home, self.root):
             path = os.path.join(folder, 'licence_keys.txt')
-            if os.path.exists(path):
-                with open(path, encoding='utf-8') as f:
-                    for line in f:
-                        line = line.split('#', 1)[0].strip()
-                        if line:
-                            keys.append(line.split(':', 1)[-1])      # "kid:key" or "key"
-        return keys
+            if not os.path.exists(path):
+                continue
+            with open(path, encoding='utf-8') as f:
+                for line in f:
+                    line = line.split('#', 1)[0].strip()
+                    if not line:
+                        continue
+                    if ':' in line and len(line.split(':', 1)[0]) <= 40:
+                        kid, key = line.split(':', 1)
+                        entries.append((kid.strip(), key.strip()))
+                    else:
+                        entries.append(('', line))
+        return entries
+
+    def trusted_keys(self):
+        return [key for _, key in self._trusted_key_entries()]
+
+    def trial_only_public_keys(self):
+        if _COMMERCIAL_BUILD:
+            return _RELEASE_TRIAL_ONLY
+        keys = set()
+        for kid, key in self._trusted_key_entries():
+            if kid and kid.lower() in TRIAL_HUB_KIDS:
+                keys.add(key)
+        return frozenset(keys)
+
+    def _state_bind(self):
+        return self.machine_tag()
+
+    def _legacy_open_state_value(self, field, sealed):
+        if not sealed or not isinstance(sealed, str):
+            return None
+        if '|' not in sealed:
+            return None
+        value, mac = sealed.rsplit('|', 1)
+        pepper = b'AF-LICENCE-STATE/1|trip-orders'
+        key = hmac.new(self.machine_tag().encode('ascii'), pepper, hashlib.sha256).digest()
+        expected = hmac.new(key, f'{field}|{value}'.encode('utf-8'), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(mac, expected):
+            return None
+        return value
+
+    def _profile_clock_established(self):
+        """True once this office has used the sealed clock profile (not merely a shared OS profile auth file)."""
+        if self.a.kv('licence_clock_profile') == '1':
+            return True
+        if licence_state.migration_marker_exists():
+            return True
+        return False
+
+    def _licence_clock_past_initial_use(self):
+        """Licence or clock profile was used before (fail-closed when the clock file is gone)."""
+        if self._profile_clock_established():
+            return True
+        if (self.a.kv('licence_code') or '').strip():
+            return True
+        if licence_state.auth_key_on_disk():
+            return True
+        return False
+
+    def _stored_licence_code(self):
+        return bool((self.a.kv('licence_code') or '').strip())
+
+    def _clock_file_missing_or_corrupt(self):
+        status, _ = licence_state.read(self._state_bind())
+        return status in ('missing', 'corrupt')
+
+    def _disallow_automatic_clock_create(self):
+        """Never recreate a deleted clock from status() reads or hub notes."""
+        if not self._clock_file_missing_or_corrupt():
+            return False
+        if self._stored_licence_code():
+            return True
+        if licence_state.auth_key_on_disk():
+            return True
+        return False
+
+    def _licence_auth_usable(self):
+        """Auth key for sealing; never mint a new key when a licence code is already stored."""
+        if (self.a.kv('licence_code') or '').strip() and not licence_state.auth_key_on_disk():
+            return False
+        return licence_state.auth_available()
+
+    def _allow_clock_state_create(self):
+        if self._disallow_automatic_clock_create():
+            return False
+        if self._profile_clock_established():
+            return False
+        return True
+
+    def _seal_clock_state_if_missing_or_corrupt(self, bind):
+        status, _ = licence_state.read(bind)
+        if status in ('missing', 'corrupt') and self._trial_state_required() and self._licence_auth_usable():
+            licence_state.seal_fail_closed(bind, 'state_corrupt')
+
+    def _migrate_clock_state_once(self):
+        bind = self._state_bind()
+        if self._profile_clock_established():
+            status, _ = licence_state.read(bind)
+            if status in ('missing', 'corrupt'):
+                self._seal_clock_state_if_missing_or_corrupt(bind)
+            return
+        status, _ = licence_state.read(bind)
+        if status == 'ok':
+            return
+        if status == 'corrupt':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            return
+        legacy_max = self.a.kv('max_seen')
+        legacy_latch = self.a.kv(TRIAL_EXPIRED_LATCH)
+        if not legacy_max and not legacy_latch:
+            return
+        opened_max = self._legacy_open_state_value('max_seen', legacy_max)
+        opened_latch = self._legacy_open_state_value(TRIAL_EXPIRED_LATCH, legacy_latch)
+        if not opened_max and opened_latch is None:
+            if self._trial_state_required() and self.a.kv('licence_clock_profile') == '1':
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            licence_state.mark_migration_done()
+            return
+        record = licence_state.empty_record()
+        if opened_max:
+            dt = parse(opened_max)
+            if dt:
+                record['max_seen'] = iso(dt)
+        if opened_latch is not None:
+            record['trial_latch'] = opened_latch == '1'
+        licence_state.save(record, bind)
+        licence_state.mark_migration_done()
+
+    def _clock_record(self, create=False):
+        self._migrate_clock_state_once()
+        bind = self._state_bind()
+        status, record = licence_state.read(bind)
+        if status == 'ok':
+            return record
+        if status == 'corrupt':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            return licence_state.load(bind)
+        if status == 'missing' and self._profile_clock_established():
+            if self._trial_state_required():
+                self._seal_clock_state_if_missing_or_corrupt(bind)
+            return licence_state.load(bind) if self._trial_state_required() else None
+        if not create:
+            return None
+        record = licence_state.empty_record()
+        licence_state.save(record, bind)
+        self.a.kv('licence_clock_profile', '1')
+        return record
+
+    def _save_clock_record(self, record):
+        bind = self._state_bind()
+        if record.get('fail_closed'):
+            licence_state.save(record, bind)
+            return
+
+        def updater(current):
+            current.update({k: record[k] for k in record if k not in ('v', 'bind')})
+            return current
+
+        licence_state.mutate(bind, updater, create=True)
+
+    def _note_profile_clock_established(self):
+        self.a.kv('licence_clock_profile', '1')
+
+    def _trial_state_required(self):
+        code = self.a.kv('licence_code') or ''
+        if not code:
+            return False
+        keys = self.trusted_keys()
+        if not keys:
+            return False
+        r = afcodes.read_code(code, keys, PRODUCT_ID, self.device(), date.today(),
+                              trial_only_keys=self.trial_only_public_keys())
+        return r.terms.get('edition') == 'trial'
+
+    def _clock_state_ok(self):
+        bind = self._state_bind()
+        status, record = licence_state.read(bind)
+        if status == 'ok':
+            return not record.get('fail_closed')
+        if status == 'corrupt':
+            return False
+        if status == 'missing':
+            if self._stored_licence_code():
+                return False
+            if self._profile_clock_established():
+                return False
+            return not self._trial_state_required()
+        return False
+
+    def _read_max_seen(self):
+        allow_create = not self._trial_state_required() and not self._disallow_automatic_clock_create()
+        record = self._clock_record(create=allow_create)
+        if record is None:
+            return None
+        return parse(record.get('max_seen') or '')
+
+    def _write_max_seen(self, when):
+        bind = self._state_bind()
+        if licence_state.is_fail_closed(bind):
+            return
+
+        def updater(record):
+            prev = parse(record.get('max_seen') or '')
+            if prev and when <= prev:
+                return record
+            record['max_seen'] = iso(when)
+            return record
+
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
+            return
+        self._note_profile_clock_established()
+
+    def _hub_calendar_max_day(self):
+        record = self._clock_record(create=False)
+        if not record or not record.get('hub_calendar_max'):
+            return None
+        try:
+            return date.fromisoformat(str(record['hub_calendar_max'])[:10])
+        except ValueError:
+            return None
+
+    def _write_hub_calendar_max_day(self, hub_date):
+        bind = self._state_bind()
+        if licence_state.is_fail_closed(bind):
+            return
+
+        def updater(record):
+            current = record.get('hub_calendar_max')
+            if current:
+                try:
+                    current_date = date.fromisoformat(str(current)[:10])
+                    if hub_date <= current_date:
+                        return record
+                except ValueError:
+                    pass
+            record['hub_calendar_max'] = hub_date.isoformat()
+            return record
+
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
+            return
+        self._note_profile_clock_established()
+
+    def _trial_latch_set(self):
+        bind = self._state_bind()
+        if licence_state.is_fail_closed(bind):
+            return
+
+        def updater(record):
+            record['trial_latch'] = True
+            return record
+
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
+            return
+        self._note_profile_clock_established()
+
+    def _trial_latch_active(self):
+        record = self._clock_record(create=False)
+        return bool(record and record.get('trial_latch'))
+
+    def _clear_trial_latch(self):
+        bind = self._state_bind()
+
+        def updater(record):
+            record['trial_latch'] = False
+            return record
+
+        licence_state.mutate(bind, updater, create=False)
 
     @property
     def enforced(self):
@@ -159,15 +463,53 @@ class Licence:
         ident = (os.environ.get('TO_DEVICE_ID') if not _COMMERCIAL_BUILD else None) or _machine_id()
         return hashlib.sha256(f'AF-MACHINE/1|{ident}|{PRODUCT_ID}'.encode('utf-8')).hexdigest()
 
-    def _seen_now(self):
-        """The latest time this PC has shown: a clock moved back by more than a day locks changes until it is right again."""
+    def _clock_tolerance_hours(self, edition):
+        if edition == 'trial':
+            return CLOCK_TOLERANCE_HOURS_TRIAL
+        return CLOCK_TOLERANCE_HOURS_PAID
+
+    def _seen_now(self, edition=None):
+        """The latest time this PC has shown: a clock moved back beyond tolerance locks changes until it is right again."""
         now = utcnow()
-        last = parse(self.a.kv('max_seen'))
+        last = self._read_max_seen()
+        tol = timedelta(hours=self._clock_tolerance_hours(edition))
         if not last or now > last:
             if not last or now - last > timedelta(minutes=5):
-                self.a.kv('max_seen', iso(now))
+                self._write_max_seen(now)
             return False
-        return now < last - timedelta(hours=CLOCK_TOLERANCE_HOURS)
+        return now < last - tol
+
+    def _effective_calendar_day(self, today=None):
+        """Latest calendar day used for licence expiry (local, UTC watermark, or hub business day)."""
+        today = today or date.today()
+        hub_max = self._hub_calendar_max_day()
+        if hub_max and hub_max > today:
+            today = hub_max
+        last = self._read_max_seen()
+        if last and last.date() > today:
+            today = last.date()
+        return today
+
+    def _note_hub_calendar_day(self, hub_day):
+        """Record hub business calendar progress without fabricating a UTC instant."""
+        if not hub_day or not isinstance(hub_day, str):
+            return
+        try:
+            hub_date = date.fromisoformat(hub_day[:10])
+        except ValueError:
+            return
+        current = self._hub_calendar_max_day()
+        if current and hub_date <= current:
+            return
+        effective = date.today()
+        if current and current > effective:
+            effective = current
+        last = self._read_max_seen()
+        if last and last.date() > effective:
+            effective = last.date()
+        if hub_date > effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS):
+            hub_date = effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS)
+        self._write_hub_calendar_max_day(hub_date)
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -274,7 +616,7 @@ class Licence:
             return None
         if self.a.kv('licence_code'):
             return None
-        if self._seen_now():
+        if self._seen_now(None):
             # clock behind the last seen time: locked while it lasts, but a corrected clock gets the grace back
             return {'upgrade_grace': True, 'upgrade_grace_days_left': 0, 'reason': 'clock_back'}
         if self._upgrade_grace_consumed():
@@ -309,7 +651,7 @@ class Licence:
         keys = self.trusted_keys()
         code = self.a.kv('licence_code') or ''
         dev = self.device()
-        today = date.today()
+        today = self._effective_calendar_day()
         if not keys:
             # A broken commercial key policy must NOT unlock edits.
             return {'state': 'none' if _COMMERCIAL_BUILD else 'contract',
@@ -324,7 +666,6 @@ class Licence:
                     'days_left': grace['upgrade_grace_days_left'], 'serial': None,
                     'reason': grace['reason'], 'build_channel': _BUILD_CHANNEL,
                     'upgrade_grace': True, 'upgrade_grace_days_left': grace['upgrade_grace_days_left']}
-        clock_back = self._seen_now()
         key = (code, dev, today, tuple(keys))
         with _lock:
             cached = _cache.get('v')
@@ -333,6 +674,41 @@ class Licence:
             else:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
+        state_ok = self._clock_state_ok()
+        if not state_ok:
+            bind = self._state_bind()
+            status, _ = licence_state.read(bind)
+            if self._trial_state_required():
+                if (
+                    status in ('missing', 'corrupt')
+                    or self.a.kv('licence_clock_profile') == '1'
+                    or licence_state.migration_marker_exists()
+                ) and self._licence_auth_usable():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                result.update(state='invalid', full=False, reason='state_corrupt')
+            elif self._stored_licence_code() and status in ('missing', 'corrupt'):
+                result.update(full=False, reason='state_corrupt')
+            elif self._profile_clock_established():
+                result.update(full=False, reason='state_corrupt')
+            clock_back = False
+        else:
+            clock_back = self._seen_now(result.get('edition'))
+        if result.get('reason') == 'state_corrupt':
+            result['enforced'] = True
+            result['build_channel'] = _BUILD_CHANNEL
+            result.setdefault('upgrade_grace', False)
+            result.setdefault('upgrade_grace_days_left', None)
+            return result
+        if self._trial_latch_active() and result.get('edition') == 'trial':
+            result.update(state='expired', full=False, reason='expired')
+        elif result.get('edition') == 'trial' and result.get('last_day'):
+            try:
+                last_day = date.fromisoformat(str(result['last_day']))
+                if today > last_day:
+                    self._trial_latch_set()
+                    result.update(state='expired', full=False, reason='expired')
+            except ValueError:
+                pass
         result['enforced'] = True
         result['build_channel'] = _BUILD_CHANNEL
         if clock_back and result['full']:
@@ -341,12 +717,11 @@ class Licence:
         result.setdefault('upgrade_grace_days_left', None)
         return result
 
-    @staticmethod
-    def _check(code, dev, today, keys):
+    def _check(self, code, dev, today, keys):
         base = {'device': dev, 'full': False, 'edition': None, 'first_day': None, 'last_day': None, 'days_left': None, 'serial': None, 'reason': ''}
         if not code:
             return {**base, 'state': 'none', 'reason': 'no_code'}
-        r = afcodes.read_code(code, keys, PRODUCT_ID, dev, today)
+        r = afcodes.read_code(code, keys, PRODUCT_ID, dev, today, trial_only_keys=self.trial_only_public_keys())
         if _COMMERCIAL_BUILD and r.valid and not r.terms.get('device_bound'):
             # Accidentally signed unbound time licences must not be shareable
             # across PCs in any sold or CI-test build.
@@ -364,14 +739,36 @@ class Licence:
         if not keys:
             raise ValueError('no_keys')
         code = code if isinstance(code, str) else ''
-        result = self._check(code, self.device(), date.today(), keys)
+        result = self._check(code, self.device(), self._effective_calendar_day(), keys)
         if result['state'] == 'none':
             raise ValueError('no_code')                              # an empty box must never wipe the working code
         if result['state'] in ('invalid',):
             raise ValueError(result['reason'] or 'invalid')
         if result['state'] == 'expired':
             raise ValueError('expired')
+        bind = self._state_bind()
+        had_code = self._stored_licence_code()
+        st, _ = licence_state.read(bind)
+        if result.get('edition') == 'trial' and self._licence_clock_past_initial_use():
+            if st in ('missing', 'corrupt') or licence_state.is_fail_closed(bind):
+                if self._licence_auth_usable():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                raise ValueError('state_corrupt')
+        elif result.get('edition') != 'trial':
+            if not had_code and st == 'missing':
+                if licence_state.auth_available():
+                    licence_state.save(licence_state.empty_record(), bind)
+                    self._note_profile_clock_established()
+            elif had_code and licence_state.is_fail_closed(bind):
+                if self._licence_auth_usable():
+                    licence_state.save(licence_state.empty_record(), bind)
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
+        self._clear_trial_latch()
+        if result.get('edition') == 'trial':
+            if licence_state.is_fail_closed(self._state_bind()):
+                raise ValueError('state_corrupt')
+            self._clock_record(create=True)
+            self._note_profile_clock_established()
         if manual:
             self.a.kv('licence_manual_at', iso())
         with _lock:
@@ -380,7 +777,9 @@ class Licence:
 
     # ---------------------------------------------------------------- asking the company (online activation)
     def hub(self):
-        return self.a.hub_url() if not self.a.practice else ''
+        if self.a.practice:
+            return ''
+        return self.a.licence_hub_url()
 
     def _state(self, value=None, clear=False):
         if clear:
@@ -395,9 +794,13 @@ class Licence:
         except ValueError:
             return None
 
-    def body(self, kind, ref='', nonce='preview'):
+    def _shop(self, override=None):
+        text = str(override if override is not None else self.shop_name() or '').strip()
+        return (text or str(self.shop_name() or '').strip())[:60]
+
+    def body(self, kind, ref='', nonce='preview', shop=None):
         return {'product': PRODUCT_ID, 'kind': kind, 'device': self.device(), 'machine': self.machine_tag(), 'nonce': nonce,
-                'shop': str(self.shop_name() or '')[:60], 'ref': str(ref or '')[:60], 'version': VERSION}
+                'shop': self._shop(shop), 'ref': str(ref or '')[:60], 'version': VERSION}
 
     def preview(self, kind, ref=''):
         """Exactly what a request would send, for the person to read before pressing the button."""
@@ -447,7 +850,7 @@ class Licence:
         st.update(status='failed' if st.get('id') is None else 'waiting', error=error)
         self._soon(st, BACKOFF[min(st['tries'] - 1, len(BACKOFF) - 1)])
 
-    def begin(self, kind, ref='', by=''):
+    def begin(self, kind, ref='', by='', shop=None):
         """The button, first half: record the request (no network). Idempotent: a request still running is returned, not repeated."""
         if kind not in KINDS:
             raise ValueError('bad kind')
@@ -459,7 +862,8 @@ class Licence:
                 return self.public()
             if kind == 'trial' and self.status()['full'] and self.enforced:
                 raise LookupError('have_licence')
-            self._state({'status': 'sending', 'kind': kind, 'nonce': str(uuid.uuid4()), 'ref': str(ref or '').strip()[:60], 'id': None,
+            self._state({'status': 'sending', 'kind': kind, 'nonce': str(uuid.uuid4()), 'ref': str(ref or '').strip()[:60],
+                         'shop': self._shop(shop), 'id': None,
                          'poll_token': None, 'created_at': iso(), 'by': by, 'tries': 0, 'error': '', 'reason': ''})
         return self.public()
 
@@ -492,7 +896,8 @@ class Licence:
             st['stage'] = ''
             try:
                 if not st.get('id'):
-                    code, d = self._call('POST', url + '/licence/request', self.body(st['kind'], st.get('ref', ''), st['nonce']))
+                    code, d = self._call('POST', url + '/licence/request',
+                                          self.body(st['kind'], st.get('ref', ''), st['nonce'], shop=st.get('shop')))
                     if code in (429, 503):
                         self._failed(st, 'busy')
                     elif code == 400:
@@ -511,18 +916,20 @@ class Licence:
                         st.update(status='failed', error='token', id=None, poll_token=None, nonce=str(uuid.uuid4()))
                     elif code != 200:
                         self._failed(st, f'http_{code}')
-                    elif d.get('status') == 'issued':
-                        self._activate(st, url, d.get('code'))
-                    elif d.get('status') == 'refused':
-                        st.update(status='refused', reason=d.get('reason') or 'refused', error='')
-                    elif d.get('status') == 'expired':
-                        st.update(status='closed', reason='expired', error='')
-                    elif d.get('status') == 'delivered':
-                        st.update(status='activated' if self.status()['full'] else 'closed', reason='delivered', error='')
                     else:
-                        age = (now - (parse(st['created_at']) or now)).total_seconds()
-                        st.update(status='waiting', error='', stage='approved' if d.get('stage') == 'approved' else '')
-                        self._soon(st, next(wait for limit, wait in POLL if age < limit))
+                        self._note_hub_calendar_day(d.get('calendar_day'))
+                        if d.get('status') == 'issued':
+                            self._activate(st, url, d.get('code'))
+                        elif d.get('status') == 'refused':
+                            st.update(status='refused', reason=d.get('reason') or 'refused', error='')
+                        elif d.get('status') == 'expired':
+                            st.update(status='closed', reason='expired', error='')
+                        elif d.get('status') == 'delivered':
+                            st.update(status='activated' if self.status()['full'] else 'closed', reason='delivered', error='')
+                        else:
+                            age = (now - (parse(st['created_at']) or now)).total_seconds()
+                            st.update(status='waiting', error='', stage='approved' if d.get('stage') == 'approved' else '')
+                            self._soon(st, next(wait for limit, wait in POLL if age < limit))
             except ConnectionError as e:
                 self._failed(st, 'offline:' + str(e))
             self._state(st)
@@ -533,17 +940,74 @@ class Licence:
         if self._superseded(st):
             st.update(status='closed', reason='manual', error='', poll_token=None)
             return
+        poll_token = st.get('poll_token')
+        request_id = st.get('id')
         try:
             self.activate(code, manual=False)
         except ValueError as e:
             st.update(status='failed', error='code:' + str(e), reason=str(e))      # shown with the manual way; the hub keeps the code
             self._soon(st, 900)
             return
+        activated = self.status()
+        if activated.get('edition') == 'trial' and poll_token and request_id:
+            self._hub_watch({'id': request_id, 'poll_token': poll_token})
+        elif activated.get('edition') != 'trial':
+            self._hub_watch(clear=True)
         try:
-            self._call('POST', url + '/licence/ack', {'id': st['id']}, token=st['poll_token'])
+            self._call('POST', url + '/licence/ack', {'id': st['id']}, token=poll_token)
         except ConnectionError:
-            pass                                                    # saved and working; the hub drops the code by itself after two weeks
-        st.update(status='activated', serial=self.status().get('serial'), error='', poll_token=None)
+            pass                                                    # saved and working; ack clears the code on the hub when it arrives
+        st.update(status='activated', serial=activated.get('serial'), error='', poll_token=None)
+
+    def _hub_watch(self, value=None, clear=False):
+        if clear:
+            self.a.kv(HUB_WATCH_KEY, delete=True)
+            return None
+        if value is not None:
+            self.a.kv(HUB_WATCH_KEY, json.dumps(value))
+            return value
+        raw = self.a.kv(HUB_WATCH_KEY)
+        try:
+            return json.loads(raw) if raw else None
+        except ValueError:
+            return None
+
+    def _poll_hub_calendar(self):
+        global _hub_poll_mono
+        url = self.hub()
+        if not url:
+            return
+        now_mono = time.monotonic()
+        if _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
+            return
+        # Limit attempts by process time even when the PC clock freezes or the network fails.
+        _hub_poll_mono = now_mono
+        try:
+            code, d = self._call('GET', url + '/licence/time')
+            if code == 200:
+                self._note_hub_calendar_day(d.get('calendar_day'))
+                with _lock:
+                    _cache.clear()
+        except ConnectionError:
+            pass
+
+        watch = self._hub_watch()
+        if not watch or not watch.get('id') or not watch.get('poll_token'):
+            return
+        st = self.status()
+        if st.get('edition') != 'trial' or st.get('state') in ('expired', 'invalid', 'none'):
+            self._hub_watch(clear=True)
+            return
+        try:
+            code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
+            if code == 200:
+                self._note_hub_calendar_day(d.get('calendar_day'))
+                with _lock:
+                    _cache.clear()
+            elif code == 401:
+                self._hub_watch(clear=True)
+        except ConnectionError:
+            pass
 
     def loop(self, every=20):
         """Background: look for the answer while a request is open, even when nobody has the page open."""
@@ -552,6 +1016,7 @@ class Licence:
                 st = self._state()
                 if st and st.get('status') in ACTIVE + ('issued',):
                     self.step()
+                self._poll_hub_calendar()
             except Exception:  # noqa: BLE001 - never let this reach the program
                 pass
             time.sleep(every)

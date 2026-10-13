@@ -34,6 +34,7 @@ MAGIC_AEAD = b'TOAEAD1'          # backup archives (ChaCha20-Poly1305, not a liv
 MAGIC_KEY = b'TODPK1'            # wrapped data key (dpapi stand-in)
 AAD_KEY = b'triporders-db-key-v1'
 KEY_NAME = 'atrest.key'
+_O_BINARY = getattr(os, 'O_BINARY', 0)
 _LOCK = threading.RLock()
 _MASTER = None
 _DATA_KEYS = {}
@@ -117,7 +118,7 @@ def master_secret():
         path = os.path.join(directory, 'dpapi-standin')
         for _ in range(5):
             try:
-                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+                fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_BINARY, 0o600)
             except FileExistsError:
                 break
             else:
@@ -148,7 +149,7 @@ def master_secret():
 
 def _write_0600(path, blob):
     tmp = path + '.tmp-' + secrets.token_hex(4)
-    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    fd = os.open(tmp, os.O_CREAT | os.O_EXCL | os.O_WRONLY | _O_BINARY, 0o600)
     try:
         os.write(fd, blob)
     finally:

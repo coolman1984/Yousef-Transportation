@@ -1,6 +1,99 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Windows binary licence clock writes (2026-10-13)
+
+**What:** `os.O_BINARY` on profile/sealed file writes; read compat for CRLF clock separators and damaged auth keys; paid `activate()` bootstraps clock only when state is `missing`; CI journey DIAG removed.
+**Why:** windows-installer: text-mode `os.open` on Windows corrupted HMAC payloads (`\r\n` separator) so every activation read `corrupt`.
+**Checks:** `python3 -m unittest discover -s tests` from repo root.
+**Next:** PR review and merge.
+
+## Review 11 — paid bootstrap on fresh TO_HOME, block clock revive (2026-10-13)
+
+**What:** Fresh paid `activate()` writes the first clock record when no code was stored yet (CI profile marker + missing/corrupt state); `status()` never auto-creates a clock when a code or profile auth already exists; trial replay blocked via `auth_key_on_disk()` in `_licence_clock_past_initial_use()`; hub refuses `TRIAL_DAYS` outside 1..14; regressions for wiped paid clocks, trial replay, and frozen `utcnow` catch-up.
+**Why:** Review 11 / windows-installer: shared profile migration marker left paid activation at `state_corrupt`; removing auth from establishment reopened expired paid/trial clocks.
+**Checks:** `cd licence-hub && node --test` (44 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
+## CI journey fresh paid activation (2026-10-13)
+
+**What:** `_profile_clock_established()` no longer treats a profile auth key file alone as established (fixes windows-installer journey when an earlier CI step created auth under the same Windows user); `ci_signing_key.py` writes `studio:` kid; regression test for ci-test paid activate with orphan auth.
+**Why:** windows-installer `journey_exe.py first` returned `full=False` after valid standard activation on a fresh `TO_HOME`.
+**Checks:** `cd licence-hub && node --test`; `cd tests && python3 -m unittest discover -s . -p 'test_*.py'`.
+**Next:** PR review and merge.
+
+## Review 10 — licence clock fail-closed hardening (2026-10-13)
+
+**What:** Trial replay blocked when code/auth/marker/flag show prior use but clock file is gone or sealed; fail-closed seals rewrite migration marker; hub days clamp forward up to seven days per poll (frozen clock catch-up); profile lock contention no longer seals healthy state; paid activation clears trial fail-closed seal; established profile never recreates clock from a near hub day after file delete.
+**Why:** Review 10: unsigned marker delete reopened trials, far hub days ignored forever on frozen PCs, lock errors sealed good trials, paid codes blocked by trial seal, deleted paid clock revived by near hub day.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (452 run, 40 skipped, 0 failures).
+**Next:** PR review and merge.
+
+## Review 9 — profile marker establishment, paid clock tamper, hub jump cap (2026-10-13)
+
+**What:** Profile migration marker counts as established clock state (assist.db flag clear no longer revives trials); paid licences deny `full` when established state file is missing without writing empty fail-closed seals; hub calendar days capped at `HUB_CALENDAR_MAX_JUMP_DAYS` per step; profile lock setup errors fail closed; Windows lock uses binary lock file with content.
+**Why:** Review 9: state-file bypass after flag delete, paid hub expiry dropped on file delete, unbounded hub day latch, lock errors escaping `status()`.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (448 run, 40 skipped, 0 failures).
+**Next:** PR review and merge; owner hub redeploy unchanged unless already on branch.
+
+## Paid licence calendar protection (2026-10-13)
+
+**Branch/source:** `feat/simple-trial-activation` (PR #29), based on `1baa861`; licence protection for the commercial candidate (L1), no pilot acceptance claimed.
+**What/why:** Public, uncached `/licence/time` reuses the hub calendar helper without DB/secrets. Client checks every six hours for all editions, even expired-looking codes or open requests; failed attempts stay rate limited and trial watch polling continues. Forward-only hub days expire paid codes beyond signed grace with `full=False`; existing read/export/backup access remains. No usage counters, secrets or user data changed. Updated hub guide, release notes and test map.
+**Checks:** `cd tests && python3 -W ignore::ResourceWarning -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto`: 110 run, 109 pass, one Windows-only SQLite rename test skipped on Linux (commercial licence module: 34 pass). `cd licence-hub && node --test`: 40 pass; no `node_modules` present. `git diff --check`: clean.
+**Remaining/next:** Local commit only; no push/deployment. Updated hub deployment, rebuilt Windows installer and field verification remain necessary. Existing `.model-fallback.log` left untouched and uncommitted.
+## Review 8 — trial state integrity, hub idempotency, fail-closed reads (2026-10-13)
+
+**What:** Block trial activation and legacy migration after established profile clock; monotonic `max_seen`; profile file lock + migration marker on save; corrupt auth/state reads fail closed without raising; hub approve/offline transactional claim cleanup, same-request idempotent issue, owner-path legacy `h:` migration, per-env offline queue + DB-authoritative code return.
+**Why:** Codex review 8: missing-state replay, approval retry deleting winner locks, offline multi-instance duplicate codes, owner approve before migration, clock watermark rollback, damaged key crashes.
+**Checks:** `cd licence-hub && node --test` (40 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (107 pass, 1 skip).
+**Next:** Owner redeploy licence hub; commercial rebuild only if shipping these server fixes.
+
+## Review 7 — fail-closed trial state, D1 transactions, owner recovery (2026-10-13)
+
+**What:** Profile licence clock seals permanently on corrupt/missing established state (no `_seen_now` revival); serialized `licence_state.mutate`; hub D1 awaits + batch issue/customer + loser lock cleanup + offline resume queue; legacy `h:` backfill; owner `/undelivered` list; HUB_SETUP base64url public key; README commercial vs relay URLs; assist tests use isolated profile dir.
+**Why:** Codex review 7: corruption reopened trials, async D1 offline break, partial approval locks, undelivered code UX, doc drift.
+**Checks:** `cd licence-hub && node --test` (37 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (102 pass, 1 skip).
+**Next:** Owner redeploy licence hub; rebuild commercial installers if policy docs changed only (no new keys required).
+
+## Review 6 — trial policy, clock state, hub transactions (2026-10-13)
+
+**What:** Commercial `TO_RELEASE_PUBLIC_KEYS` embeds `trial-hub` vs `studio` kids (`TRIAL_ONLY_PUBLIC_KEYS`); profile-bound authenticated licence clock state (`licence_state.py`) fails closed on corrupt/missing trial state; hub calendar separate from UTC watermark; monotonic hub poll scheduling; conditional SQL issue on approve; status hides orphan issued codes; legacy `machine_trials` migration; offline idempotent issue/recovery; owner issued-code panel + `/owner/api/issued`; `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` separate from telemetry `hub_url`.
+**Why:** Codex review 6: commercial builds trusting a leaked hub key for paid codes, assist.db tamper/revival, concurrent loser codes, frozen clock, Cairo midnight false rollback, owner handoff, upgrade lock gaps, offline trial burn, dual-URL setup.
+**Checks:** `cd licence-hub && node --test` (33 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (99 pass, 1 skip).
+**Next:** Owner rebuild commercial installers with `trial-hub:` + `studio:` in `TO_RELEASE_PUBLIC_KEYS`; set `licence_hub_url` when telemetry stays on the relay.
+
+## Licence-hub review fixes (2026-10-13)
+
+**What:** Online trial lock on device code + machine hash; atomic D1 batch claim with `ON CONFLICT DO NOTHING`; pending TTL; `calendar_day` as `YYYY-MM-DD`; owner approve shows code; trial-only `trial-hub` kid enforcement in `afcodes`/`licence`; sealed `max_seen`/expiry latch (HMAC from machine tag); active-trial hub calendar poll; wider clock tolerance for paid editions; docs split telemetry relay vs licence hub and trial key generation.
+**Why:** Review findings: second trial after `install_id` reset, stuck clock, race on approve/offline, poll squatting, and Studio key on Worker risk.
+**Checks:** `cd licence-hub && node --test` (29 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (94 pass, 1 skip).
+**Next:** Owner deploy trial-hub key on Cloudflare; point office `hub_url` at licence hub only.
+
+## Grok licence-hub + trial clock review (2026-10-13)
+
+**What:** Device-keyed one-trial lock (online + offline), sign-before-claim approve, request validation and pending spam limits, trial expiry latch with 1h clock tolerance and hub `calendar_day`, ack clears codes + daily purge cron, HUB_SETUP points at `licence-hub/`, owner UI notes and force reissue, Arabic one-day trial strings.
+**Why:** Grok-4.7 findings on duplicate trials, stranded pending rows, clock rollback, and doc drift.
+**Checks:** `cd licence-hub && node --test` (26 pass); `cd tests && python3 -m unittest test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files` (49 pass).
+
+## Licence-hub security review fixes (2026-10-13)
+
+**What:** Hub hardening from independent review: atomic machine claim before signing (approve retry returns same code); monthly/permanent refused at request and approve (trial only online); deterministic poll token on nonce replay; CSRF requires header/body token plus Origin/same-site check; owner HTML served at `/owner/` with security headers and external boot scripts; PKCS#8 PEM signing key only; trial calendar days in `LICENCE_CALENDAR_TZ` (default Africa/Cairo). Tests in `licence-hub/test/*.test.js`.
+**Why:** P1/P2 findings could issue duplicate trials, wrong edition, or strand approved licences.
+**Checks:** `node --check licence-hub/src`, `cd licence-hub && npm test`, `tests/test_licence_hub_signer.py` (Cairo today).
+
+## Licence tab review fixes + licence-hub Worker template (2026-10-13)
+
+**What:** Licence tab keeps device code, paste box and Details during an active trial; one **Activate** button (paste wins, else online trial); request status/refused/failed and **Retry** on the main card with polling while the hub retries; paste survives poll redraw; `shop` on Details requests and in the preview; English day singular; formal Arabic strings; Details border token. New `licence-hub/` Cloudflare Worker template (hub protocol, owner RTL dashboard, Ed25519 signing compatible with `server/afcodes.py`). `docs/HUB_SETUP.md` privacy wording for organisation name.
+**Why:** Grok review on the simple activation flow; owner needs a documented hub template without deploying from the repo.
+**Checks:** `licence-hub` `npm test`, `tests/test_licence_hub_signer.py`, `tests/test_assist.py`, `tests/test_design.py`, `node --check` on `licence-hub/src`.
+
+## Simple trial activation UI (2026-10-13)
+
+**What:** Settings → Licence tab: one primary **Activate** path (online trial request with editable organisation name, or paste code), device code always visible, advanced hub options under **Details**. Trial countdown in the tab and a shell banner when ≤14 days remain. Licence requests may carry a custom `shop` name to the hub. Docs: `docs/HUB_SETUP.md` section «التفعيل البسيط».
+**Why:** dispatchers need a short Arabic flow without replacing the existing signed-code licence system.
+**Checks:** `tests/test_assist.py` (licence), `node --check` on changed JS.
+
 ## At-rest encryption stays off unless TRIPORDERS_ENCRYPT=1 (2026-10-12)
 
 **What:** Opt-in SQLCipher / backup-archive encryption was already behind `TRIPORDERS_ENCRYPT=1`. Tests that opened archives or the live journal with raw `sqlite3` now go through `atrest` (`open_reader` / `connect`), so the same tests pass with the flag unset and set to `1`. Multi-PC crash and restore tests use a fresh temp directory per class and clean it up even when setup fails; the restore test cuts both sync directions before the offline trip. With the flag on, a missing `sqlcipher3` or `TRIPORDERS_ENCRYPT_BACKEND=file` refuses to start and does not write a plaintext work file. Docs state that recovery-key export, plaintext-to-encrypted migration, and second-PC restore are not implemented; the two-verified-backup procedure is labeled as planned. The flag must not be enabled for a real office until those exist. No vendor key and no silent plaintext fallback.

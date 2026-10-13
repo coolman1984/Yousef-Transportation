@@ -165,6 +165,13 @@ class Assist:
         url = (os.environ.get('FACTORY_HUB_URL') or self.cfg.get('hub_url') or self.kv('hub_url') or '').strip().rstrip('/')
         return url if valid_hub_url(url) else ''
 
+    def licence_hub_url(self):
+        url = (os.environ.get('FACTORY_LICENCE_HUB_URL') or self.cfg.get('licence_hub_url')
+               or self.kv('licence_hub_url') or '').strip().rstrip('/')
+        if valid_hub_url(url):
+            return url
+        return self.hub_url()
+
     def hub_token(self):
         return (os.environ.get('TO_HUB_TOKEN') or self.kv('hub_token') or '').strip()
 

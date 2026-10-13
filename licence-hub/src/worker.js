@@ -44,6 +44,13 @@ async function ownerApi(request, env, url, session) {
   if (path === '/session' && request.method === 'GET') {
     return json({ csrf: session.csrf, expires: session.expires_at });
   }
+  if (path === '/issued' && request.method === 'GET') {
+    const id = url.searchParams.get('id') || '';
+    if (!id) return json({ error: 'id' }, 400);
+    const row = await env.DB.prepare('SELECT id, code, status, device FROM licence_requests WHERE id = ?').bind(id).first();
+    if (!row || row.status !== 'issued' || !row.code) return json({ error: 'not_found' }, 404);
+    return json({ ok: true, code: row.code, device: row.device });
+  }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
       "SELECT r.id, r.kind, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",

@@ -1,16 +1,20 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { createPrivateKey } from 'node:crypto';
+import { createHash, createPrivateKey } from 'node:crypto';
 import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
-  deviceKey, deviceLockKey, REASON_PAID_IN_STUDIO,
+  deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 
 const SECRET = 'test-session-secret-0123456789abcdef';
 const MACHINE_A = 'a'.repeat(64);
 const MACHINE_B = 'b'.repeat(64);
+
+function pollHash(token) {
+  return createHash('sha256').update(token).digest('hex');
+}
 
 function pemFromSeed(seed32) {
   const seed = Buffer.from(seed32);
@@ -84,6 +88,29 @@ test('nonce replay returns the same poll token', async () => {
   assert.equal(second.data.replay, true);
   assert.equal(second.data.poll_token, first.data.poll_token);
   assert.equal(second.data.id, first.data.id);
+});
+
+test('losing concurrent approval never exposes issued code on status poll', async () => {
+  const e = env();
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 19)));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const t = 1;
+  const pollA = await derivePollToken(SECRET, 'n-a');
+  const pollB = await derivePollToken(SECRET, 'n-b');
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('a', pollHash(pollA), 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n-a', '', '', '', 'pending', t, t).run();
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('b', pollHash(pollB), 'trip-orders', 'trial', device, dkey, MACHINE_B, 'n-b', '', '', '', 'pending', t, t).run();
+  const [signedA, signedB] = await Promise.all([approveRequest(e, 'a', key), approveRequest(e, 'b', key)]);
+  const winners = [signedA, signedB].filter((s) => s?.code);
+  assert.equal(winners.length, 1);
+  const stB = await getStatus(e, 'b', pollB);
+  const stA = await getStatus(e, 'a', pollA);
+  const issued = [stA.data, stB.data].filter((d) => d.status === 'issued' && d.code);
+  assert.equal(issued.length, 1);
 });
 
 test('only one trial wins on concurrent approval for the same device', async () => {
@@ -248,6 +275,45 @@ test('paid pending request approval is refused', async () => {
   const out = await approveRequest(e, 'id1', key);
   assert.equal(out.refused, true);
   assert.equal(out.reason, REASON_PAID_IN_STUDIO);
+});
+
+test('legacy unprefixed machine_trials row blocks reuse after upgrade', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind(dkey, 'legacy-req', 1).run();
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+  await migrateLegacyTrialLocks(e);
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+});
+
+test('offline issuance survives customer insert failure and retries same code', async () => {
+  const e = env();
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 21)));
+  const device = '7KD2M-QX9TP';
+  const origPrepare = e.DB.prepare.bind(e.DB);
+  let failCustomers = true;
+  e.DB.prepare = (sql) => {
+    const stmt = origPrepare(sql);
+    if (failCustomers && sql.includes('INSERT INTO customers')) {
+      return {
+        bind(...args) {
+          return {
+            run() { throw new Error('simulated-D1-error'); },
+            first() { return stmt.bind(...args).first(); },
+            all() { return stmt.bind(...args).all(); },
+          };
+        },
+      };
+    }
+    return stmt;
+  };
+  await assert.rejects(() => issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders'), /simulated-D1-error/);
+  failCustomers = false;
+  const second = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
+  assert.ok(second.code);
+  const third = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
+  assert.equal(third.code, second.code);
 });
 
 test('derivePollToken is stable for a nonce', async () => {

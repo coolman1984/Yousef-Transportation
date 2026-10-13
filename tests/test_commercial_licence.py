@@ -27,6 +27,13 @@ class _Assist:
     def __init__(self, data_dir):
         self.data_dir = data_dir
         self.values = {'install_id': 'test-install'}
+        self.practice = False
+
+    def hub_url(self):
+        return self.values.get('hub_url', '')
+
+    def licence_hub_url(self):
+        return self.values.get('licence_hub_url') or self.hub_url()
 
     def kv(self, key, value=None, delete=False):
         if delete:
@@ -40,21 +47,41 @@ class _Assist:
 class _CommercialLicence:
     """Licence() under patched commercial build flags for the whole test block."""
 
-    def __init__(self, data_dir, build_channel='commercial', release_keys=None):
+    def __init__(self, data_dir, build_channel='commercial', release_keys=None, studio_keys=None):
+        trial_keys = release_keys if release_keys is not None else (key_blob(),)
+        studio = studio_keys or ()
+        entries = [('studio', k) for k in studio] + [('trial-hub', k) for k in trial_keys]
+        all_keys = tuple(dict.fromkeys(list(studio) + list(trial_keys)))
+        self._prof = tempfile.mkdtemp()
         self._patch = patch.multiple(
             licence,
             _COMMERCIAL_BUILD=True,
             _BUILD_CHANNEL=build_channel,
-            _RELEASE_KEYS=release_keys if release_keys is not None else (key_blob(),),
+            _RELEASE_KEYS=all_keys,
+            _RELEASE_KEY_ENTRIES=tuple(entries),
+            _RELEASE_TRIAL_ONLY=frozenset(trial_keys),
+            _RELEASE_MAX_TRIAL_DAYS=14,
         )
+        self._env = patch.dict(os.environ, {'TRIPORDERS_DPAPI_DIR': self._prof, 'XDG_CONFIG_HOME': self._prof})
         self._patch.start()
+        self._env.start()
+        import atrest
+        atrest._MASTER = None
+        licence._hub_poll_mono = None
         self.lic = licence.Licence(_Assist(data_dir), str(ROOT), str(data_dir), {})
 
     def __enter__(self):
         return self.lic
 
     def __exit__(self, *exc):
+        self._env.stop()
         self._patch.stop()
+        import atrest
+        atrest._MASTER = None
+
+    @property
+    def profile_dir(self):
+        return self._prof
 
 
 def _seed_trips_db(data_dir):
@@ -262,7 +289,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=device)['code']
                 l.activate(code, manual=True)
                 licence._cache.clear()
-                l.a.kv('max_seen', licence.iso(licence.utcnow() + timedelta(days=10)))
+                l._note_hub_calendar_day((first + timedelta(days=10)).isoformat())
                 st = l.status()
                 self.assertEqual(st['state'], 'expired')
                 self.assertFalse(st['full'])
@@ -283,9 +310,9 @@ class TrialClockExpiryTest(unittest.TestCase):
                 l.activate(code, manual=True)
                 future = (first + timedelta(days=5)).isoformat()
                 l._note_hub_calendar_day(future)
-                seen = l._read_max_seen()
+                seen = l._hub_calendar_max_day()
                 self.assertIsNotNone(seen)
-                self.assertGreaterEqual(seen.date(), first + timedelta(days=5))
+                self.assertGreaterEqual(seen, first + timedelta(days=5))
 
     def test_frozen_local_clock_expires_after_hub_calendar_day(self):
         with tempfile.TemporaryDirectory() as d:
@@ -318,7 +345,10 @@ class TrialClockExpiryTest(unittest.TestCase):
                 l._note_hub_calendar_day((first + timedelta(days=5)).isoformat())
                 licence._cache.clear()
                 l.status()
-                l.a.kv(licence.TRIAL_EXPIRED_LATCH, delete=True)
+                record = l._clock_record(create=False)
+                if record:
+                    record['trial_latch'] = False
+                    l._save_clock_record(record)
                 licence._cache.clear()
                 st = l.status()
                 self.assertEqual(st['state'], 'expired')
@@ -342,7 +372,8 @@ class TrialClockExpiryTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = self._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            pem_t, public_trial = self._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public_trial,), studio_keys=(public,)) as l:
                 first = date_cls.today()
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'standard', first, 30, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -351,7 +382,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                 with patch.object(licence, 'utcnow', return_value=licence.utcnow()):
                     st = l.status()
                 self.assertTrue(st['full'], st)
-                trial_code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                trial_code = afcodes.issue_code(pem_t, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
                 l.activate(trial_code, manual=True)
                 licence._cache.clear()
                 l._write_max_seen(licence.utcnow() + timedelta(hours=48))
@@ -384,6 +415,102 @@ class GraceNotLostByAccidentTest(unittest.TestCase):
                 self.assertFalse(l._upgrade_grace_consumed())
                 licence._cache.clear()
                 self.assertTrue(l.status()['full'])
+
+class LicenceClockStateTest(unittest.TestCase):
+    def _env(self, d):
+        prof = os.path.join(d, 'profile')
+        os.makedirs(prof, exist_ok=True)
+        return patch.dict(os.environ, {'TRIPORDERS_DPAPI_DIR': prof, 'XDG_CONFIG_HOME': prof})
+
+    def test_invalid_mac_on_state_denies_trial(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                licence._cache.clear()
+                path = os.path.join(holder.profile_dir, 'licence-clock.v1')
+                with open(path, 'wb') as f:
+                    f.write(b'{"v":1,"bind":"x","max_seen":"2020-01-01T00:00:00Z","hub_calendar_max":null,"trial_latch":false}\n' + b'0' * 64)
+                licence._cache.clear()
+                st = l.status()
+                self.assertFalse(st['full'])
+                self.assertEqual(st['reason'], 'state_corrupt')
+
+    def test_plaintext_assist_max_seen_does_not_revive_expired_trial(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                first = date_cls.today()
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                l._note_hub_calendar_day((first + timedelta(days=5)).isoformat())
+                licence._cache.clear()
+                l.status()
+                l.a.kv('max_seen', licence.iso(licence.utcnow()))
+                l.a.kv(licence.TRIAL_EXPIRED_LATCH, delete=True)
+                licence._cache.clear()
+                st = l.status()
+                self.assertEqual(st['state'], 'expired')
+
+    def test_cairo_midnight_hub_day_does_not_trigger_clock_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            utc = licence.parse('2026-10-13T22:15:00Z')
+            hub_day = '2026-10-14'
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                with patch.object(licence, 'utcnow', return_value=utc):
+                    code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', utc.date(), 14, device=l.device())['code']
+                    l.activate(code, manual=True)
+                    licence._cache.clear()
+                    st = l.status()
+                self.assertTrue(st['full'])
+                l._note_hub_calendar_day(hub_day)
+                licence._cache.clear()
+                with patch.object(licence, 'utcnow', return_value=utc):
+                    st2 = l.status()
+                self.assertNotEqual(st2.get('reason'), 'clock_back')
+                self.assertTrue(st2['full'])
+
+    def test_frozen_clock_scheduler_polls_each_process_window(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            frozen = date_cls.today()
+            calls = []
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                l.a.kv('hub_url', 'https://hub.test')
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 14, device=l.device())['code']
+                with patch.object(l, '_effective_calendar_day', return_value=frozen):
+                    l.activate(code, manual=True)
+                l._hub_watch({'id': 'r1', 'poll_token': 'tok'})
+                future_day = (frozen + timedelta(days=20)).isoformat()
+
+                def fake_call(method, url, body=None, token=None):
+                    calls.append(url)
+                    return 200, {'calendar_day': future_day, 'status': 'pending'}
+
+                licence._hub_poll_mono = None
+                with patch.object(l, '_effective_calendar_day', return_value=frozen):
+                    with patch.object(l, '_call', side_effect=fake_call):
+                        with patch.object(licence, 'utcnow', return_value=licence.parse('2020-01-01T00:00:00Z')):
+                            l._poll_hub_calendar()
+                            licence._hub_poll_mono = None
+                            l._poll_hub_calendar()
+                            l._poll_hub_calendar()
+                self.assertEqual(len(calls), 2)
+                licence._cache.clear()
+                with patch.object(l, '_effective_calendar_day', return_value=frozen + timedelta(days=20)):
+                    st = l.status()
+                self.assertEqual(st['state'], 'expired')
+
 
 if __name__ == "__main__":
     unittest.main()

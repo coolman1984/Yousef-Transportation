@@ -55,13 +55,24 @@ def _distributed_runtime():
 # In installed customer builds this generated module is compiled into TripOrders.exe.
 # Never load commercial trust anchors from writable user configuration.
 try:
-    from _release_policy import COMMERCIAL_BUILD as _COMMERCIAL_BUILD, TRUSTED_KEYS as _RELEASE_KEYS, BUILD_CHANNEL as _BUILD_CHANNEL
+    from _release_policy import (
+        COMMERCIAL_BUILD as _COMMERCIAL_BUILD,
+        TRUSTED_KEYS as _RELEASE_KEYS,
+        BUILD_CHANNEL as _BUILD_CHANNEL,
+        TRUSTED_KEY_ENTRIES as _RELEASE_KEY_ENTRIES,
+        TRIAL_ONLY_PUBLIC_KEYS as _RELEASE_TRIAL_ONLY,
+        MAX_TRIAL_DAYS as _RELEASE_MAX_TRIAL_DAYS,
+    )
 except ImportError:
     # Compiled binaries must never silently drop into contract mode if a release
     # policy module is missing due to a damaged build.
     _COMMERCIAL_BUILD = _distributed_runtime()
     _RELEASE_KEYS = ()
+    _RELEASE_KEY_ENTRIES = ()
+    _RELEASE_TRIAL_ONLY = frozenset()
+    _RELEASE_MAX_TRIAL_DAYS = 14
     _BUILD_CHANNEL = 'commercial' if _COMMERCIAL_BUILD else 'source'
+import licence_state
 from version import VERSION
 
 PRODUCT_ID = 'trip-orders'
@@ -76,8 +87,8 @@ TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
 HUB_WATCH_KEY = 'licence_hub_watch'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
 HUB_CALENDAR_MAX_JUMP_DAYS = 7
-STATE_SEAL_PEPPER = b'AF-LICENCE-STATE/1|trip-orders'
 TRIAL_HUB_KIDS = frozenset({'trial-hub', 'trial_hub', 'hub-trial'})
+_hub_poll_mono = None
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -141,6 +152,8 @@ class Licence:
     # ---------------------------------------------------------------- keys, device, state
     def _trusted_key_entries(self):
         if _COMMERCIAL_BUILD:
+            if _RELEASE_KEY_ENTRIES:
+                return list(_RELEASE_KEY_ENTRIES)
             return [('', k) for k in _RELEASE_KEYS]
         entries = []
         for raw in os.environ.get('TO_LICENCE_KEYS', '').split(','):
@@ -181,59 +194,121 @@ class Licence:
         return [key for _, key in self._trusted_key_entries()]
 
     def trial_only_public_keys(self):
+        if _COMMERCIAL_BUILD:
+            return _RELEASE_TRIAL_ONLY
         keys = set()
         for kid, key in self._trusted_key_entries():
             if kid and kid.lower() in TRIAL_HUB_KIDS:
                 keys.add(key)
-        extra = os.environ.get('TO_TRIAL_HUB_KEYS', '')
-        for raw in extra.split(','):
-            raw = raw.strip()
-            if raw:
-                keys.add(raw.split(':', 1)[-1].strip())
         return frozenset(keys)
 
-    def _state_seal_key(self):
-        return hmac.new(self.machine_tag().encode('ascii'), STATE_SEAL_PEPPER, hashlib.sha256).digest()
+    def _state_bind(self):
+        return self.machine_tag()
 
-    def _seal_state_value(self, field, value):
-        mac = hmac.new(self._state_seal_key(), f'{field}|{value}'.encode('utf-8'), hashlib.sha256).hexdigest()
-        return f'{value}|{mac}'
-
-    def _open_state_value(self, field, sealed):
+    def _legacy_open_state_value(self, field, sealed):
         if not sealed or not isinstance(sealed, str):
             return None
         if '|' not in sealed:
-            return sealed
+            return None
         value, mac = sealed.rsplit('|', 1)
-        expected = hmac.new(self._state_seal_key(), f'{field}|{value}'.encode('utf-8'), hashlib.sha256).hexdigest()
+        pepper = b'AF-LICENCE-STATE/1|trip-orders'
+        key = hmac.new(self.machine_tag().encode('ascii'), pepper, hashlib.sha256).digest()
+        expected = hmac.new(key, f'{field}|{value}'.encode('utf-8'), hashlib.sha256).hexdigest()
         if not hmac.compare_digest(mac, expected):
             return None
         return value
 
+    def _migrate_clock_state_once(self):
+        if licence_state.load(self._state_bind()):
+            return
+        if self.a.kv('max_seen') or self.a.kv(TRIAL_EXPIRED_LATCH):
+            record = licence_state.empty_record()
+            opened_max = self._legacy_open_state_value('max_seen', self.a.kv('max_seen'))
+            if opened_max:
+                dt = parse(opened_max)
+                if dt:
+                    record['max_seen'] = iso(dt)
+            opened_latch = self._legacy_open_state_value(TRIAL_EXPIRED_LATCH, self.a.kv(TRIAL_EXPIRED_LATCH))
+            record['trial_latch'] = opened_latch == '1'
+            licence_state.save(record, self._state_bind())
+
+    def _clock_record(self, create=False):
+        self._migrate_clock_state_once()
+        record = licence_state.load(self._state_bind())
+        if record is None:
+            if not create:
+                return None
+            record = licence_state.empty_record()
+            licence_state.save(record, self._state_bind())
+        return record
+
+    def _save_clock_record(self, record):
+        licence_state.save(record, self._state_bind())
+
+    def _trial_state_required(self):
+        code = self.a.kv('licence_code') or ''
+        if not code:
+            return False
+        keys = self.trusted_keys()
+        if not keys:
+            return False
+        r = afcodes.read_code(code, keys, PRODUCT_ID, self.device(), date.today(),
+                              trial_only_keys=self.trial_only_public_keys())
+        return r.terms.get('edition') == 'trial'
+
+    def _clock_state_ok(self):
+        if not self._trial_state_required():
+            return True
+        return licence_state.load(self._state_bind()) is not None
+
     def _read_max_seen(self):
-        raw = self.a.kv('max_seen')
-        opened = self._open_state_value('max_seen', raw)
-        if opened is None and raw:
+        record = self._clock_record(create=not self._trial_state_required())
+        if record is None:
             return None
-        return parse(opened or raw)
+        return parse(record.get('max_seen') or '')
 
     def _write_max_seen(self, when):
-        self.a.kv('max_seen', self._seal_state_value('max_seen', iso(when)))
+        record = self._clock_record(create=True)
+        record['max_seen'] = iso(when)
+        self._save_clock_record(record)
+
+    def _hub_calendar_max_day(self):
+        record = self._clock_record(create=False)
+        if not record or not record.get('hub_calendar_max'):
+            return None
+        try:
+            return date.fromisoformat(str(record['hub_calendar_max'])[:10])
+        except ValueError:
+            return None
+
+    def _write_hub_calendar_max_day(self, hub_date):
+        record = self._clock_record(create=True)
+        current = record.get('hub_calendar_max')
+        if current:
+            try:
+                current_date = date.fromisoformat(str(current)[:10])
+                if hub_date <= current_date:
+                    return
+            except ValueError:
+                pass
+        record['hub_calendar_max'] = hub_date.isoformat()
+        self._save_clock_record(record)
 
     def _trial_latch_set(self):
-        self.a.kv(TRIAL_EXPIRED_LATCH, self._seal_state_value(TRIAL_EXPIRED_LATCH, '1'))
+        record = self._clock_record(create=True)
+        record['trial_latch'] = True
+        self._save_clock_record(record)
 
     def _trial_latch_active(self):
-        raw = self.a.kv(TRIAL_EXPIRED_LATCH)
-        if not raw:
-            return False
-        opened = self._open_state_value(TRIAL_EXPIRED_LATCH, raw)
-        if opened == '1':
-            return True
-        return raw == '1'
+        record = self._clock_record(create=False)
+        return bool(record and record.get('trial_latch'))
 
     def _clear_trial_latch(self):
-        self.a.kv(TRIAL_EXPIRED_LATCH, delete=True)
+        record = self._clock_record(create=False)
+        if not record:
+            return
+        record['trial_latch'] = False
+        self._save_clock_record(record)
 
     @property
     def enforced(self):
@@ -265,31 +340,28 @@ class Licence:
         return now < last - tol
 
     def _effective_calendar_day(self, today=None):
-        """Latest calendar day this PC has credibly reached (local date or max_seen). Frozen clocks need hub calendar_day on poll."""
+        """Latest calendar day used for trial expiry (local, UTC watermark, or hub business day)."""
         today = today or date.today()
+        hub_max = self._hub_calendar_max_day()
+        if hub_max and hub_max > today:
+            today = hub_max
         last = self._read_max_seen()
-        if last:
-            seen = last.date()
-            if seen > today:
-                today = seen
+        if last and last.date() > today:
+            today = last.date()
         return today
 
     def _note_hub_calendar_day(self, hub_day):
-        """Trust the hub calendar (Africa/Cairo) so a stuck local clock cannot extend a trial forever."""
+        """Record hub business calendar progress without fabricating a UTC instant."""
         if not hub_day or not isinstance(hub_day, str):
             return
         try:
             hub_date = date.fromisoformat(hub_day[:10])
         except ValueError:
             return
-        hub = datetime.combine(hub_date, datetime.min.time())
-        last = self._read_max_seen()
-        if last:
-            jump = (hub_date - last.date()).days
-            if jump > HUB_CALENDAR_MAX_JUMP_DAYS:
-                return
-        if not last or hub > last:
-            self._write_max_seen(hub + timedelta(hours=12))
+        current = self._hub_calendar_max_day()
+        if current and hub_date <= current:
+            return
+        self._write_hub_calendar_max_day(hub_date)
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -454,6 +526,8 @@ class Licence:
             else:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
+        if self._trial_state_required() and not self._clock_state_ok():
+            result.update(state='invalid', full=False, reason='state_corrupt')
         clock_back = self._seen_now(result.get('edition'))
         if self._trial_latch_active() and result.get('edition') == 'trial':
             result.update(state='expired', full=False, reason='expired')
@@ -504,6 +578,8 @@ class Licence:
             raise ValueError('expired')
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
         self._clear_trial_latch()
+        if result.get('edition') == 'trial':
+            self._clock_record(create=True)
         if manual:
             self.a.kv('licence_manual_at', iso())
         with _lock:
@@ -512,7 +588,9 @@ class Licence:
 
     # ---------------------------------------------------------------- asking the company (online activation)
     def hub(self):
-        return self.a.hub_url() if not self.a.practice else ''
+        if self.a.practice:
+            return ''
+        return self.a.licence_hub_url()
 
     def _state(self, value=None, clear=False):
         if clear:
@@ -682,9 +760,9 @@ class Licence:
             self._soon(st, 900)
             return
         activated = self.status()
-        if activated.get('state') == 'trial' and poll_token and request_id:
+        if activated.get('edition') == 'trial' and poll_token and request_id:
             self._hub_watch({'id': request_id, 'poll_token': poll_token})
-        else:
+        elif activated.get('edition') != 'trial':
             self._hub_watch(clear=True)
         try:
             self._call('POST', url + '/licence/ack', {'id': st['id']}, token=poll_token)
@@ -706,22 +784,26 @@ class Licence:
             return None
 
     def _poll_hub_calendar(self):
+        global _hub_poll_mono
         watch = self._hub_watch()
         url = self.hub()
         if not watch or not url or not watch.get('id') or not watch.get('poll_token'):
             return
         st = self.status()
-        if st.get('state') != 'trial' or not st.get('full'):
+        if st.get('edition') != 'trial':
             self._hub_watch(clear=True)
             return
-        last = parse(self.a.kv('hub_calendar_polled_at'))
-        if last and utcnow() - last < timedelta(seconds=HUB_CALENDAR_POLL_SEC):
+        if st.get('state') in ('expired', 'invalid', 'none'):
+            self._hub_watch(clear=True)
+            return
+        now_mono = time.monotonic()
+        if _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
             if code == 200:
                 self._note_hub_calendar_day(d.get('calendar_day'))
-                self.a.kv('hub_calendar_polled_at', iso())
+                _hub_poll_mono = now_mono
                 with _lock:
                     _cache.clear()
             elif code == 401:

@@ -18,6 +18,16 @@ function headers() {
   return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf };
 }
 
+export function showIssuedCode(host, code, requestId) {
+  const panel = host.querySelector('[data-issued]');
+  if (!panel) return;
+  panel.hidden = false;
+  panel.innerHTML = '<p class="muted">اقرأ هذا الكود للعميل:</p><p class="big-code" dir="ltr">' + escape(code) + '</p><button type="button" class="btn" data-copy>نسخ</button><button type="button" class="btn" data-dismiss>إغلاق</button>';
+  panel.querySelector('[data-copy]').addEventListener('click', () => navigator.clipboard.writeText(code));
+  panel.querySelector('[data-dismiss]').addEventListener('click', () => { panel.hidden = true; panel.innerHTML = ''; });
+  if (requestId) panel.dataset.requestId = requestId;
+}
+
 export async function loadPending(host) {
   await session();
   const data = await api('/pending');
@@ -58,11 +68,7 @@ export async function loadPending(host) {
         return;
       }
       if (res && res.ok && res.code) {
-        const box = document.createElement('div');
-        box.className = 'issued-box';
-        box.innerHTML = '<p class="muted">اقرأ هذا الكود للعميل:</p><p class="big-code" dir="ltr">' + escape(res.code) + '</p><button type="button" class="btn" data-copy>نسخ</button>';
-        box.querySelector('[data-copy]').addEventListener('click', () => navigator.clipboard.writeText(res.code));
-        li.append(box);
+        showIssuedCode(host, res.code, item.id);
       }
       loadPending(host);
     });

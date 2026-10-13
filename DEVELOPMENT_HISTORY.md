@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Review 6 — trial policy, clock state, hub transactions (2026-10-13)
+
+**What:** Commercial `TO_RELEASE_PUBLIC_KEYS` embeds `trial-hub` vs `studio` kids (`TRIAL_ONLY_PUBLIC_KEYS`); profile-bound authenticated licence clock state (`licence_state.py`) fails closed on corrupt/missing trial state; hub calendar separate from UTC watermark; monotonic hub poll scheduling; conditional SQL issue on approve; status hides orphan issued codes; legacy `machine_trials` migration; offline idempotent issue/recovery; owner issued-code panel + `/owner/api/issued`; `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` separate from telemetry `hub_url`.
+**Why:** Codex review 6: commercial builds trusting a leaked hub key for paid codes, assist.db tamper/revival, concurrent loser codes, frozen clock, Cairo midnight false rollback, owner handoff, upgrade lock gaps, offline trial burn, dual-URL setup.
+**Checks:** `cd licence-hub && node --test` (33 pass); `cd tests && python3 -m unittest test_unit test_licence_hub_signer test_release_policy test_commercial_licence test_assist test_release_files test_crypto` (99 pass, 1 skip).
+**Next:** Owner rebuild commercial installers with `trial-hub:` + `studio:` in `TO_RELEASE_PUBLIC_KEYS`; set `licence_hub_url` when telemetry stays on the relay.
+
 ## Licence-hub review fixes (2026-10-13)
 
 **What:** Online trial lock on device code + machine hash; atomic D1 batch claim with `ON CONFLICT DO NOTHING`; pending TTL; `calendar_day` as `YYYY-MM-DD`; owner approve shows code; trial-only `trial-hub` kid enforcement in `afcodes`/`licence`; sealed `max_seen`/expiry latch (HMAC from machine tag); active-trial hub calendar poll; wider clock tolerance for paid editions; docs split telemetry relay vs licence hub and trial key generation.

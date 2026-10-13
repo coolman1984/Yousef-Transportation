@@ -23,30 +23,40 @@ def key_blob(seed=b"a"):
 class CommercialPolicyTest(unittest.TestCase):
     def test_customer_build_refuses_missing_invalid_and_duplicate_keys(self):
         good = key_blob()
-        for bad in ("", " ", "invalid", good + ",", good + "," + good,
-                    key_blob(b"\x00"), good + "=", "xxx:" + good):
+        for bad in ("", " ", "invalid", good + "," + good,
+                    key_blob(b"\x00"), good + "=", "badkid:not-a-key"):
             with self.subTest(bad=repr(bad)):
                 with self.assertRaises(ValueError):
                     parse_public_keys(bad)
         self.assertEqual(parse_public_keys(good + "," + key_blob(b"b")),
                          (good, key_blob(b"b")))
+        with self.assertRaises(ValueError):
+            parse_public_keys(good + "," + good)
 
     def test_generated_trust_anchor_is_public_only_and_never_overwritten(self):
         with tempfile.TemporaryDirectory() as d:
             path = pathlib.Path(d) / "_release_policy.py"
-            self.assertEqual(create_release_policy(str(path), key_blob()), 1)
+            good = f"trial-hub:{key_blob()}"
+            self.assertEqual(create_release_policy(str(path), good), 1)
             text = path.read_text("ascii")
             self.assertIn("COMMERCIAL_BUILD = True", text)
             self.assertIn(key_blob(), text)
+            self.assertIn("TRIAL_ONLY_PUBLIC_KEYS", text)
             self.assertNotIn("PRIVATE KEY", text)
             with self.assertRaises(ValueError):
-                create_release_policy(str(path), key_blob(b"b"))
+                create_release_policy(str(path), good.replace(key_blob(), key_blob(b"b")))
+
+    def test_commercial_build_requires_trial_hub_kid(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "_release_policy.py"
+            with self.assertRaises(ValueError):
+                create_release_policy(str(path), key_blob(), channel="commercial")
 
     def test_compiled_policy_ignores_mutable_configuration_and_does_not_unlock_when_empty(self):
         with tempfile.TemporaryDirectory() as d:
             generated = pathlib.Path(d) / "_release_policy.py"
             good, rogue = key_blob(), key_blob(b"b")
-            create_release_policy(str(generated), good)
+            create_release_policy(str(generated), f"trial-hub:{good}", channel="ci-test")
             # A separate process imports the generated policy as an installed
             # program would. User-set config/environment cannot replace it.
             code = """
@@ -103,6 +113,41 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
                                      ("invalid", False, "device_required"))
                     bound = afcodes.issue_code(pem, "trip-orders", edition, date.today(), 30, device=device)["code"]
                     self.assertTrue(lic._check(bound, device, date.today(), [public])["full"])
+
+    def test_commercial_policy_rejects_hub_signed_paid_codes(self):
+        from datetime import date
+        from unittest.mock import patch
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sys.path.insert(0, str(ROOT / "server"))
+        import afcodes, licence
+        hub = Ed25519PrivateKey.generate()
+        studio = Ed25519PrivateKey.generate()
+        hub_pub = base64.urlsafe_b64encode(hub.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip("=")
+        studio_pub = base64.urlsafe_b64encode(studio.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode().rstrip("=")
+        hub_pem = hub.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        studio_pem = studio.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        device = "ABCDE-FGHJK"
+
+        class Data:
+            def kv(self, key, value=None, delete=False):
+                return None
+
+        lic = licence.Licence(Data(), str(ROOT), str(ROOT), {})
+        entries = (("trial-hub", hub_pub), ("studio", studio_pub))
+        with patch.object(licence, "_COMMERCIAL_BUILD", True), patch.object(licence, "_RELEASE_KEY_ENTRIES", entries), \
+                patch.object(licence, "_RELEASE_KEYS", (hub_pub, studio_pub)), \
+                patch.object(licence, "_RELEASE_TRIAL_ONLY", frozenset({hub_pub})):
+            trial_ok = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 14, device=device)["code"]
+            self.assertTrue(lic._check(trial_ok, device, date.today(), lic.trusted_keys())["full"])
+            long_trial = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 20, device=device)["code"]
+            self.assertEqual(lic._check(long_trial, device, date.today(), lic.trusted_keys())["reason"], "trial_key_days")
+            monthly = afcodes.issue_code(hub_pem, "trip-orders", "standard", date.today(), 30, device=device)["code"]
+            self.assertEqual(lic._check(monthly, device, date.today(), lic.trusted_keys())["reason"], "trial_key_edition")
+            paid = afcodes.issue_code(studio_pem, "trip-orders", "standard", date.today(), 30, device=device)["code"]
+            self.assertTrue(lic._check(paid, device, date.today(), lic.trusted_keys())["full"])
 
     def test_ci_build_is_conspicuously_not_for_customers(self):
         build = (ROOT / "tools" / "build_windows.py").read_text("utf-8")

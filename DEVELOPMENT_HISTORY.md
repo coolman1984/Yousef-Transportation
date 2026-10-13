@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Merge origin/main into feat/licence-standard (2026-10-13)
+
+**What/why:** Merged `main` into PR #31 branch after `feat/simple-trial-activation` merge; kept licence-standard hub catch-up cap and paid calendar recovery.
+**Checks:** `timeout 900 python3 -W ignore::ResourceWarning -m unittest discover -s tests`; `cd licence-hub && timeout 300 node --test`.
+**Next:** Push branch; PR #31 review.
+
 ## Merge feat/simple-trial-activation into feat/licence-standard (2026-10-13)
 
 **What/why:** Resolved `server/licence.py` and `DEVELOPMENT_HISTORY.md` conflicts keeping PR #29 clock/bootstrap/review rules plus PR #31 paid hub-calendar recovery, calendar retry backoff, and hub time rate limiting. Hub poll catch-up is capped at eight seven-day steps per request so a stuck partial step cannot spin at 100% CPU; remaining days wait for the next scheduled retry.

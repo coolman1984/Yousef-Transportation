@@ -27,6 +27,10 @@ PROFILE_LOCK_FILE = 'licence-state.profile.lock'
 _io_lock = threading.RLock()
 
 
+class ProfileLockUnavailable(Exception):
+    """Profile lock file could not be opened or locked (another process or OS error)."""
+
+
 def _profile_dir():
     return atrest._profile_dir()
 
@@ -83,28 +87,36 @@ def _profile_file_lock():
     directory = _profile_dir()
     os.makedirs(directory, mode=0o700, exist_ok=True)
     path = os.path.join(directory, PROFILE_LOCK_FILE)
-    f = open(path, 'a+')
+    f = None
     try:
         if os.name == 'nt':
+            if not os.path.exists(path) or os.path.getsize(path) < 1:
+                with open(path, 'wb') as init:
+                    init.write(b'\n')
+            f = open(path, 'r+b')
             import msvcrt
             f.seek(0)
             msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, 1)
         else:
+            f = open(path, 'a+')
             import fcntl
             fcntl.flock(f.fileno(), fcntl.LOCK_EX)
         yield
+    except OSError as exc:
+        raise ProfileLockUnavailable(str(exc)) from exc
     finally:
-        try:
-            if os.name == 'nt':
-                import msvcrt
-                f.seek(0)
-                msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except OSError:
-            pass
-        f.close()
+        if f is not None:
+            try:
+                if os.name == 'nt':
+                    import msvcrt
+                    f.seek(0)
+                    msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+            except OSError:
+                pass
+            f.close()
 
 
 def _state_path():
@@ -213,28 +225,34 @@ def _persist_record(record, bind_tag):
 
 
 def save(record, bind_tag):
-    with _profile_file_lock():
-        _persist_record(record, bind_tag)
+    try:
+        with _profile_file_lock():
+            _persist_record(record, bind_tag)
+    except ProfileLockUnavailable:
+        pass
 
 
 def mutate(bind_tag, updater, create=False):
     """Load, apply updater(record), save — serialized against concurrent writers."""
     with _io_lock:
-        with _profile_file_lock():
-            status, record = read(bind_tag)
-            if status == 'ok' and record.get('fail_closed'):
-                return None
-            if status == 'corrupt':
-                return None
-            if status == 'missing':
-                if not create:
+        try:
+            with _profile_file_lock():
+                status, record = read(bind_tag)
+                if status == 'ok' and record.get('fail_closed'):
                     return None
-                record = empty_record()
-            record = updater(dict(record))
-            if record is None:
-                return None
-            _persist_record(record, bind_tag)
-            return record
+                if status == 'corrupt':
+                    return None
+                if status == 'missing':
+                    if not create:
+                        return None
+                    record = empty_record()
+                record = updater(dict(record))
+                if record is None:
+                    return None
+                _persist_record(record, bind_tag)
+                return record
+        except ProfileLockUnavailable:
+            return None
 
 
 def empty_record():

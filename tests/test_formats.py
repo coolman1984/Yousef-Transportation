@@ -168,7 +168,7 @@ class WordTypes(unittest.TestCase):
                 try:
                     out.append(f"\\'{ch.encode('cp1256')[0]:02x}" if ord(ch) > 127 else ch)
                 except UnicodeEncodeError:
-                    out.append(f'\\u{ord(ch)}?')           # what Word writes for characters outside the code page
+                    out.append('\\u' + str(ord(ch)) + '?')  # what Word writes for characters outside the code page
             return ''.join(out)
         rows = ''.join('\\trowd\\cellx3000\\cellx6000\\intbl ' + esc(LABELS[k]) + '\\cell ' + esc(VALUES[k]) + '\\cell\\row\n' for k in LABELS)
         rtf = ('{\\rtf1\\ansi\\ansicpg1256\\deff0{\\fonttbl{\\f0 Arial;}}\\pard Title\\par\n' + rows + '}').encode('latin-1')

@@ -85,6 +85,19 @@ class _CommercialLicence:
         return self._prof
 
 
+def _step_hub_calendar_to(lic_obj, target):
+    """Advance stored hub day toward target respecting HUB_CALENDAR_MAX_JUMP_DAYS per step."""
+    if isinstance(target, str):
+        target = date.fromisoformat(target[:10])
+    while True:
+        cur = lic_obj._hub_calendar_max_day()
+        base = cur or licence.date.today()
+        if base >= target:
+            return
+        nxt = min(target, base + timedelta(days=licence.HUB_CALENDAR_MAX_JUMP_DAYS))
+        lic_obj._note_hub_calendar_day(nxt.isoformat())
+
+
 def _seed_trips_db(data_dir):
     path = os.path.join(data_dir, 'trips.db')
     conn = sqlite3.connect(path)
@@ -290,7 +303,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=device)['code']
                 l.activate(code, manual=True)
                 licence._cache.clear()
-                l._note_hub_calendar_day((first + timedelta(days=10)).isoformat())
+                l._note_hub_calendar_day((first + timedelta(days=5)).isoformat())
                 st = l.status()
                 self.assertEqual(st['state'], 'expired')
                 self.assertFalse(st['full'])
@@ -441,8 +454,13 @@ class PaidHubCalendarTest(unittest.TestCase):
         with self._paid() as (l, frozen, end):
             original_code = l.a.kv('licence_code')
             self.assertTrue(l.status()['full'])  # Populate the status cache before polling.
-            with patch.object(l, '_call', return_value=(200, {
-                    'calendar_day': (end + timedelta(days=1)).isoformat()})) as call:
+            target = (end + timedelta(days=1)).isoformat()
+
+            def fake_time_call(method, url, body=None, token=None):
+                _step_hub_calendar_to(l, target)
+                return 200, {'calendar_day': target}
+
+            with patch.object(l, '_call', side_effect=fake_time_call) as call:
                 l._poll_hub_calendar()
             call.assert_called_once_with('GET', 'https://hub.test/licence/time')
             self.assertEqual(licence.date.today(), frozen)
@@ -455,7 +473,11 @@ class PaidHubCalendarTest(unittest.TestCase):
 
     def test_paid_grace_last_day_remains_full(self):
         with self._paid() as (l, _, end):
-            with patch.object(l, '_call', return_value=(200, {'calendar_day': end.isoformat()})):
+            def fake_time_call(method, url, body=None, token=None):
+                _step_hub_calendar_to(l, end.isoformat())
+                return 200, {'calendar_day': end.isoformat()}
+
+            with patch.object(l, '_call', side_effect=fake_time_call):
                 l._poll_hub_calendar()
             st = l.status()
             self.assertEqual(st['state'], 'grace')
@@ -487,9 +509,17 @@ class PaidHubCalendarTest(unittest.TestCase):
     def test_paid_poll_is_limited_and_hub_day_never_moves_back(self):
         with self._paid() as (l, frozen, end):
             future = end + timedelta(days=1)
-            with patch.object(l, '_call', side_effect=[
-                    (200, {'calendar_day': future.isoformat()}),
-                    (200, {'calendar_day': frozen.isoformat()})]) as call:
+
+            def fake_calls(method, url, body=None, token=None):
+                if not getattr(fake_calls, 'n', None):
+                    fake_calls.n = 0
+                fake_calls.n += 1
+                if fake_calls.n == 1:
+                    _step_hub_calendar_to(l, future.isoformat())
+                    return 200, {'calendar_day': future.isoformat()}
+                return 200, {'calendar_day': frozen.isoformat()}
+
+            with patch.object(l, '_call', side_effect=fake_calls) as call:
                 with patch.object(licence.time, 'monotonic', return_value=100):
                     l._poll_hub_calendar()
                 with patch.object(licence.time, 'monotonic', return_value=100 + licence.HUB_CALENDAR_POLL_SEC - 1):
@@ -503,10 +533,15 @@ class PaidHubCalendarTest(unittest.TestCase):
 
     def test_expired_looking_paid_code_still_checks_hub_time(self):
         with self._paid() as (l, _, end):
-            l._note_hub_calendar_day((end + timedelta(days=1)).isoformat())
+            _step_hub_calendar_to(l, (end + timedelta(days=1)).isoformat())
             self.assertEqual(l.status()['state'], 'expired')
-            with patch.object(l, '_call', return_value=(200, {
-                    'calendar_day': (end + timedelta(days=2)).isoformat()})) as call:
+            target = (end + timedelta(days=2)).isoformat()
+
+            def fake_time_call(method, url, body=None, token=None):
+                _step_hub_calendar_to(l, target)
+                return 200, {'calendar_day': target}
+
+            with patch.object(l, '_call', side_effect=fake_time_call) as call:
                 l._poll_hub_calendar()
             call.assert_called_once_with('GET', 'https://hub.test/licence/time')
             self.assertEqual(l._effective_calendar_day(), end + timedelta(days=2))
@@ -713,9 +748,9 @@ class LicenceClockStateTest(unittest.TestCase):
             pem, public = TrialClockExpiryTest()._trial_keypair()
             holder = _CommercialLicence(d, release_keys=(public,))
             with holder as l:
-                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
                 l.activate(code, manual=True)
-                l._note_hub_calendar_day((first + timedelta(days=20)).isoformat())
+                _step_hub_calendar_to(l, (first + timedelta(days=5)).isoformat())
                 licence._cache.clear()
                 self.assertFalse(l.status()['full'])
                 os.remove(os.path.join(holder.profile_dir, licence_state.STATE_FILE))
@@ -803,6 +838,120 @@ class LicenceClockStateTest(unittest.TestCase):
                 st = l.status()
                 self.assertFalse(st['full'])
                 self.assertEqual(st['reason'], 'state_corrupt')
+
+    def test_cleared_assist_flag_with_profile_marker_still_denies_trial(self):
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            prof = holder.profile_dir
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                _step_hub_calendar_to(l, (first + timedelta(days=5)).isoformat())
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+                os.remove(os.path.join(prof, licence_state.STATE_FILE))
+                l.a.kv('licence_clock_profile', delete=True)
+                self.assertTrue(licence_state.migration_marker_exists())
+                licence._cache.clear()
+                self.assertFalse(l.status()['full'])
+                self.assertEqual(l.status()['reason'], 'state_corrupt')
+                with self.assertRaises(ValueError):
+                    l.activate(code, manual=True)
+                licence._cache.clear()
+                for _ in range(2):
+                    again = l.status()
+                    self.assertFalse(again['full'])
+                    self.assertEqual(again['reason'], 'state_corrupt')
+                self.assertTrue(os.path.exists(os.path.join(prof, licence_state.MIGRATION_MARKER)))
+
+    def test_far_future_hub_day_is_capped_honest_day_still_applies(self):
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            first = date_cls.today()
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            with _CommercialLicence(d, release_keys=(public,)) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                l._note_hub_calendar_day('2099-01-01')
+                self.assertIsNone(l._hub_calendar_max_day())
+                honest = (first + timedelta(days=3)).isoformat()
+                l._note_hub_calendar_day(honest)
+                seen = l._hub_calendar_max_day()
+                self.assertIsNotNone(seen)
+                self.assertEqual(seen.isoformat(), honest)
+                licence._cache.clear()
+                self.assertTrue(l.status()['full'])
+
+    def test_profile_lock_failure_returns_fail_closed_status(self):
+        import licence_state
+        with tempfile.TemporaryDirectory() as d:
+            from datetime import date as date_cls
+            import afcodes
+            pem, public = TrialClockExpiryTest()._trial_keypair()
+            holder = _CommercialLicence(d, release_keys=(public,))
+            with holder as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
+                l.activate(code, manual=True)
+                os.remove(os.path.join(holder.profile_dir, licence_state.STATE_FILE))
+                licence._cache.clear()
+
+                @contextmanager
+                def busy_lock():
+                    raise licence_state.ProfileLockUnavailable('busy')
+
+                with patch.object(licence_state, '_profile_file_lock', side_effect=busy_lock):
+                    st = l.status()
+                self.assertFalse(st['full'])
+                self.assertEqual(st['reason'], 'state_corrupt')
+
+
+class PaidClockStateTamperTest(unittest.TestCase):
+    def test_paid_hub_expiry_survives_deleting_clock_file(self):
+        import licence_state
+        import afcodes
+        frozen = date(2026, 9, 3)
+
+        class FrozenDate(date):
+            @classmethod
+            def today(cls):
+                return frozen
+
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(), studio_keys=(public,))
+            with holder as l:
+                with patch.object(licence, 'date', FrozenDate):
+                    issued = afcodes.issue_code(
+                        pem, licence.PRODUCT_ID, 'standard', frozen, 30, grace_days=3, device=l.device())
+                    l.activate(issued['code'], manual=True)
+                    end = date.fromisoformat(issued['last_day']) + timedelta(days=3)
+                    hub_expire = (end + timedelta(days=1)).isoformat()
+                    _step_hub_calendar_to(l, hub_expire)
+                    licence._cache.clear()
+                    self.assertFalse(l.status()['full'])
+                    prof = holder.profile_dir
+                    os.remove(os.path.join(prof, licence_state.STATE_FILE))
+                    licence._cache.clear()
+                    with patch.object(licence, 'date', FrozenDate):
+                        st = l.status()
+                    self.assertFalse(st['full'])
+                    self.assertEqual(st['reason'], 'state_corrupt')
+                    _step_hub_calendar_to(l, hub_expire)
+                    licence._cache.clear()
+                    with patch.object(licence, 'date', FrozenDate):
+                        st2 = l.status()
+                    self.assertFalse(st2['full'])
+                    self.assertNotEqual(st2.get('state'), 'active')
+                    record = licence_state.load(l.machine_tag())
+                    self.assertIsNotNone(record)
+                    self.assertFalse(record.get('fail_closed'))
+                    self.assertEqual(licence_state.read(l.machine_tag())[1].get('hub_calendar_max'), hub_expire)
 
 
 if __name__ == "__main__":

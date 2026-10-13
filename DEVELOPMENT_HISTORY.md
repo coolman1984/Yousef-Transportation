@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Review 9 — profile marker establishment, paid clock tamper, hub jump cap (2026-10-13)
+
+**What:** Profile migration marker counts as established clock state (assist.db flag clear no longer revives trials); paid licences deny `full` when established state file is missing without writing empty fail-closed seals; hub calendar days capped at `HUB_CALENDAR_MAX_JUMP_DAYS` per step; profile lock setup errors fail closed; Windows lock uses binary lock file with content.
+**Why:** Review 9: state-file bypass after flag delete, paid hub expiry dropped on file delete, unbounded hub day latch, lock errors escaping `status()`.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (448 run, 40 skipped, 0 failures).
+**Next:** PR review and merge; owner hub redeploy unchanged unless already on branch.
+
 ## Paid licence calendar protection (2026-10-13)
 
 **Branch/source:** `feat/simple-trial-activation` (PR #29), based on `1baa861`; licence protection for the commercial candidate (L1), no pilot acceptance claimed.

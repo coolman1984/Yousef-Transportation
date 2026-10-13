@@ -219,11 +219,26 @@ class Licence:
         return value
 
     def _profile_clock_established(self):
-        return self.a.kv('licence_clock_profile') == '1'
+        return (
+            self.a.kv('licence_clock_profile') == '1'
+            or licence_state.migration_marker_exists()
+        )
+
+    def _allow_clock_state_create(self):
+        if self.a.kv('licence_clock_profile') != '1':
+            return True
+        bind = self._state_bind()
+        status, _ = licence_state.read(bind)
+        if status == 'missing' and not self._trial_state_required():
+            return True
+        return False
 
     def _migrate_clock_state_once(self):
         bind = self._state_bind()
         if self._profile_clock_established():
+            status, _ = licence_state.read(bind)
+            if status in ('missing', 'corrupt') and self._trial_state_required() and licence_state.auth_available():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
             return
         status, _ = licence_state.read(bind)
         if status == 'ok':
@@ -231,8 +246,6 @@ class Licence:
         if status == 'corrupt':
             if self._trial_state_required():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
-            return
-        if licence_state.migration_marker_exists():
             return
         legacy_max = self.a.kv('max_seen')
         legacy_latch = self.a.kv(TRIAL_EXPIRED_LATCH)
@@ -266,9 +279,9 @@ class Licence:
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
             return licence_state.load(bind)
         if status == 'missing' and self._profile_clock_established():
-            if self._trial_state_required():
+            if self._trial_state_required() and licence_state.auth_available():
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
-            return licence_state.load(bind)
+            return licence_state.load(bind) if self._trial_state_required() else None
         if not create:
             return None
         record = licence_state.empty_record()
@@ -303,8 +316,6 @@ class Licence:
         return r.terms.get('edition') == 'trial'
 
     def _clock_state_ok(self):
-        if not self._trial_state_required():
-            return True
         bind = self._state_bind()
         status, record = licence_state.read(bind)
         if status == 'ok':
@@ -312,7 +323,9 @@ class Licence:
         if status == 'corrupt':
             return False
         if status == 'missing':
-            return self.a.kv('licence_clock_profile') != '1'
+            if self._profile_clock_established():
+                return False
+            return not self._trial_state_required()
         return False
 
     def _read_max_seen(self):
@@ -333,8 +346,9 @@ class Licence:
             record['max_seen'] = iso(when)
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
             return
         self._note_profile_clock_established()
 
@@ -364,8 +378,9 @@ class Licence:
             record['hub_calendar_max'] = hub_date.isoformat()
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
             return
         self._note_profile_clock_established()
 
@@ -378,8 +393,9 @@ class Licence:
             record['trial_latch'] = True
             return record
 
-        if licence_state.mutate(bind, updater, create=self.a.kv('licence_clock_profile') != '1') is None and self.a.kv('licence_clock_profile') == '1':
-            licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
+            if self._trial_state_required():
+                licence_state.seal_fail_closed(bind, 'state_corrupt')
             return
         self._note_profile_clock_established()
 
@@ -446,6 +462,14 @@ class Licence:
             return
         current = self._hub_calendar_max_day()
         if current and hub_date <= current:
+            return
+        effective = date.today()
+        if current and current > effective:
+            effective = current
+        last = self._read_max_seen()
+        if last and last.date() > effective:
+            effective = last.date()
+        if hub_date > effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS):
             return
         self._write_hub_calendar_max_day(hub_date)
 
@@ -613,12 +637,19 @@ class Licence:
                 result = self._check(code, dev, today, keys)
                 _cache['v'] = (key, dict(result))
         state_ok = self._clock_state_ok()
-        if self._trial_state_required() and not state_ok:
+        if not state_ok:
             bind = self._state_bind()
             status, _ = licence_state.read(bind)
-            if (status == 'corrupt' or self.a.kv('licence_clock_profile') == '1') and licence_state.auth_available():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
-            result.update(state='invalid', full=False, reason='state_corrupt')
+            if self._trial_state_required():
+                if (
+                    status in ('missing', 'corrupt')
+                    or self.a.kv('licence_clock_profile') == '1'
+                    or licence_state.migration_marker_exists()
+                ) and licence_state.auth_available():
+                    licence_state.seal_fail_closed(bind, 'state_corrupt')
+                result.update(state='invalid', full=False, reason='state_corrupt')
+            elif self._profile_clock_established():
+                result.update(full=False, reason='state_corrupt')
             clock_back = False
         else:
             clock_back = self._seen_now(result.get('edition'))

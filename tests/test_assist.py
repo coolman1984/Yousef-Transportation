@@ -389,6 +389,10 @@ class LicenceTest(Base):
         finally:
             self.hub.mode = 'issue'
 
+    def test_bb_request_carries_the_organisation_name(self):
+        self.ac.post('/api/licence/request', {'kind': 'trial', 'shop': 'Office Alpha'})
+        self.assertEqual(self.hub.requests[-1]['shop'], 'Office Alpha')
+
     def test_f_a_request_survives_a_restart_and_a_dead_hub_backs_off(self):
         self.ac.post('/api/licence/request/clear', {})
         self.hub.mode = 'wait'

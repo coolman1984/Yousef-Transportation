@@ -395,9 +395,13 @@ class Licence:
         except ValueError:
             return None
 
-    def body(self, kind, ref='', nonce='preview'):
+    def _shop(self, override=None):
+        text = str(override if override is not None else self.shop_name() or '').strip()
+        return (text or str(self.shop_name() or '').strip())[:60]
+
+    def body(self, kind, ref='', nonce='preview', shop=None):
         return {'product': PRODUCT_ID, 'kind': kind, 'device': self.device(), 'machine': self.machine_tag(), 'nonce': nonce,
-                'shop': str(self.shop_name() or '')[:60], 'ref': str(ref or '')[:60], 'version': VERSION}
+                'shop': self._shop(shop), 'ref': str(ref or '')[:60], 'version': VERSION}
 
     def preview(self, kind, ref=''):
         """Exactly what a request would send, for the person to read before pressing the button."""
@@ -447,7 +451,7 @@ class Licence:
         st.update(status='failed' if st.get('id') is None else 'waiting', error=error)
         self._soon(st, BACKOFF[min(st['tries'] - 1, len(BACKOFF) - 1)])
 
-    def begin(self, kind, ref='', by=''):
+    def begin(self, kind, ref='', by='', shop=None):
         """The button, first half: record the request (no network). Idempotent: a request still running is returned, not repeated."""
         if kind not in KINDS:
             raise ValueError('bad kind')
@@ -459,7 +463,8 @@ class Licence:
                 return self.public()
             if kind == 'trial' and self.status()['full'] and self.enforced:
                 raise LookupError('have_licence')
-            self._state({'status': 'sending', 'kind': kind, 'nonce': str(uuid.uuid4()), 'ref': str(ref or '').strip()[:60], 'id': None,
+            self._state({'status': 'sending', 'kind': kind, 'nonce': str(uuid.uuid4()), 'ref': str(ref or '').strip()[:60],
+                         'shop': self._shop(shop), 'id': None,
                          'poll_token': None, 'created_at': iso(), 'by': by, 'tries': 0, 'error': '', 'reason': ''})
         return self.public()
 
@@ -492,7 +497,8 @@ class Licence:
             st['stage'] = ''
             try:
                 if not st.get('id'):
-                    code, d = self._call('POST', url + '/licence/request', self.body(st['kind'], st.get('ref', ''), st['nonce']))
+                    code, d = self._call('POST', url + '/licence/request',
+                                          self.body(st['kind'], st.get('ref', ''), st['nonce'], shop=st.get('shop')))
                     if code in (429, 503):
                         self._failed(st, 'busy')
                     elif code == 400:

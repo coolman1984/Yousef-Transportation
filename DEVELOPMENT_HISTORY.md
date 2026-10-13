@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Simple trial activation UI (2026-10-13)
+
+**What:** Settings → Licence tab: one primary **Activate** path (online trial request with editable organisation name, or paste code), device code always visible, advanced hub options under **Details**. Trial countdown in the tab and a shell banner when ≤14 days remain. Licence requests may carry a custom `shop` name to the hub. Docs: `docs/HUB_SETUP.md` section «التفعيل البسيط».
+**Why:** dispatchers need a short Arabic flow without replacing the existing signed-code licence system.
+**Checks:** `tests/test_assist.py` (licence), `node --check` on changed JS.
+
 ## At-rest encryption stays off unless TRIPORDERS_ENCRYPT=1 (2026-10-12)
 
 **What:** Opt-in SQLCipher / backup-archive encryption was already behind `TRIPORDERS_ENCRYPT=1`. Tests that opened archives or the live journal with raw `sqlite3` now go through `atrest` (`open_reader` / `connect`), so the same tests pass with the flag unset and set to `1`. Multi-PC crash and restore tests use a fresh temp directory per class and clean it up even when setup fails; the restore test cuts both sync directions before the offline trip. With the flag on, a missing `sqlcipher3` or `TRIPORDERS_ENCRYPT_BACKEND=file` refuses to start and does not write a plaintext work file. Docs state that recovery-key export, plaintext-to-encrypted migration, and second-PC restore are not implemented; the two-verified-backup procedure is labeled as planned. The flag must not be enabled for a real office until those exist. No vendor key and no silent plaintext fallback.

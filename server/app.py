@@ -1264,7 +1264,8 @@ class Handler(BaseHTTPRequestHandler):
             if p.endswith('/retry'):
                 return self.send(200, LIC.step(force=True))
             try:
-                LIC.begin(d.get('kind'), str(d.get('ref') or ''), self.u['id'])
+                LIC.begin(d.get('kind'), str(d.get('ref') or ''), self.u['id'],
+                          shop=d.get('shop') if d.get('shop') is not None else None)
             except LookupError as e:
                 raise BadRequest('This copy cannot ask the company by itself. Send the device code and paste the code you get.', 'lic.' + str(e))
             AUTH.log(self.u['display'], self.ip, 'licence', d.get('kind'), 'Licence requested from the company')

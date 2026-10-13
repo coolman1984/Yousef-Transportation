@@ -22,5 +22,23 @@ Never sent: passwords, typed text, names, phone numbers, trips, vehicles, driver
 3. Put the Studio's **public** key in `licence_keys.txt` of the build or installation.
 4. Control centre: register the installation (`install_id` is shown in Settings → Privacy & help) and give the install token.
 
+## التفعيل البسيط (Simple activation)
+
+Two paths use the **same** signed codes and rules; nothing new is invented.
+
+| Path | What the administrator does |
+|---|---|
+| **Online (hub configured)** | Settings → **Licence** → enter the organisation name if needed → press **Activate**. The program sends a **trial** request to the hub (`/licence/request`), shows *waiting for company approval*, keeps the **device code** visible, and polls until the signed code arrives and activates automatically. |
+| **Manual (offline, no hub, or hub failed)** | On the same screen: copy the **short device code**, send it to the company (WhatsApp, phone, …), paste the **activation code** from Licence Studio, press **Activate** (`/api/licence/activate`). |
+
+**Owner one-time setup** (not done from this repository; do not deploy from a customer PC):
+
+1. **Licence Studio** on the owner's trusted PC: register product id `trip-orders`; sign codes for the device code the customer sends.
+2. **Factory hub** (`templates/telemetry-relay`): add `trip-orders` to `LICENCE_PRODUCTS` in `wrangler.toml` and redeploy when you are ready.
+3. Put the Studio **public** key in `licence_keys.txt` (or the build's embedded keys) for installations that enforce codes.
+4. Optional: set `hub_url` / `FACTORY_HUB_URL` so the office can request a trial without typing a long code.
+
+Advanced options (monthly/permanent requests, field preview) stay under **Details** on the Licence tab.
+
 ## Proof still needed (not provable from the repository)
 Deployed Worker + a real ingest/ack round trip, a real trial from a clean Windows PC, and the Studio's signature on a real device code. The code is tested against a local stand-in of the Worker's URLs (`tests/test_assist.py`).

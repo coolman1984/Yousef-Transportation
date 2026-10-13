@@ -1,9 +1,17 @@
 """Trip operations through the real server: numbering, amendments, cancel, GA approval, locked trips, insights."""
 import time
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 
 from harness import ApiError, Server, make_authority
+
+
+def business_today():
+    """The office day in Cairo business time, like the server, whatever zone this machine (e.g. a UTC CI runner) uses."""
+    import os, sys
+    sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'server'))
+    import tz
+    return datetime.now(timezone.utc).astimezone(tz.BUSINESS).date()
 
 
 def put(e, i, **row):
@@ -22,7 +30,7 @@ class TripsApiTest(unittest.TestCase):
             put('drivers', 'd1', name='Driver One', active=True),
             put('people', 'p1', name='Sara Adel', isRequester=True, isPassenger=True),
             put('departments', 'dep1', name='HR')]})
-        cls.year = date.today().year % 100
+        cls.year = business_today().year % 100
 
     @classmethod
     def tearDownClass(cls):
@@ -40,7 +48,7 @@ class TripsApiTest(unittest.TestCase):
         self.assertRegex(a['no'], rf'^{self.year}-A-\d{{5}}$')
         self.assertEqual(int(b['no'][-5:]), int(a['no'][-5:]) + 1)
         t = self.get_trip(a['id'])
-        self.assertEqual((t['status'], t['source'], t['locked'], t['date']), ('draft', 'app', False, date.today().isoformat()))
+        self.assertEqual((t['status'], t['source'], t['locked'], t['date']), ('draft', 'app', False, business_today().isoformat()))
         st = self.ac.get('/api/state')
         self.assertEqual(len([p for p in st['tripPassengers'] if p['tripId'] == a['id']]), 2)
 
@@ -131,7 +139,7 @@ class TripsApiTest(unittest.TestCase):
 
     def test_j_times_order_and_new_trip_checks(self):
         t = self.trip()
-        today = date.today().isoformat()
+        today = business_today().isoformat()
         self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'startAt', 'value': today + 'T10:00:00', 'reason': 'from the paper'})
         with self.assertRaises(ApiError):
             self.ac.post('/api/trips/amend', {'id': t['id'], 'field': 'endAt', 'value': today + 'T09:00:00', 'reason': 'before the start'})
@@ -188,7 +196,7 @@ class TripsApiTest(unittest.TestCase):
         self.assertEqual(self.get_trip(t['id'])['departmentId'], 'depacc')
         t2 = self.trip(requesterId='pacc', departmentId='dep1')    # an explicit department wins
         self.assertEqual(self.get_trip(t2['id'])['departmentId'], 'dep1')
-        today = date.today().isoformat()[:7]
+        today = business_today().isoformat()[:7]
         for dest in ('Cairo Airport', 'مطار القاهرة', 'المطار', 'Cairo Airport'):
             self.trip(destination=dest)
         import sys, os
@@ -205,7 +213,7 @@ class TripsApiTest(unittest.TestCase):
         self.ac.post('/api/commit', {'label': 'x', 'ops': [put('vehicles', 'vc1', plate='ب ب ب 3333', plateKey='ببب3333', active=True),
                                                            put('drivers', 'dlic', name='Old Licence', licenseExpiry='2020-01-01', active=True),
                                                            put('drivers', 'dlong', name='Long Day', active=True)]})
-        today = date.today().isoformat()
+        today = business_today().isoformat()
 
         def times(tid, a, b):
             for f, v in (('startAt', f'{today}T{a}:00'), ('endAt', f'{today}T{b}:00')):
@@ -234,7 +242,7 @@ class TripsApiTest(unittest.TestCase):
         self.assertTrue(x['startAt'])
         with self.assertRaises(ApiError):
             self.ac.post('/api/trips/start', {'id': t['id']})
-        today = date.today().isoformat()
+        today = business_today().isoformat()
         with self.assertRaises(ApiError):   # a missing value
             self.ac.post('/api/trips/close', {'id': t['id'], 'startKm': 100, 'endKm': 180})
         with self.assertRaises(ApiError):   # end before start
@@ -259,14 +267,14 @@ class TripsApiTest(unittest.TestCase):
         self.assertEqual(domain.trust(t, [], [{'field': 'endKm', 'new': 6, 'at': '2026-10-12T10:00:00'}])[0], 'yellow')
         # an inactive place still groups the past
         self.ac.post('/api/commit', {'label': 'x', 'ops': [put('places', 'plOld', name='Old Depot', key='olddepot', aliases=['The Depot'], active=False)]})
-        today = date.today().isoformat()[:7]
+        today = business_today().isoformat()[:7]
         for dest in ('Old Depot', 'The Depot'):
             self.trip(destination=dest)
         routes = {r['label']: r['trips'] for r in reports.summaries(self.ac.get('/api/state'), today)['topRoutes']}
         self.assertEqual(routes.get('Old Depot'), 2)
         # a department that only legacy trips reach through their requester cannot be deleted
         self.ac.post('/api/commit', {'label': 'x', 'ops': [put('departments', 'depLegacy', name='Legacy Dept'), put('people', 'pLegacy', name='Legacy Requester', departmentId='depLegacy', isRequester=True)]})
-        legacy = self.ac.post('/api/commit', {'label': 'x', 'ops': [put('trips', 'trLegacy', no='L-1', date=date.today().isoformat(), categoryId='cat1', requesterId='pLegacy', status='draft', source='app')]})
+        legacy = self.ac.post('/api/commit', {'label': 'x', 'ops': [put('trips', 'trLegacy', no='L-1', date=business_today().isoformat(), categoryId='cat1', requesterId='pLegacy', status='draft', source='app')]})
         with self.assertRaises(ApiError) as e:
             self.ac.post('/api/commit', {'label': 'd', 'ops': [{'e': 'departments', 'id': 'depLegacy', 'op': 'del'}]})
         self.assertIn('trip(s)', str(e.exception))

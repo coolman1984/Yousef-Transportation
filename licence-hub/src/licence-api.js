@@ -173,6 +173,7 @@ export async function handleLicence(request, env, url) {
     let dkey;
     try { dkey = deviceKey(body.device); } catch { return json({ field: 'device' }, 400); }
     const machineHash = normalizeMachineHash(body.machine);
+    if (!machineHash) return json({ field: 'machine' }, 400);
 
     const poll = await derivePollToken(env.SESSION_SECRET, body.nonce);
     const pollHash = await sha256Hex(poll);
@@ -337,8 +338,8 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   const shop = meta.shop || '—';
   const kind = meta.kind || 'trial';
   stmts.push(env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t));
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
+  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code));
   const results = await env.DB.batch(stmts);
   const issued = results[locks.length]?.meta?.changes > 0;
   if (!issued) {

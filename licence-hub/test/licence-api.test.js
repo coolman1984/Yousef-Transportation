@@ -417,3 +417,32 @@ test('offline issuance survives interrupted code write and retries same code', a
   const second = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
   assert.ok(second.code);
 });
+
+test('request with empty, short or non-hex machine tag is rejected', async () => {
+  const e = env();
+  for (const machine of ['', 'abc', 'z'.repeat(64), 'a'.repeat(63), 'a'.repeat(65)]) {
+    const r = await postRequest(e, body({ machine }));
+    assert.equal(r.status ?? r.res?.status ?? 400, 400);
+    assert.equal(r.data.field, 'machine');
+  }
+});
+
+test('approval-race loser keeps no machine_trials rows and adds no customer', async () => {
+  const e = env();
+  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 35)));
+  const devA = '7KD2M-QX9TP';
+  const devB = 'ABCDE-FGHJK';
+  for (const [id, dev, n] of [['w2', devA, 'm1'], ['l2', devB, 'm2']]) {
+    await e.DB.prepare(
+      'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(id, 'h' + id, 'trip-orders', 'trial', dev, deviceKey(dev), MACHINE_A, n, '', '', '', 'pending', 1, 1).run();
+  }
+  const [a, b] = await Promise.all([approveRequest(e, 'w2', key), approveRequest(e, 'l2', key)]);
+  const winner = a?.code ? 'w2' : 'l2';
+  assert.equal([a, b].filter((s) => s?.code).length, 1);
+  const locks = (await e.DB.prepare('SELECT machine, request_id FROM machine_trials').bind().all()).results || [];
+  assert.ok(locks.length > 0);
+  assert.ok(locks.every((r) => r.request_id === winner));
+  const cust = (await e.DB.prepare('SELECT id FROM customers').bind().all()).results || [];
+  assert.equal(cust.length, 1);
+});

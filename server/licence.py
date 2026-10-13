@@ -24,6 +24,7 @@ The hub address is public configuration: FACTORY_HUB_URL, `hub_url` in config.js
 """
 import hashlib
 import hmac
+import http.client
 import json
 import os
 import pathlib
@@ -86,9 +87,12 @@ CLOCK_TOLERANCE_HOURS_PAID = 72
 TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
 HUB_WATCH_KEY = 'licence_hub_watch'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
+HUB_CALENDAR_RETRY_SEC = 5 * 60
 HUB_CALENDAR_MAX_JUMP_DAYS = 7
 TRIAL_HUB_KIDS = frozenset({'trial-hub', 'trial_hub', 'hub-trial'})
 _hub_poll_mono = None
+_hub_retry_at_mono = None
+_hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
 UPGRADE_GRACE_DAYS = 30
 UPGRADE_PRIOR_DATA_MIN_AGE_HOURS = 24
 UPGRADE_GRACE_FILE = 'commercial_upgrade_grace.json'
@@ -426,16 +430,19 @@ class Licence:
 
     def _note_hub_calendar_day(self, hub_day):
         """Record hub business calendar progress without fabricating a UTC instant."""
-        if not hub_day or not isinstance(hub_day, str):
-            return
+        if not isinstance(hub_day, str) or len(hub_day) != 10:
+            return False
         try:
-            hub_date = date.fromisoformat(hub_day[:10])
+            hub_date = date.fromisoformat(hub_day)
         except ValueError:
-            return
+            return False
+        if hub_date.isoformat() != hub_day:
+            return False
         current = self._hub_calendar_max_day()
         if current and hub_date <= current:
-            return
+            return True
         self._write_hub_calendar_max_day(hub_date)
+        return True
 
     def _data_dir(self):
         return getattr(self.a, 'data_dir', None) or self.home
@@ -732,14 +739,20 @@ class Licence:
                                      headers={'Content-Type': 'application/json', 'User-Agent': f'TripOrders/{VERSION}',
                                               **({'Authorization': 'Bearer ' + token} if token else {})})
         try:
-            with urllib.request.urlopen(req, timeout=10) as r:
-                return r.status, json.loads(r.read().decode('utf-8') or '{}')
-        except urllib.error.HTTPError as e:
             try:
-                return e.code, json.loads(e.read().decode('utf-8') or '{}')
-            except ValueError:
-                return e.code, {}
-        except (urllib.error.URLError, OSError, ValueError, TimeoutError) as e:
+                with urllib.request.urlopen(req, timeout=10) as r:
+                    code, data = r.status, json.loads(r.read().decode('utf-8') or '{}')
+            except urllib.error.HTTPError as e:
+                with e:
+                    code = e.code
+                    try:
+                        data = json.loads(e.read().decode('utf-8') or '{}')
+                    except ValueError:
+                        data = {}
+            if not isinstance(data, dict):
+                raise ValueError('response_object')
+            return code, data
+        except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
             raise ConnectionError(e.__class__.__name__) from None
 
     @staticmethod
@@ -874,23 +887,34 @@ class Licence:
             return None
 
     def _poll_hub_calendar(self):
-        global _hub_poll_mono
+        global _hub_poll_mono, _hub_retry_at_mono, _hub_retry_delay_sec
         url = self.hub()
         if not url:
             return
         now_mono = time.monotonic()
-        if _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
+        if _hub_retry_at_mono is not None:
+            if now_mono < _hub_retry_at_mono:
+                return
+        elif _hub_poll_mono is not None and now_mono - _hub_poll_mono < HUB_CALENDAR_POLL_SEC:
             return
-        # Limit attempts by process time even when the PC clock freezes or the network fails.
-        _hub_poll_mono = now_mono
+        synced = False
         try:
             code, d = self._call('GET', url + '/licence/time')
-            if code == 200:
-                self._note_hub_calendar_day(d.get('calendar_day'))
+            if code == 200 and isinstance(d, dict):
+                synced = self._note_hub_calendar_day(d.get('calendar_day'))
+            if synced:
                 with _lock:
                     _cache.clear()
         except ConnectionError:
             pass
+        # These timers only schedule network checks; they never measure use or decide expiry.
+        if synced:
+            _hub_poll_mono = now_mono
+            _hub_retry_at_mono = None
+            _hub_retry_delay_sec = HUB_CALENDAR_RETRY_SEC
+        else:
+            _hub_retry_at_mono = now_mono + _hub_retry_delay_sec
+            _hub_retry_delay_sec = min(_hub_retry_delay_sec * 2, HUB_CALENDAR_POLL_SEC)
 
         watch = self._hub_watch()
         if not watch or not watch.get('id') or not watch.get('poll_token'):
@@ -901,8 +925,7 @@ class Licence:
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
-            if code == 200:
-                self._note_hub_calendar_day(d.get('calendar_day'))
+            if code == 200 and isinstance(d, dict) and self._note_hub_calendar_day(d.get('calendar_day')):
                 with _lock:
                     _cache.clear()
             elif code == 401:
@@ -917,6 +940,9 @@ class Licence:
                 st = self._state()
                 if st and st.get('status') in ACTIVE + ('issued',):
                     self.step()
+            except Exception:  # noqa: BLE001 - activation must not prevent calendar checks
+                pass
+            try:
                 self._poll_hub_calendar()
             except Exception:  # noqa: BLE001 - never let this reach the program
                 pass

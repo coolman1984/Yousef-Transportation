@@ -6,6 +6,10 @@ const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
 const offlineTails = new Map();
 const WINDOW = 600;
+const TIME_IP_LIMIT = 120;
+const TIME_MAX_IPS = 5000;
+const timeIps = new Map();
+let timeWindow;
 
 const REQUIRED = ['product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
 export const REASON_PAID_IN_STUDIO = 'paid_in_licence_studio';
@@ -37,6 +41,20 @@ async function limited(env, key, max) {
   const w = Math.floor(now() / WINDOW);
   const r = await env.DB.prepare('INSERT INTO rate(key, window, count) VALUES(?, ?, 1) ON CONFLICT(key, window) DO UPDATE SET count = count + 1 RETURNING count').bind(key, w).first();
   return r.count > max;
+}
+
+// Same fixed-window pattern as limited(), without D1 work for this public route.
+// Best effort per Worker isolate; edge protection is documented in HUB_SETUP.md.
+function timeLimited(ip) {
+  const w = Math.floor(now() / WINDOW);
+  if (timeWindow !== w) {
+    timeIps.clear();
+    timeWindow = w;
+  }
+  const count = timeIps.get(ip) || 0;
+  if (count >= TIME_IP_LIMIT || (!count && timeIps.size >= TIME_MAX_IPS)) return true;
+  timeIps.set(ip, count + 1);
+  return false;
 }
 
 function products(env) {
@@ -152,11 +170,14 @@ async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
 }
 
 export async function handleLicence(request, env, url) {
+  const ip = request.headers.get('CF-Connecting-IP') || 'local';
   if (url.pathname === '/licence/time' && request.method === 'GET') {
+    if (timeLimited(ip)) {
+      return json({ error: 'rate' }, 429, { 'Retry-After': String(WINDOW - now() % WINDOW) });
+    }
     return json({ calendar_day: hubCalendarDay(env) });
   }
 
-  const ip = request.headers.get('CF-Connecting-IP') || 'local';
   if (await limited(env, 'lic:ip:' + ip, 120)) return json({ error: 'rate' }, 429);
   if (!env.SESSION_SECRET) return json({ error: 'config' }, 503);
 

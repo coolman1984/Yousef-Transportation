@@ -4,6 +4,7 @@
 # Next (not released yet)
 
 - **Paid licence expiry:** when a licence hub is configured, its calendar day is checked every six hours even if the PC date freezes. After the paid period and grace end, editing stops; reading, exports and backups remain available. Earlier server dates and network failures do not move the effective day backward.
+- **Licence check recovery:** failed checks retry after five minutes, doubling up to six hours. Invalid dates and broken responses preserve the last good date; trial fallback and calendar checks continue even when activation fails. The public hub time route now has a lightweight per-IP request limit.
 - **Licence / hub:** commercial builds pin trial-only vs paid signing keys at compile time; trial clock state is kept outside `assist.db` (resetting the install id cannot revive an expired trial); online trial hub URL can differ from the telemetry relay (`licence_hub_url`).
 - **Licence tab:** during an active trial you can still copy the device number, paste an upgrade code, and open **Details** for monthly/permanent requests. One **Activate** button: pasted code first, otherwise an online trial request. Waiting and error messages stay visible with **Retry** without losing what you typed.
 - **Commercial upgrade:** offices moving from the contract build get about 30 days of full editing while device-bound licence codes are prepared (`upgrade_grace` in licence status). See `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`.

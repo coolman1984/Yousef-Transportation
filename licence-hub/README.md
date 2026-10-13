@@ -15,6 +15,7 @@ This worker is **not** the factory telemetry relay (`/ingest`). Deploy it on its
 - توقيع **تجربة فقط** 14 يومًا (منتج `trip-orders`) بـ Ed25519 في Worker — متوافق مع `server/afcodes.py`. الطلبات الشهرية/الدائمة تُرفض هنا؛ الإصدار المدفوع من Licence Studio.
 - Signs **trial-only** 14-day codes (`trip-orders`) with Ed25519 in the Worker — byte-compatible with `server/afcodes.py`. Monthly/permanent online requests are refused; paid editions stay in Licence Studio.
 - One trial per PC online: locks both the normalized device code and the stable `machine` hash the app sends. Pending requests expire after a short TTL so a squatted poll token cannot block the real customer forever.
+- Public `GET /licence/time` returns only the business calendar day. A dedicated, bounded in-memory limiter uses the existing 120-per-600-second IP pattern without D1 or secrets; excess requests return 429 and `Retry-After`. Limits are per Worker isolate. See [public route deployment protection](../docs/HUB_SETUP.md#public-calendar-route-protection) for the recommended edge rule before Worker execution.
 
 **بديل التوقيع:** Licence Studio على جهاز المالك يبقى الطريقة الأكثر أمانًا للتوقيع؛ هذا القالب يوازن بين الراحة (موافقة من الهاتف) ومخاطر سر التوقيع على Cloudflare (انظر أدناه).
 

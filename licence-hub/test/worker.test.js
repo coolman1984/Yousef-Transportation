@@ -50,3 +50,47 @@ test('/owner/index.html redirects to /owner/', async () => {
   assert.equal(res.status, 308);
   assert.equal(res.headers.get('Location'), 'https://hub.test/owner/');
 });
+
+test('public calendar limits each IP to 120 requests per ten minutes without D1 or secrets', async (t) => {
+  let nowMs = 600 * 1000 * 3000000 + 1000;
+  t.mock.method(Date, 'now', () => nowMs);
+  const e = {
+    get DB() { assert.fail('time must not use D1'); },
+    get SESSION_SECRET() { assert.fail('time must not read session secrets'); },
+    get LICENCE_SIGNING_KEY() { assert.fail('time must not read signing secrets'); },
+  };
+  const request = (ip, suffix = '') => new Request('https://hub.test/licence/time' + suffix, {
+    headers: { 'CF-Connecting-IP': ip, 'X-Forwarded-For': crypto.randomUUID() },
+  });
+  for (let i = 0; i < 120; i++) {
+    const res = await worker.fetch(request('192.0.2.1'), e);
+    assert.equal(res.status, 200);
+    assert.deepEqual(Object.keys(await res.json()), ['calendar_day']);
+  }
+  const blocked = await worker.fetch(request('192.0.2.1', '?retry=1'), e);
+  assert.equal(blocked.status, 429);
+  assert.deepEqual(await blocked.json(), { error: 'rate' });
+  assert.equal(blocked.headers.get('Retry-After'), '599');
+  for (const h of HEADERS_CHECK) assert.ok(blocked.headers.get(h), h);
+  assert.equal(blocked.headers.get('Cache-Control'), 'no-store');
+  assert.equal((await worker.fetch(request('192.0.2.2'), e)).status, 200);
+  nowMs += 598 * 1000;
+  assert.equal((await worker.fetch(request('192.0.2.1'), e)).status, 429);
+  nowMs += 1000;
+  assert.equal((await worker.fetch(request('192.0.2.1'), e)).status, 200);
+});
+
+test('calendar limiter bounds stored IPs and frees them at the next window', async (t) => {
+  let nowMs = 600 * 1000 * 3000010;
+  t.mock.method(Date, 'now', () => nowMs);
+  const request = (ip) => new Request('https://hub.test/licence/time', {
+    headers: { 'CF-Connecting-IP': ip },
+  });
+  for (let i = 0; i < 5000; i++) {
+    assert.equal((await worker.fetch(request(`test-ip-${i}`), {})).status, 200);
+  }
+  assert.equal((await worker.fetch(request('new-ip'), {})).status, 429);
+  assert.equal((await worker.fetch(request('test-ip-0'), {})).status, 200);
+  nowMs += 600 * 1000;
+  assert.equal((await worker.fetch(request('new-ip'), {})).status, 200);
+});

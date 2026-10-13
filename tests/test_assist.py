@@ -12,10 +12,10 @@ import tempfile
 import threading
 import unittest
 import uuid
-from datetime import date
+from datetime import date, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-from harness import ADMIN, ApiError, Server, make_authority
+from harness import ADMIN, ApiError, Server, make_authority, wait_until
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
@@ -37,6 +37,7 @@ class FakeHub:
     def __init__(self, key):
         self.key, self.batches, self.requests, self.acks, self.mode = key, [], [], [], 'issue'
         self.edition, self.days, self.device_override = 'trial', 14, None
+        self.calendar_day = None
         hub = self
 
         class H(BaseHTTPRequestHandler):
@@ -71,6 +72,8 @@ class FakeHub:
                 self.reply(404, {})
 
             def do_GET(self):
+                if self.path == '/licence/time' and hub.calendar_day:
+                    return self.reply(200, {'calendar_day': hub.calendar_day})
                 if self.path.startswith('/licence/status'):
                     if self.headers.get('Authorization') != 'Bearer lp_secret':
                         return self.reply(401, {})
@@ -311,6 +314,51 @@ class CrashTest(unittest.TestCase):
         src = open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read()
         self.assertIn('crash_report(e, self.log_path, inc)', src)
         self.assertIn('ASSIST.capture(exc, path)', src)
+
+
+@unittest.skipIf(Ed25519PrivateKey is None, 'the cryptography package is needed to sign test licence codes')
+class PaidHubExpiryTest(Base):
+    @classmethod
+    def setUpClass(cls):
+        cls.start('assist-paid-calendar', with_keys=True)
+
+    def test_paid_hub_expiry_keeps_records_read_export_and_backup_available(self):
+        first = date.today()
+        device = self.ac.get('/api/licence')['device']
+        pem = self.hub.key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                         serialization.NoEncryption())
+        issued = afcodes.issue_code(pem, PRODUCT, 'standard', first, 30, grace_days=3, device=device)
+        active = self.ac.post('/api/licence/activate', {'code': issued['code']})
+        self.assertTrue(active['full'])
+        self.ac.post('/api/commit', {'label': 'paid access', 'ops': [
+            {'e': 'departments', 'id': 'paid-dept', 'op': 'put', 'row': {'name': 'Calendar fixture'}}]})
+        self.hub.calendar_day = (date.fromisoformat(issued['last_day']) + timedelta(days=4)).isoformat()
+        # Startup runs the real background calendar check with persisted code and data.
+        self.S.stop()
+        self.S.start()
+        self.ac = self.S.client()
+        self.ac.login(*ADMIN)
+        wait_until(lambda: self.ac.get('/api/licence')['state'] == 'expired', what='paid hub expiry')
+        expired = self.ac.get('/api/licence')
+        self.assertFalse(expired['full'])
+        self.assertEqual(expired['serial'], active['serial'])
+        with self.assertRaises(ApiError) as err:
+            self.ac.post('/api/commit', {'label': 'denied edit', 'ops': [
+                {'e': 'departments', 'id': 'paid-dept', 'op': 'put', 'row': {'name': 'Changed'}}]})
+        self.assertEqual(err.exception.code, 402)
+        self.assertEqual(err.exception.data['key'], 'err.licence')
+        state = self.ac.get('/api/state')
+        self.assertEqual(next(r for r in state['departments'] if r['id'] == 'paid-dept')['name'], 'Calendar fixture')
+        self.assertTrue(self.ac.get('/api/export.xlsx'))
+        self.assertTrue(self.ac.post('/api/backups', {})['name'])
+        self.assertTrue(self.ac.get('/api/guide/state'))
+        # A restart and an earlier hub day cannot revive the paid licence.
+        self.hub.calendar_day = first.isoformat()
+        self.S.stop()
+        self.S.start()
+        self.ac = self.S.client()
+        self.ac.login(*ADMIN)
+        self.assertEqual(self.ac.get('/api/licence')['state'], 'expired')
 
 
 @unittest.skipIf(Ed25519PrivateKey is None, 'the cryptography package is needed to sign test licence codes')

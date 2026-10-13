@@ -69,6 +69,17 @@ def _read_auth_key_bytes():
     return data
 
 
+def auth_key_on_disk():
+    """True when a valid 32-byte auth key file exists (never creates one)."""
+    path = os.path.join(_profile_dir(), AUTH_FILE)
+    try:
+        with open(path, 'rb') as f:
+            data = f.read()
+    except OSError:
+        return False
+    return len(data) == 32
+
+
 def auth_available():
     return _read_auth_key_bytes() is not None
 
@@ -211,6 +222,7 @@ def seal_fail_closed(bind_tag, reason='state_corrupt'):
         record['trial_latch'] = True
         if auth_available():
             save(record, bind_tag)
+        mark_migration_done()
         return record
 
 

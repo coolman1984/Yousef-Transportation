@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Review 10 — licence clock fail-closed hardening (2026-10-13)
+
+**What:** Trial replay blocked when code/auth/marker/flag show prior use but clock file is gone or sealed; fail-closed seals rewrite migration marker; hub days clamp forward up to seven days per poll (frozen clock catch-up); profile lock contention no longer seals healthy state; paid activation clears trial fail-closed seal; established profile never recreates clock from a near hub day after file delete.
+**Why:** Review 10: unsigned marker delete reopened trials, far hub days ignored forever on frozen PCs, lock errors sealed good trials, paid codes blocked by trial seal, deleted paid clock revived by near hub day.
+**Checks:** `cd licence-hub && node --test` (43 pass); `cd tests && python3 -m unittest discover -s . -p 'test_*.py'` (452 run, 40 skipped, 0 failures).
+**Next:** PR review and merge.
+
 ## Review 9 — profile marker establishment, paid clock tamper, hub jump cap (2026-10-13)
 
 **What:** Profile migration marker counts as established clock state (assist.db flag clear no longer revives trials); paid licences deny `full` when established state file is missing without writing empty fail-closed seals; hub calendar days capped at `HUB_CALENDAR_MAX_JUMP_DAYS` per step; profile lock setup errors fail closed; Windows lock uses binary lock file with content.

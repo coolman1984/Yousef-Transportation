@@ -219,26 +219,44 @@ class Licence:
         return value
 
     def _profile_clock_established(self):
-        return (
-            self.a.kv('licence_clock_profile') == '1'
-            or licence_state.migration_marker_exists()
-        )
-
-    def _allow_clock_state_create(self):
-        if self.a.kv('licence_clock_profile') != '1':
+        if self.a.kv('licence_clock_profile') == '1':
             return True
-        bind = self._state_bind()
-        status, _ = licence_state.read(bind)
-        if status == 'missing' and not self._trial_state_required():
+        if licence_state.migration_marker_exists():
+            return True
+        if licence_state.auth_key_on_disk():
             return True
         return False
+
+    def _licence_clock_past_initial_use(self):
+        """Licence or clock profile was used before (fail-closed when the clock file is gone)."""
+        if self._profile_clock_established():
+            return True
+        if (self.a.kv('licence_code') or '').strip():
+            return True
+        return False
+
+    def _licence_auth_usable(self):
+        """Auth key for sealing; never mint a new key when a licence code is already stored."""
+        if (self.a.kv('licence_code') or '').strip() and not licence_state.auth_key_on_disk():
+            return False
+        return licence_state.auth_available()
+
+    def _allow_clock_state_create(self):
+        if self._profile_clock_established():
+            return False
+        return True
+
+    def _seal_clock_state_if_missing_or_corrupt(self, bind):
+        status, _ = licence_state.read(bind)
+        if status in ('missing', 'corrupt') and self._trial_state_required() and self._licence_auth_usable():
+            licence_state.seal_fail_closed(bind, 'state_corrupt')
 
     def _migrate_clock_state_once(self):
         bind = self._state_bind()
         if self._profile_clock_established():
             status, _ = licence_state.read(bind)
-            if status in ('missing', 'corrupt') and self._trial_state_required() and licence_state.auth_available():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            if status in ('missing', 'corrupt'):
+                self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         status, _ = licence_state.read(bind)
         if status == 'ok':
@@ -279,8 +297,8 @@ class Licence:
                 licence_state.seal_fail_closed(bind, 'state_corrupt')
             return licence_state.load(bind)
         if status == 'missing' and self._profile_clock_established():
-            if self._trial_state_required() and licence_state.auth_available():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
+            if self._trial_state_required():
+                self._seal_clock_state_if_missing_or_corrupt(bind)
             return licence_state.load(bind) if self._trial_state_required() else None
         if not create:
             return None
@@ -346,9 +364,8 @@ class Licence:
             record['max_seen'] = iso(when)
             return record
 
-        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
-            if self._trial_state_required():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         self._note_profile_clock_established()
 
@@ -378,9 +395,8 @@ class Licence:
             record['hub_calendar_max'] = hub_date.isoformat()
             return record
 
-        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
-            if self._trial_state_required():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         self._note_profile_clock_established()
 
@@ -393,9 +409,8 @@ class Licence:
             record['trial_latch'] = True
             return record
 
-        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None and self.a.kv('licence_clock_profile') == '1':
-            if self._trial_state_required():
-                licence_state.seal_fail_closed(bind, 'state_corrupt')
+        if licence_state.mutate(bind, updater, create=self._allow_clock_state_create()) is None:
+            self._seal_clock_state_if_missing_or_corrupt(bind)
             return
         self._note_profile_clock_established()
 
@@ -470,7 +485,7 @@ class Licence:
         if last and last.date() > effective:
             effective = last.date()
         if hub_date > effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS):
-            return
+            hub_date = effective + timedelta(days=HUB_CALENDAR_MAX_JUMP_DAYS)
         self._write_hub_calendar_max_day(hub_date)
 
     def _data_dir(self):
@@ -645,7 +660,7 @@ class Licence:
                     status in ('missing', 'corrupt')
                     or self.a.kv('licence_clock_profile') == '1'
                     or licence_state.migration_marker_exists()
-                ) and licence_state.auth_available():
+                ) and self._licence_auth_usable():
                     licence_state.seal_fail_closed(bind, 'state_corrupt')
                 result.update(state='invalid', full=False, reason='state_corrupt')
             elif self._profile_clock_established():
@@ -706,13 +721,16 @@ class Licence:
             raise ValueError(result['reason'] or 'invalid')
         if result['state'] == 'expired':
             raise ValueError('expired')
-        if result.get('edition') == 'trial' and self._profile_clock_established():
-            bind = self._state_bind()
+        bind = self._state_bind()
+        if result.get('edition') == 'trial' and self._licence_clock_past_initial_use():
             st, _ = licence_state.read(bind)
-            if st in ('missing', 'corrupt'):
-                if licence_state.auth_available():
+            if st in ('missing', 'corrupt') or licence_state.is_fail_closed(bind):
+                if self._licence_auth_usable():
                     licence_state.seal_fail_closed(bind, 'state_corrupt')
                 raise ValueError('state_corrupt')
+        elif result.get('edition') != 'trial' and licence_state.is_fail_closed(bind):
+            if self._licence_auth_usable():
+                licence_state.save(licence_state.empty_record(), bind)
         self.a.kv('licence_code', afcodes.group(afcodes.normalize(code)))
         self._clear_trial_latch()
         if result.get('edition') == 'trial':

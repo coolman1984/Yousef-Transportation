@@ -1,0 +1,26 @@
+name = "trip-orders-licence-hub"
+main = "src/worker.js"
+compatibility_date = "2025-01-01"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "trip-orders-licence"
+database_id = "REPLACE-WITH-D1-ID"
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+run_worker_first = true
+
+[vars]
+LICENCE_PRODUCTS = "trip-orders"
+TRIAL_DAYS = "14"
+SESSION_HOURS = "8"
+
+# Secrets (never in git):
+#   npx wrangler secret put LICENCE_SIGNING_KEY   # PKCS#8 PEM or base64url raw Ed25519 seed
+#   npx wrangler secret put SESSION_SECRET
+#   npx wrangler secret put OWNER_PASSWORD_HASH   # pbkdf2-sha256:iterations:salt_hex:hash_hex
+# Optional Telegram on new request:
+#   npx wrangler secret put TELEGRAM_BOT_TOKEN
+#   npx wrangler secret put TELEGRAM_CHAT_ID

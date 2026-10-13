@@ -3,6 +3,7 @@
 
 # Next (not released yet)
 
+- **Licence tab:** during an active trial you can still copy the device number, paste an upgrade code, and open **Details** for monthly/permanent requests. One **Activate** button: pasted code first, otherwise an online trial request. Waiting and error messages stay visible with **Retry** without losing what you typed.
 - **Commercial upgrade:** offices moving from the contract build get about 30 days of full editing while device-bound licence codes are prepared (`upgrade_grace` in licence status). See `docs/COMMERCIAL_UPGRADE_RUNBOOK.md`.
 
 # Trip Orders 1.1.2

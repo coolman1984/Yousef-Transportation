@@ -9,7 +9,7 @@ Trip Orders talks to **one** address: the factory hub (the Cloudflare Worker of 
 | Usage counts, error fingerprints, backup/sync results (`/ingest`) | only after the **office and the person** agreed | the address and the install token |
 | Licence request (`/licence/request`, `/licence/status`, `/licence/ack`) | the administrator pressed "Ask for a trial / licence" | the address only (no secret in the program) |
 
-Never sent: passwords, typed text, names, phone numbers, trips, vehicles, drivers, amounts, screenshots. The list of allowed fields is the factory taxonomy `server/aftelemetry_events.json` (byte-identical to the factory copy).
+Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screenshots. A licence request may include the **organisation name** you type on the Licence tab (`shop`, up to 60 characters; if left blank the program sends the site name from settings). That name is not part of the signed activation code. Other typed text is not sent. Telemetry uses only the factory taxonomy `server/aftelemetry_events.json` (byte-identical to the factory copy).
 
 ## Configure (nothing is committed to the repository)
 - **Address:** environment variable `FACTORY_HUB_URL` (for example in the service/installer), or `"hub_url"` in `config.json`, or Settings → Privacy & help → Help service. It must be `https://`.

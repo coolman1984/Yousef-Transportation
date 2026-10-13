@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence tab review fixes + licence-hub Worker template (2026-10-13)
+
+**What:** Licence tab keeps device code, paste box and Details during an active trial; one **Activate** button (paste wins, else online trial); request status/refused/failed and **Retry** on the main card with polling while the hub retries; paste survives poll redraw; `shop` on Details requests and in the preview; English day singular; formal Arabic strings; Details border token. New `licence-hub/` Cloudflare Worker template (hub protocol, owner RTL dashboard, Ed25519 signing compatible with `server/afcodes.py`). `docs/HUB_SETUP.md` privacy wording for organisation name.
+**Why:** Grok review on the simple activation flow; owner needs a documented hub template without deploying from the repo.
+**Checks:** `licence-hub` `npm test`, `tests/test_licence_hub_signer.py`, `tests/test_assist.py`, `tests/test_design.py`, `node --check` on `licence-hub/src`.
+
 ## Simple trial activation UI (2026-10-13)
 
 **What:** Settings → Licence tab: one primary **Activate** path (online trial request with editable organisation name, or paste code), device code always visible, advanced hub options under **Details**. Trial countdown in the tab and a shell banner when ≤14 days remain. Licence requests may carry a custom `shop` name to the hub. Docs: `docs/HUB_SETUP.md` section «التفعيل البسيط».

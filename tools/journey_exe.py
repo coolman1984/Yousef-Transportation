@@ -131,6 +131,22 @@ def first(home, cmd):
         if activated.get('full') is not True:
             print('DIAG activate response:', json.dumps(activated, default=str), flush=True)
             print('DIAG licence status:', json.dumps(app.call('GET', '/api/licence'), default=str), flush=True)
+            try:
+                sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'server'))
+                import hashlib, traceback
+                import atrest, licence_state, licence as _lic
+                prof = atrest._profile_dir()
+                print('DIAG profile dir:', prof, sorted((n, os.path.getsize(os.path.join(prof, n))) for n in os.listdir(prof)) if os.path.isdir(prof) else 'absent', flush=True)
+                bind = hashlib.sha256(f'AF-MACHINE/1|{_lic._machine_id()}|{_lic.PRODUCT_ID}'.encode('utf-8')).hexdigest()
+                print('DIAG state read:', licence_state.read(bind)[0], 'auth_available:', licence_state.auth_available(), 'marker:', licence_state.migration_marker_exists(), flush=True)
+                try:
+                    with licence_state._profile_file_lock():
+                        print('DIAG profile lock ok', flush=True)
+                except Exception:
+                    print('DIAG profile lock error:', traceback.format_exc(), flush=True)
+            except Exception:
+                import traceback
+                print('DIAG probe error:', traceback.format_exc(), flush=True)
         assert activated.get('full') is True, activated
         app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists})
         trip = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'Journey Factory'})

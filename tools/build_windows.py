@@ -41,7 +41,7 @@ def compile_program(v4):
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
          f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets', '--include-module=_release_policy',
-         '--include-module=desktop_shell', '--include-module=config_migrate', '--include-package=webview',
+         '--include-module=desktop_shell', '--include-module=config_migrate', 
          '--include-package-data=webview',
          f'--include-data-files={os.path.join(BUILD, "triporders.ico")}=triporders.ico',
          '--include-data-files=' + os.path.join('server', 'aftelemetry_events.json') + '=aftelemetry_events.json',

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-owner2 hub fixes (2026-10-14)
+
+**What/why:** Purge stale codes by `licence_tier` only; register `GET /owner/api/products` before 405; hub time and owner capabilities honor per-product signing keys; real `0002` migration SQL, `--local` CLI note, `wrangler.toml` products list.
+**Checks:** `cd licence-hub && timeout 120 npm test`; `cd tests && timeout 300 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time`.
+**Next:** Owner deploy with optional `*_AL_STORE` secrets only if trip-orders globals omitted.
+
 ## Grok review fixes — hub seal, re-issue, multi-product (2026-10-14)
 
 **What/why:** Address REV-owner1 (P1–Low): capped hub-day sealing in office; hub clock signing via plain env keys (trial then paid kid); grant-aware re-issue; trial-only code purge; D1 migration docs/guard; owner tier radios per card; Cairo month clamp; hub URL pin; multi-product `trip-orders` + `al-store`, route prefixes, `/licence/clock`.

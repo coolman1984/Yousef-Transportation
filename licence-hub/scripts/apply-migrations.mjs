@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Guarded D1 migrations for local SQLite files or CI.
- * Usage: node scripts/apply-migrations.mjs /path/to/d1.sqlite
+ * Usage: node scripts/apply-migrations.mjs [--local] /path/to/d1.sqlite
  */
 import { DatabaseSync } from 'node:sqlite';
 import { readFileSync } from 'node:fs';
@@ -65,9 +65,13 @@ export function applyMigrations(db) {
   );
 }
 
-const dbPath = process.argv[2];
+const cliArgs = process.argv.slice(2).filter((a) => a !== '--local');
+const dbPath = cliArgs[0];
 if (dbPath) {
   const db = new DatabaseSync(dbPath);
   applyMigrations(db);
   console.log('Migrations applied to', dbPath);
+} else if (process.argv.length > 2) {
+  console.error('Usage: node scripts/apply-migrations.mjs [--local] <sqlite-path>');
+  process.exit(1);
 }

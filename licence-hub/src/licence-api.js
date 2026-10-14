@@ -95,6 +95,16 @@ export function signingKeyForProduct(env, baseName, productId) {
   return env[baseName] || null;
 }
 
+/** First non-empty global or per-product secret in LICENCE_PRODUCTS order. */
+export function anySigningKeyPem(env, baseName) {
+  if (env[baseName]) return env[baseName];
+  for (const productId of products(env)) {
+    const specific = env[`${baseName}_${productEnvSuffix(productId)}`];
+    if (specific) return specific;
+  }
+  return null;
+}
+
 export async function loadSigningKeys(env, productId = 'trip-orders') {
   const keys = { trialKey: null, paidKey: null };
   const trialPem = signingKeyForProduct(env, 'LICENCE_SIGNING_KEY', productId);
@@ -203,11 +213,9 @@ function hubCalendarDay(env) {
 }
 
 export function hubTimeSigningMaterial(env) {
-  const hasTrial = 'LICENCE_SIGNING_KEY' in env;
-  const hasPaid = 'PAID_SIGNING_KEY' in env;
-  if (!hasTrial && !hasPaid) return null;
-  const trialPem = hasTrial ? (env.LICENCE_SIGNING_KEY || null) : null;
-  const paidPem = hasPaid ? (env.PAID_SIGNING_KEY || null) : null;
+  const trialPem = anySigningKeyPem(env, 'LICENCE_SIGNING_KEY');
+  const paidPem = anySigningKeyPem(env, 'PAID_SIGNING_KEY');
+  if (!trialPem && !paidPem) return null;
   if (trialPem) return { pem: trialPem, kid: HUB_TIME_KID_TRIAL };
   if (paidPem) return { pem: paidPem, kid: HUB_TIME_KID_PAID };
   return null;
@@ -733,8 +741,8 @@ export function issueOfflineCustomer(env, keys, device, shop, productId, options
 /** Drop activation codes from delivered rows older than TRIAL_DAYS (scheduled). */
 export function ownerCapabilities(env) {
   return {
-    paid_available: Boolean(env.PAID_SIGNING_KEY),
-    trial_available: Boolean(env.LICENCE_SIGNING_KEY),
+    paid_available: Boolean(anySigningKeyPem(env, 'PAID_SIGNING_KEY')),
+    trial_available: Boolean(anySigningKeyPem(env, 'LICENCE_SIGNING_KEY')),
   };
 }
 
@@ -743,6 +751,6 @@ export async function purgeStaleCodes(env) {
   const cutoff = now() - days * 86400;
   await expireStalePending(env);
   await env.DB.prepare(
-    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued') AND (licence_tier = '' OR licence_tier = 'trial' OR kind = 'trial')",
+    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued') AND (licence_tier = '' OR licence_tier = 'trial')",
   ).bind(cutoff).run();
 }

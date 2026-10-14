@@ -13,8 +13,9 @@ npx wrangler d1 execute <database> --remote --file=schema.sql
 Run migrations **before** deploying a worker that writes `licence_tier` / `licence_expiry`:
 
 ```bash
-node scripts/apply-migrations.mjs --local   # or pass D1 via wrangler
-# Production:
+# Local SQLite (e.g. wrangler dev D1 file): pass the .sqlite path; --local is optional documentation only.
+node scripts/apply-migrations.mjs --local /path/to/d1.sqlite
+# Production (wrangler one-shot; 0001/0002 are not re-run-safe on schema that already has columns):
 npx wrangler d1 execute <database> --remote --file=migrations/0001_licence_tier_expiry.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0002_product_column.sql
 ```

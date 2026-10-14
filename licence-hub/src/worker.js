@@ -75,6 +75,9 @@ async function ownerApi(request, env, url, session) {
     });
     return json({ items });
   }
+  if (path === '/products' && request.method === 'GET') {
+    return json({ products: [...products(env)] });
+  }
 
   if (request.method !== 'POST') return json({ error: 'method' }, 405);
   let body = {};
@@ -131,9 +134,6 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
       throw e;
     }
-  }
-  if (path === '/products' && request.method === 'GET') {
-    return json({ products: [...products(env)] });
   }
   return json({ error: 'not_found' }, 404);
 }

@@ -16,6 +16,11 @@ test('fresh schema.sql needs no 0001 migration', () => {
   assert.ok(cols.includes('product'));
 });
 
+test('0002_product_column.sql contains ALTER for wrangler one-shot', () => {
+  const sql = readFileSync(join(root, 'migrations/0002_product_column.sql'), 'utf8');
+  assert.match(sql, /ALTER TABLE licence_requests ADD COLUMN product/i);
+});
+
 test('apply-migrations is safe to run twice on legacy-shaped db', () => {
   const db = new DatabaseSync(':memory:');
   db.exec(`CREATE TABLE licence_requests (

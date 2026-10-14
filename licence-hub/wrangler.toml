@@ -17,7 +17,7 @@ html_handling = "none"  # default auto-trailing-slash loops /owner/login.html <-
 crons = ["0 4 * * *"]
 
 [vars]
-LICENCE_PRODUCTS = "trip-orders"
+LICENCE_PRODUCTS = "trip-orders,al-store"
 TRIAL_DAYS = "14"
 SESSION_HOURS = "8"
 LICENCE_CALENDAR_TZ = "Africa/Cairo"

@@ -5,6 +5,7 @@ import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
+  hubCalendarSigned, ownerCapabilities, loadSigningKeys,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -653,4 +654,49 @@ test('bad paid_until calendar date is rejected', async () => {
     () => approveRequest(e, 'bad-date', keys, { grant: 'paid', paid_until: '2026-02-31' }),
     /bad_grant/,
   );
+});
+
+test('purgeStaleCodes keeps issued row when kind is trial but licence_tier is paid', async () => {
+  const e = env();
+  const old = Math.floor(Date.now() / 1000) - 20 * 86400;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('trial-kind-paid-tier', 'h', 'trip-orders', 'trial', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'issued', 'APPROVED-PAID', 'paid', old, old).run();
+  await purgeStaleCodes(e);
+  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('trial-kind-paid-tier').first();
+  assert.equal(row.code, 'APPROVED-PAID');
+});
+
+test('hub calendar signs with per-product trial key when global key is absent', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 88));
+  const out = await hubCalendarSigned(e);
+  assert.ok(out.sig);
+  assert.equal(out.kid, 'trial-hub');
+});
+
+test('ownerCapabilities reflects per-product paid key', () => {
+  const e = {
+    LICENCE_PRODUCTS: 'trip-orders,al-store',
+    PAID_SIGNING_KEY_AL_STORE: pemFromSeed(Buffer.alloc(32, 89)),
+  };
+  const caps = ownerCapabilities(e);
+  assert.equal(caps.paid_available, true);
+  assert.equal(caps.trial_available, false);
+});
+
+test('offline manual activation signs the requested product', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 90));
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 91));
+  const device = '7KD2M-QX9TP';
+  const keysTo = await loadSigningKeys(e, 'trip-orders');
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  const trip = await issueOfflineCustomer(e, keysTo, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const store = await issueOfflineCustomer(e, keysAl, 'ABCD2EFGH3', 'Shop', 'al-store', { grant: 'trial' });
+  assert.equal(trip.product, 'trip-orders');
+  assert.equal(store.product, 'al-store');
+  assert.notEqual(trip.code, store.code);
 });

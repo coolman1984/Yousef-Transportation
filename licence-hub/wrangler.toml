@@ -21,6 +21,7 @@ LICENCE_PRODUCTS = "trip-orders,al-store"
 LICENCE_DEFAULT_PRODUCT = "trip-orders"
 LICENCE_PRODUCT_LABELS = "{\"trip-orders\":\"طلبات الرحلات (يوسف)\",\"al-store\":\"المتجر\"}"
 TRIAL_DAYS = "14"
+PENDING_TTL_SEC = "3600"
 SESSION_HOURS = "8"
 LICENCE_CALENDAR_TZ = "Africa/Cairo"
 

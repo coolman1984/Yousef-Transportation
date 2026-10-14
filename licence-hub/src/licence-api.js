@@ -3,7 +3,7 @@ import {
   importSigningKey,
 } from './afcodes.js';
 import { hex } from './auth.js';
-import { calendarDateInTz, isValidCalendarIso, shiftCalendarDays } from './calendar.js';
+import { addCalendarDays, calendarDateInTz, isValidCalendarIso, shiftCalendarDays } from './calendar.js';
 import { signHubCalendar } from './hub-time.js';
 
 const enc = new TextEncoder();
@@ -312,9 +312,29 @@ export function productTrialMachineLocks(productId, machineHash) {
   return [onlineMachineLockKey(productId, machineHash)];
 }
 
+/** True when a machine_trials row blocks a new trial (paid/permanent locks do not). */
+export async function trialLockRequestBlocksTrial(env, requestId) {
+  if (!requestId) return false;
+  const req = await env.DB.prepare(
+    'SELECT licence_tier, kind, status FROM licence_requests WHERE id = ?',
+  ).bind(requestId).first();
+  if (!req) return true;
+  const tier = String(req.licence_tier || '').trim().toLowerCase();
+  if (tier === 'paid' || tier === 'permanent') return false;
+  if (tier === 'trial') return true;
+  const kind = String(req.kind ?? req.licence_tier ?? '').trim().toLowerCase();
+  if (kind === 'monthly' || kind === 'permanent' || kind === 'paid') return false;
+  if (kind === 'trial') return true;
+  if (tier === '' && (req.status === 'pending' || req.status === 'approved')) {
+    return kind !== 'monthly' && kind !== 'permanent';
+  }
+  return true;
+}
+
 async function anyTrialLockUsed(env, lockIds) {
   for (const lock of lockIds) {
-    if (await trialLockRow(env, lock)) return true;
+    const row = await trialLockRow(env, lock);
+    if (row && (await trialLockRequestBlocksTrial(env, row.request_id))) return true;
   }
   return false;
 }
@@ -324,11 +344,13 @@ export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, 
   if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
   if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   if (product !== 'trip-orders') return false;
-  if (await trialLockRow(env, legacyOfflineLockKey(deviceKeyNorm))) return true;
+  const legacyLock = await trialLockRow(env, legacyOfflineLockKey(deviceKeyNorm));
+  if (legacyLock && (await trialLockRequestBlocksTrial(env, legacyLock.request_id))) return true;
   const legacyReq = await env.DB.prepare(
-    "SELECT id FROM licence_requests WHERE id = ? AND status IN ('issued', 'delivered')",
+    "SELECT licence_tier, kind FROM licence_requests WHERE id = ? AND status IN ('issued', 'delivered')",
   ).bind(legacyOfflineRequestId(deviceKeyNorm)).first();
-  return Boolean(legacyReq);
+  if (!legacyReq) return false;
+  return trialLockRequestBlocksTrial(env, legacyOfflineRequestId(deviceKeyNorm));
 }
 
 /** Online path: refuse when this product's trial lock was used on any channel. */
@@ -498,8 +520,9 @@ export async function currentTerm(env, productId, device) {
   return best;
 }
 
-export function wouldDowngradeTerm(term, grant) {
+export function wouldDowngradeTerm(term, grant, env = null) {
   if (!term?.tier) return false;
+  if (grant?.grant === 'trial' && env && !isActiveStrongTerm(term, env)) return false;
   const cur = grantStrengthFromRow({ licence_tier: term.tier, licence_expiry: term.until });
   const next = grantStrengthFromGrant(grant);
   if (next.level < cur.level) return true;
@@ -522,9 +545,17 @@ export function resolveIssueFlags(options = {}) {
   return { reissue, confirmDowngrade };
 }
 
-export function assertDowngradeAllowed(knownTerm, grant, confirmDowngrade) {
+export function assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env = null) {
   if (confirmDowngrade) return;
-  if (knownTerm && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
+  if (knownTerm && wouldDowngradeTerm(knownTerm, grant, env)) throw downgradeError(knownTerm);
+}
+
+/** Delivered row may be replaced with a new trial after an expired paid/permanent term (not after an prior trial). */
+export function mayIssueTrialOverDelivered(grant, knownTerm, env) {
+  if (grant?.grant !== 'trial') return false;
+  if (isActiveStrongTerm(knownTerm, env)) return false;
+  const tier = String(knownTerm?.tier || '').trim().toLowerCase();
+  return tier === 'paid' || tier === 'permanent';
 }
 
 /** Paid until calendar day inclusive; permanent always active. */
@@ -605,11 +636,27 @@ export function trialWindowEnded(lastIso, env) {
   return today > String(lastIso || '').trim();
 }
 
+function freshTrialWindowFromToday(env) {
+  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
+  const first = calendarDateInTz(new Date(), tz).iso;
+  const inclusive = trialInclusiveDays(env);
+  const last = addCalendarDays(first, inclusive);
+  return { first, last };
+}
+
 async function trialSignOptions(env, grant, reissue, productId, device) {
-  if (!reissue || grant.grant !== 'trial') return {};
+  if (grant.grant !== 'trial') return {};
   const win = await originalTrialWindow(env, productId, device);
-  if (!win || trialWindowEnded(win.last, env)) throw new Error('trial_expired');
-  return { trialFirstDay: win.first, trialLastDay: win.last };
+  if (win) {
+    if (trialWindowEnded(win.last, env)) throw new Error('trial_expired');
+    if (reissue) return { trialFirstDay: win.first, trialLastDay: win.last };
+    return {};
+  }
+  if (reissue) {
+    const fresh = freshTrialWindowFromToday(env);
+    return { trialFirstDay: fresh.first, trialLastDay: fresh.last };
+  }
+  return {};
 }
 
 async function latestIssuedForDeviceProduct(env, productId, dkey) {
@@ -980,7 +1027,6 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (!row || row.status === 'refused') return null;
-  if (row.status === 'delivered' && !reissue) return null;
 
   let dkey;
   try {
@@ -991,8 +1037,17 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   }
   const machineHash = normalizeMachineHash(row.machine);
   const productId = String(row.product || 'trip-orders').trim() || 'trip-orders';
-  const rowIssued = row.status === 'issued' && row.code ? row : null;
   const knownTerm = await currentTerm(env, productId, row.device);
+  if (row.status === 'delivered' && !reissue) {
+    if (mayIssueTrialOverDelivered(grant, knownTerm, env)) { /* continue */ }
+    else if (grant.grant === 'trial') {
+      const win = await originalTrialWindow(env, productId, row.device);
+      if (win && trialWindowEnded(win.last, env)) throw new Error('trial_expired');
+      return null;
+    } else return null;
+  }
+
+  const rowIssued = row.status === 'issued' && row.code ? row : null;
   assertTrialNotOverStrongTerm(env, knownTerm, grant);
 
   let replaceMode = false;
@@ -1002,19 +1057,19 @@ export async function approveRequest(env, requestId, keys, options = {}) {
       await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
     replaceMode = true;
-  } else if (reissue && row.status === 'delivered') {
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+  } else if (row.status === 'delivered' && (reissue || mayIssueTrialOverDelivered(grant, knownTerm, env))) {
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
     replaceMode = true;
   } else {
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
   }
 
   if (grant.grant === 'trial' && !reissue && (await trialUsedOnline(env, productId, dkey, machineHash))) {
     const owns = await locksOwnedByRequest(env, productId, dkey, machineHash, requestId);
     if (!owns) {
-      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
       await refuseRequest(env, requestId, 'already_used');
       return null;
     }
@@ -1069,11 +1124,22 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   let ownsLock = false;
   let replacingIssued = false;
   if (existing?.status === 'delivered' && !reissue) {
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
-    throw new Error('reissue_confirm');
+    if (mayIssueTrialOverDelivered(grant, knownTerm, env)) {
+      replacingIssued = true;
+      const claim = await trialLockRow(env, lock);
+      ownsLock = Boolean(claim && claim.request_id === requestId);
+    } else if (grant.grant === 'trial') {
+      const win = await originalTrialWindow(env, productId, device);
+      if (win && trialWindowEnded(win.last, env)) throw new Error('trial_expired');
+      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
+      throw new Error('reissue_confirm');
+    } else {
+      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
+      throw new Error('reissue_confirm');
+    }
   }
   if (existing?.status === 'delivered' && reissue) {
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
     replacingIssued = true;
     const claim = await trialLockRow(env, lock);
     ownsLock = Boolean(claim && claim.request_id === requestId);
@@ -1085,12 +1151,12 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
         await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
         return signedFromRow(existing);
       }
-      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
       ownsLock = true;
       replacingIssued = true;
     }
-  } else {
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+  } else if (!(existing?.status === 'delivered' && mayIssueTrialOverDelivered(grant, knownTerm, env))) {
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
   }
   if (grant.grant === 'trial' && !reissue && (await trialUsedForOfflineProduct(env, productId, dkey))) {
     const claim = await trialLockRow(env, lock);
@@ -1122,7 +1188,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
       await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }
-    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade);
+    assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
     if (replacingIssued || reissue) {
       ownsLock = true;
       return false;

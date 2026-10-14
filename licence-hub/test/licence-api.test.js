@@ -9,7 +9,8 @@ import {
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
   currentTerm, defaultProduct, ownerProductsPayload, blankLongDigitRuns, refFingerprint,
-  originalTrialWindow, isActiveStrongTerm,
+  originalTrialWindow, isActiveStrongTerm, wouldDowngradeTerm, mayIssueTrialOverDelivered,
+  trialLockRequestBlocksTrial,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -1523,4 +1524,178 @@ test('comb8: failed paid offline issue on delivered trial does not block trial r
   assert.notEqual(row.kind, 'monthly');
   const again = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true });
   assert.ok(again.code);
+});
+
+async function markExpiredPaidDelivered(e, device, paidUntil = '1999-06-01') {
+  const dkey = deviceKey(device);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  await e.DB.prepare(
+    'UPDATE licence_requests SET licence_expiry = ?, licence_tier = ?, kind = ?, status = ?, code = NULL WHERE id = ?',
+  ).bind(paidUntil, 'paid', 'monthly', 'delivered', requestId).run();
+  await e.DB.prepare(
+    'UPDATE customers SET licence_expiry = ?, licence_tier = ?, kind = ?, last_day = ? WHERE device = ? AND product = ?',
+  ).bind(paidUntil, 'paid', 'monthly', paidUntil, device, 'trip-orders').run();
+  return { dkey, requestId };
+}
+
+test('wouldDowngradeTerm allows trial after expired paid but not active paid or permanent', () => {
+  const e = env();
+  const expired = { tier: 'paid', until: '1999-01-01' };
+  const active = { tier: 'paid', until: '2099-12-31' };
+  const perm = { tier: 'permanent', until: '' };
+  const today = calendarDateInTz(new Date(), e.LICENCE_CALENDAR_TZ).iso;
+  assert.equal(wouldDowngradeTerm(expired, { grant: 'trial' }, e), false);
+  assert.equal(wouldDowngradeTerm({ tier: 'paid', until: today }, { grant: 'trial' }, e), true);
+  assert.equal(wouldDowngradeTerm(active, { grant: 'trial' }, e), true);
+  assert.equal(wouldDowngradeTerm(perm, { grant: 'trial' }, e), true);
+});
+
+test('offline delivered expired paid issues trial without reissue confirm', async () => {
+  const e = env();
+  const keys = await signingKeys(110, 111);
+  const device = '7KD2M-QX9TP';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await markExpiredPaidDelivered(e, device);
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trial.code);
+  const row = await e.DB.prepare('SELECT licence_tier, status FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', deviceKey(device))).first();
+  assert.equal(row.licence_tier, 'trial');
+  assert.equal(row.status, 'issued');
+});
+
+test('offline delivered expired paid trial reissue re-signs same window', async () => {
+  const e = env();
+  const keys = await signingKeys(112, 113);
+  const device = 'ABCDE-FGHJK';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await markExpiredPaidDelivered(e, device);
+  const first = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true });
+  const second = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true });
+  assert.equal(first.first_day, second.first_day);
+  assert.equal(first.last_day, second.last_day);
+});
+
+test('offline issued expired paid row issues trial without downgrade', async () => {
+  const e = env();
+  const keys = await signingKeys(114, 115);
+  const device = 'LMNOP-QRSTV';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  const { requestId } = await markExpiredPaidDelivered(e, device, '1999-03-01');
+  await e.DB.prepare('UPDATE licence_requests SET status = ?, code = ? WHERE id = ?')
+    .bind('issued', 'PAID-CODE-PLACEHOLDER', requestId).run();
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trial.code);
+  assert.notEqual(trial.code, 'PAID-CODE-PLACEHOLDER');
+});
+
+test('second offline trial call after expired paid returns same code', async () => {
+  const e = env();
+  const keys = await signingKeys(116, 117);
+  const device = 'WXYZ2-34567';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await markExpiredPaidDelivered(e, device);
+  const first = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const second = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.equal(first.code, second.code);
+});
+
+test('online approveRequest on delivered expired paid pending trial issues code', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(118, 119);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await markExpiredPaidDelivered(e, device);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('exp-paid-trial', 'hp-exp', 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n-exp', '', '', '', 'pending', 9, 9).run();
+  const out = await approveRequest(e, 'exp-paid-trial', keys, { grant: 'trial' });
+  assert.ok(out?.code);
+  assert.equal(out.code.length > 10, true);
+});
+
+test('paid-only d: lock does not block trial after paid term expired', async () => {
+  const e = env();
+  const keys = await signingKeys(120, 121);
+  const device = 'HJKLM-NPQRV';
+  const dkey = deviceKey(device);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  const requestId = offlineRequestId('trip-orders', dkey);
+  await markExpiredPaidDelivered(e, device);
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(dkey), requestId, 1).run();
+  assert.equal(await trialLockRequestBlocksTrial(e, requestId), false);
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), false);
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trial.code);
+});
+
+test('active paid still downgrade_forbidden for trial reissue', async () => {
+  const e = env();
+  const keys = await signingKeys(122, 123);
+  const device = '7KD2M-QX9TP';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true }),
+    /downgrade_forbidden/,
+  );
+});
+
+test('ended prior trial still trial_expired', async () => {
+  const e = env();
+  const keys = await signingKeys(124, 125);
+  const device = 'ABCDE-FGHJK';
+  const requestId = offlineRequestId('trip-orders', deviceKey(device));
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  await e.DB.prepare(
+    'UPDATE licence_requests SET licence_expiry = ?, licence_tier = ?, kind = ?, status = ?, code = NULL WHERE id = ?',
+  ).bind('1999-01-01', 'trial', 'trial', 'delivered', requestId).run();
+  await e.DB.prepare(
+    'UPDATE customers SET licence_expiry = ?, licence_tier = ?, kind = ?, first_day = ?, last_day = ? WHERE device = ? AND product = ?',
+  ).bind('1999-01-01', 'trial', 'trial', '1998-12-19', '1999-01-01', device, 'trip-orders').run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }),
+    /trial_expired/,
+  );
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true }),
+    /trial_expired/,
+  );
+});
+
+test('already-used trial lock still refuses new online trial on same device', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  await issueOfflineCustomer(e, await signingKeys(126, 127), device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const { data } = await postRequest(e, body({ device, nonce: 'second-trial-same-device' }));
+  assert.equal(data.status, 'refused');
+  assert.equal(data.reason, 'already_used');
+  assert.equal(await trialUsedOnline(e, 'trip-orders', dkey, MACHINE_A), true);
+});
+
+test('mayIssueTrialOverDelivered matches expired paid only', () => {
+  const e = env();
+  const expiredPaid = { tier: 'paid', until: '1999-01-01' };
+  const activePaid = { tier: 'paid', until: '2099-01-01' };
+  const endedTrial = { tier: 'trial', until: '1999-01-01' };
+  assert.equal(mayIssueTrialOverDelivered({ grant: 'trial' }, expiredPaid, e), true);
+  assert.equal(mayIssueTrialOverDelivered({ grant: 'paid', paid_until: '2027-01-01' }, expiredPaid, e), false);
+  assert.equal(mayIssueTrialOverDelivered({ grant: 'trial' }, activePaid, e), false);
+  assert.equal(mayIssueTrialOverDelivered({ grant: 'trial' }, endedTrial, e), false);
 });

@@ -20,6 +20,18 @@ sys.path.insert(0, str(ROOT / "server"))
 sys.path.insert(0, str(ROOT / "tools"))
 
 import licence  # noqa: E402
+import hub_time  # noqa: E402
+
+
+def _sign_hub_calendar_day(day, private_pem, kid='trial-hub'):
+    try:
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+    except ImportError:
+        return {'calendar_day': day}
+    private = load_pem_private_key(private_pem, password=None)
+    sig = private.sign(hub_time.hub_time_message(day, kid))
+    sig_b64 = base64.urlsafe_b64encode(sig).decode().rstrip('=')
+    return {'calendar_day': day, 'kid': kid, 'sig': sig_b64}
 
 
 def hub_response(payload, status=200, missing_bytes=0):
@@ -38,6 +50,27 @@ def hub_response(payload, status=200, missing_bytes=0):
 def key_blob(seed=b"a"):
     raw = (seed * 32)[:32]
     return base64.urlsafe_b64encode(raw).decode().rstrip("=")
+
+
+_HUB_SIGNING_PEM = None
+_HUB_SIGNING_PUBLIC = None
+
+
+def _default_hub_signing_pair():
+    global _HUB_SIGNING_PEM, _HUB_SIGNING_PUBLIC
+    if _HUB_SIGNING_PEM is not None:
+        return _HUB_SIGNING_PEM, _HUB_SIGNING_PUBLIC
+    try:
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    except ImportError:
+        return None, None
+    private = Ed25519PrivateKey.generate()
+    _HUB_SIGNING_PEM = private.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+    raw = private.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+    _HUB_SIGNING_PUBLIC = base64.urlsafe_b64encode(raw).decode().rstrip('=')
+    return _HUB_SIGNING_PEM, _HUB_SIGNING_PUBLIC
 
 
 class _Assist:
@@ -64,11 +97,15 @@ class _Assist:
 class _CommercialLicence:
     """Licence() under patched commercial build flags for the whole test block."""
 
-    def __init__(self, data_dir, build_channel='commercial', release_keys=None, studio_keys=None):
-        trial_keys = release_keys if release_keys is not None else (key_blob(),)
-        studio = studio_keys or ()
+    def __init__(self, data_dir, build_channel='commercial', release_keys=None, studio_keys=None, hub_sign_pem=None):
+        hub_pem, hub_pub = _default_hub_signing_pair()
+        trial_keys = list(release_keys if release_keys is not None else (key_blob(),))
+        studio = list(studio_keys or ())
+        if hub_pub and hub_pub not in trial_keys and hub_pub not in studio:
+            trial_keys.insert(0, hub_pub)
         entries = [('studio', k) for k in studio] + [('trial-hub', k) for k in trial_keys]
         all_keys = tuple(dict.fromkeys(list(studio) + list(trial_keys)))
+        self._hub_sign_pem = hub_sign_pem or hub_pem
         self._prof = tempfile.mkdtemp()
         self._patch = patch.multiple(
             licence,
@@ -90,6 +127,8 @@ class _CommercialLicence:
         self.lic = licence.Licence(_Assist(data_dir), str(ROOT), str(data_dir), {})
 
     def __enter__(self):
+        if self._hub_sign_pem:
+            self.lic._test_hub_sign_pem = self._hub_sign_pem
         return self.lic
 
     def __exit__(self, *exc):
@@ -116,12 +155,24 @@ def _step_hub_calendar_to(lic_obj, target):
         lic_obj._note_hub_calendar_day(nxt.isoformat())
 
 
-def _hub_poll_calendar_response(lic_obj, target):
+def _hub_poll_calendar_response(lic_obj, target, private_pem=None, kid='trial-hub'):
     """Simulate a hub /licence/time body while respecting per-step jump caps."""
     if isinstance(target, date):
         target = target.isoformat()
     _step_hub_calendar_to(lic_obj, target)
+    pem = private_pem or getattr(lic_obj, '_test_hub_sign_pem', None)
+    if pem:
+        return 200, _sign_hub_calendar_day(target, pem, kid=kid)
     return 200, {'calendar_day': target}
+
+
+def _hub_time_body(lic_obj, day):
+    if isinstance(day, date):
+        day = day.isoformat()
+    pem = getattr(lic_obj, '_test_hub_sign_pem', None)
+    if pem:
+        return _sign_hub_calendar_day(day, pem)
+    return {'calendar_day': day}
 
 
 def _seed_trips_db(data_dir):
@@ -403,7 +454,7 @@ class TrialClockExpiryTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = self._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 device = l.device()
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=device)['code']
                 l.activate(code, manual=True)
@@ -424,7 +475,7 @@ class TrialClockExpiryTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = self._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
                 l.activate(code, manual=True)
                 future = (first + timedelta(days=5)).isoformat()
@@ -438,7 +489,7 @@ class TrialClockExpiryTest(unittest.TestCase):
         first = date.today()
         pem, public = self._trial_keypair()
         with tempfile.TemporaryDirectory() as d:
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 l.a.kv('licence_hub_url', 'https://hub.test')
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14,
                                           device=l.device())['code']
@@ -446,7 +497,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                 l._hub_watch({'id': 'r1', 'poll_token': 'tok'})
                 hub_day = first + timedelta(days=1)
                 with patch.object(l, '_call', side_effect=[ConnectionError('offline'),
-                        (200, {'calendar_day': hub_day.isoformat(), 'status': 'delivered'})]) as call:
+                        (200, {**_hub_time_body(l, hub_day.isoformat()), 'status': 'delivered'})]) as call:
                     l._poll_hub_calendar()
                 self.assertEqual(call.call_count, 2)
                 self.assertEqual(call.call_args.args, ('GET', 'https://hub.test/licence/status?id=r1'))
@@ -472,7 +523,7 @@ class TrialClockExpiryTest(unittest.TestCase):
         ]
         for failure in failures:
             with self.subTest(failure=failure), tempfile.TemporaryDirectory() as d:
-                with _CommercialLicence(d, release_keys=(public,)) as l:
+                with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                     l.a.kv('licence_hub_url', 'https://hub.test')
                     code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14,
                                               device=l.device())['code']
@@ -481,7 +532,7 @@ class TrialClockExpiryTest(unittest.TestCase):
                     last_good = first + timedelta(days=1)
                     l._note_hub_calendar_day(last_good.isoformat())
                     fallback_day = first + timedelta(days=2)
-                    fallback = hub_response(json.dumps({'calendar_day': fallback_day.isoformat()}).encode())
+                    fallback = hub_response(json.dumps(_hub_time_body(l, fallback_day.isoformat())).encode())
                     with patch.object(licence.urllib.request, 'urlopen', side_effect=[failure(), fallback]) as call:
                         l._poll_hub_calendar()
                     self.assertEqual([c.args[0].full_url for c in call.call_args_list], [
@@ -495,7 +546,7 @@ class TrialClockExpiryTest(unittest.TestCase):
         import afcodes
         first = date.today()
         pem, public = self._trial_keypair()
-        with tempfile.TemporaryDirectory() as d, _CommercialLicence(d, release_keys=(public,)) as l:
+        with tempfile.TemporaryDirectory() as d, _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
             l.a.kv('licence_hub_url', 'https://hub.test')
             l.activate(afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14,
                                          device=l.device())['code'], manual=True)
@@ -517,7 +568,7 @@ class TrialClockExpiryTest(unittest.TestCase):
             import afcodes
             frozen = date_cls.today() - timedelta(days=10)
             pem, public = self._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 3, device=l.device())['code']
                 with patch.object(l, '_effective_calendar_day', return_value=frozen):
                     l.activate(code, manual=True)
@@ -536,7 +587,7 @@ class TrialClockExpiryTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = self._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
                 l.activate(code, manual=True)
                 l._note_hub_calendar_day((first + timedelta(days=5)).isoformat())
@@ -600,13 +651,15 @@ class PaidHubCalendarTest(unittest.TestCase):
             def today(cls):
                 return frozen
 
-        pem, public = TrialClockExpiryTest()._trial_keypair()
+        pem_studio, pub_studio = TrialClockExpiryTest()._trial_keypair()
+        pem_hub, pub_hub = TrialClockExpiryTest()._trial_keypair()
         with tempfile.TemporaryDirectory() as d:
-            with _CommercialLicence(d, release_keys=(), studio_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(pub_hub,), studio_keys=(pub_studio,),
+                                     hub_sign_pem=pem_hub) as l:
                 with patch.object(licence, 'date', FrozenDate), patch.object(
                         licence, 'utcnow', return_value=licence.parse('2026-01-15T12:00:00Z')):
                     l.a.kv('licence_hub_url', 'https://hub.test')
-                    issued = afcodes.issue_code(pem, licence.PRODUCT_ID, 'standard', frozen, 30,
+                    issued = afcodes.issue_code(pem_studio, licence.PRODUCT_ID, 'standard', frozen, 30,
                                                 grace_days=3, device=l.device())
                     self.assertTrue(l.activate(issued['code'], manual=True)['full'])
                     self.assertIsNone(l._hub_watch())
@@ -620,7 +673,7 @@ class PaidHubCalendarTest(unittest.TestCase):
 
             def fake_time_call(method, url, body=None, token=None):
                 _step_hub_calendar_to(l, target)
-                return 200, {'calendar_day': target}
+                return 200, _hub_time_body(l, target)
 
             with patch.object(l, '_call', side_effect=fake_time_call) as call:
                 l._poll_hub_calendar()
@@ -637,7 +690,7 @@ class PaidHubCalendarTest(unittest.TestCase):
         with self._paid() as (l, _, end):
             def fake_time_call(method, url, body=None, token=None):
                 _step_hub_calendar_to(l, end.isoformat())
-                return 200, {'calendar_day': end.isoformat()}
+                return 200, _hub_time_body(l, end.isoformat())
 
             with patch.object(l, '_call', side_effect=fake_time_call):
                 l._poll_hub_calendar()
@@ -734,7 +787,7 @@ class PaidHubCalendarTest(unittest.TestCase):
                         if isinstance(failed_response, BaseException):
                             raise failed_response
                         return failed_response
-                    return hub_response(json.dumps({'calendar_day': target}).encode())
+                    return hub_response(json.dumps(_hub_time_body(l, target)).encode())
 
                 with patch.object(licence.urllib.request, 'urlopen', side_effect=urlopen_side_effect) as call:
                     with patch.object(licence.time, 'monotonic', return_value=100):
@@ -791,8 +844,8 @@ class PaidHubCalendarTest(unittest.TestCase):
                 fake_calls.n += 1
                 if fake_calls.n == 1:
                     _step_hub_calendar_to(l, future.isoformat())
-                    return 200, {'calendar_day': future.isoformat()}
-                return 200, {'calendar_day': frozen.isoformat()}
+                    return 200, _hub_time_body(l, future.isoformat())
+                return 200, _hub_time_body(l, frozen.isoformat())
 
             with patch.object(l, '_call', side_effect=fake_calls) as call:
                 with patch.object(licence.time, 'monotonic', return_value=100):
@@ -814,7 +867,7 @@ class PaidHubCalendarTest(unittest.TestCase):
 
             def fake_time_call(method, url, body=None, token=None):
                 _step_hub_calendar_to(l, target)
-                return 200, {'calendar_day': target}
+                return 200, _hub_time_body(l, target)
 
             with patch.object(l, '_call', side_effect=fake_time_call) as call:
                 l._poll_hub_calendar()
@@ -854,7 +907,7 @@ class PaidHubCalendarTest(unittest.TestCase):
             st = l.status()
             self.assertFalse(st['full'])
             self.assertEqual(st['reason'], 'state_corrupt')
-            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+            with patch.object(l, '_call', return_value=(200, _hub_time_body(l, expired_day))) as call:
                 with patch.object(licence.time, 'monotonic', return_value=101):
                     l._poll_hub_calendar()
                     while licence._partial_hub_catchup:
@@ -881,7 +934,7 @@ class PaidHubCalendarTest(unittest.TestCase):
             licence._cache.clear()
             self.assertFalse(l.status()['full'])
             self.assertIsNone(l._hub_calendar_max_day())
-            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call:
+            with patch.object(l, '_call', return_value=(200, _hub_time_body(l, expired_day))) as call:
                 with patch.object(licence.time, 'monotonic', return_value=200):
                     l._poll_hub_calendar()
                     while licence._partial_hub_catchup:
@@ -892,7 +945,7 @@ class PaidHubCalendarTest(unittest.TestCase):
             licence._cache.clear()
             self.assertEqual(l._hub_calendar_max_day(), date.fromisoformat(expired_day))
             self.assertEqual(l.status()['state'], 'expired')
-            with patch.object(l, '_call', return_value=(200, {'calendar_day': expired_day})) as call2:
+            with patch.object(l, '_call', return_value=(200, _hub_time_body(l, expired_day))) as call2:
                 with patch.object(licence.time, 'monotonic',
                                   return_value=200 + licence.HUB_CALENDAR_POLL_SEC):
                     l._poll_hub_calendar()
@@ -937,7 +990,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -961,7 +1014,7 @@ class LicenceClockStateTest(unittest.TestCase):
             import afcodes
             import licence_state
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -983,7 +1036,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1013,7 +1066,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 first = date_cls.today()
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1032,7 +1085,7 @@ class LicenceClockStateTest(unittest.TestCase):
             pem, public = TrialClockExpiryTest()._trial_keypair()
             utc = licence.parse('2026-10-13T22:15:00Z')
             hub_day = '2026-10-14'
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 with patch.object(licence, 'utcnow', return_value=utc):
                     code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', utc.date(), 14, device=l.device())['code']
                     l.activate(code, manual=True)
@@ -1053,7 +1106,7 @@ class LicenceClockStateTest(unittest.TestCase):
             pem, public = TrialClockExpiryTest()._trial_keypair()
             frozen = date_cls.today()
             calls = []
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 l.a.kv('hub_url', 'https://hub.test')
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 14, device=l.device())['code']
                 with patch.object(l, '_effective_calendar_day', return_value=frozen):
@@ -1065,7 +1118,7 @@ class LicenceClockStateTest(unittest.TestCase):
                     self.assertEqual(method, 'GET')
                     self.assertEqual(token, 'tok' if '/licence/status?' in url else None)
                     calls.append(url)
-                    return 200, {'calendar_day': future_day, 'status': 'pending'}
+                    return 200, {**_hub_time_body(l, future_day), 'status': 'pending'}
 
                 with patch.object(l, '_effective_calendar_day', return_value=frozen):
                     with patch.object(l, '_call', side_effect=fake_call):
@@ -1093,7 +1146,7 @@ class LicenceClockStateTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1116,7 +1169,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 14, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1136,7 +1189,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 14, device=l.device())['code']
                 l.activate(code, manual=True)
                 newer = licence.utcnow()
@@ -1155,7 +1208,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1174,7 +1227,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1193,7 +1246,7 @@ class LicenceClockStateTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             prof = holder.profile_dir
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
@@ -1222,7 +1275,7 @@ class LicenceClockStateTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            with _CommercialLicence(d, release_keys=(public,)) as l:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
                 l.activate(code, manual=True)
                 l._note_hub_calendar_day('2099-01-01')
@@ -1275,7 +1328,7 @@ class LicenceClockStateTest(unittest.TestCase):
             import afcodes
             first = date_cls.today()
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             prof = holder.profile_dir
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 3, device=l.device())['code']
@@ -1329,7 +1382,7 @@ class LicenceClockStateTest(unittest.TestCase):
             from datetime import date as date_cls
             import afcodes
             pem, public = TrialClockExpiryTest()._trial_keypair()
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', date_cls.today(), 3, device=l.device())['code']
                 l.activate(code, manual=True)
@@ -1505,7 +1558,7 @@ class PaidClockStateTamperTest(unittest.TestCase):
 
         pem, public = TrialClockExpiryTest()._trial_keypair()
         with tempfile.TemporaryDirectory() as d:
-            holder = _CommercialLicence(d, release_keys=(public,))
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
             with holder as l:
                 with patch.object(licence, 'date', FrozenDate), patch.object(licence, 'utcnow', lambda: frozen_utc):
                     code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', frozen, 3, device=l.device())['code']
@@ -1546,6 +1599,47 @@ class PaidClockStateTamperTest(unittest.TestCase):
                 payload2, mac2 = blob2.rsplit(b'\n', 1)
                 self.assertNotIn(b'\r\n', blob2)
                 self.assertEqual(blob2, payload2 + b'\n' + mac2)
+
+    def test_far_future_signed_hub_seals_capped_day_not_uncapped(self):
+        import afcodes
+        from datetime import date as date_cls
+        first = date_cls.today()
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        far = (first + timedelta(days=30)).isoformat()
+        capped = (first + timedelta(days=licence.HUB_CALENDAR_MAX_JUMP_DAYS)).isoformat()
+        with tempfile.TemporaryDirectory() as d:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                payload = _sign_hub_calendar_day(far, pem)
+                noted = l._accept_network_hub_calendar(payload)
+                self.assertEqual(noted, 'partial')
+                sealed = l._read_sealed_hub_day()
+                self.assertIsNotNone(sealed)
+                self.assertEqual(sealed.isoformat(), capped)
+                self.assertNotEqual(sealed.isoformat(), far)
+
+    def test_hub_url_pin_rejects_calendar_from_different_hub_url(self):
+        import afcodes
+        from datetime import date as date_cls
+        first = date_cls.today()
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        hub_a = 'https://hub-a.example'
+        hub_b = 'https://hub-b.example'
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
+            with holder as l:
+                l.a.values['licence_hub_url'] = hub_a
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                day1 = (first + timedelta(days=1)).isoformat()
+                self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(day1, pem)))
+                self.assertEqual(l.a.kv(licence.HUB_URL_PIN_KEY), hub_a)
+                l.a.values['licence_hub_url'] = hub_b
+                day2 = (first + timedelta(days=2)).isoformat()
+                self.assertFalse(l._accept_network_hub_calendar(_sign_hub_calendar_day(day2, pem)))
+                l.a.values['licence_hub_url'] = hub_a
+                self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(day2, pem)))
 
     def test_repaste_paid_code_does_not_replace_missing_clock_file(self):
         import licence_state

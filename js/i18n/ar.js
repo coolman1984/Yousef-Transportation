@@ -207,6 +207,7 @@
     'lic.state.invalid': 'الكود غير صحيح',
     'lic.state.not_yet_valid': 'لم يبدأ بعد',
     'lic.state.clock_back': 'ساعة الجهاز رُجعت إلى الوراء',
+    'lic.state.warning': 'الترخيص يحتاج متابعة (مزامنة مع الخادم)',
     'lic.kind.trial': 'تجربة',
     'lic.kind.standard': 'شهري',
     'lic.kind.pro': 'شهري احترافي',

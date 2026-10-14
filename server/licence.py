@@ -73,6 +73,7 @@ except ImportError:
     _RELEASE_TRIAL_ONLY = frozenset()
     _RELEASE_MAX_TRIAL_DAYS = 14
     _BUILD_CHANNEL = 'commercial' if _COMMERCIAL_BUILD else 'source'
+import hub_time
 import licence_state
 from version import VERSION
 
@@ -87,6 +88,8 @@ CLOCK_TOLERANCE_HOURS_PAID = 72
 TRIAL_EXPIRED_LATCH = 'trial_expired_latch'
 HUB_CALENDAR_ESTABLISHED_KEY = 'licence_hub_calendar_established'
 HUB_WATCH_KEY = 'licence_hub_watch'
+HUB_SEALED_DAY_KEY = 'licence_hub_sealed_calendar_max'
+HUB_URL_PIN_KEY = 'licence_hub_url_pinned'
 HUB_CALENDAR_POLL_SEC = 6 * 3600
 HUB_CALENDAR_RETRY_SEC = 5 * 60
 HUB_CALENDAR_MAX_JUMP_DAYS = 7
@@ -208,6 +211,55 @@ class Licence:
             if kid and kid.lower() in TRIAL_HUB_KIDS:
                 keys.add(key)
         return frozenset(keys)
+
+    def _trusted_key_by_kid(self):
+        out = {}
+        for kid, key in self._trusted_key_entries():
+            if kid:
+                out[kid.lower()] = key
+        return out
+
+    def _read_sealed_hub_day(self):
+        raw = self.a.kv(HUB_SEALED_DAY_KEY)
+        if not raw:
+            return None
+        try:
+            return date.fromisoformat(str(raw)[:10])
+        except ValueError:
+            return None
+
+    def _seal_hub_day(self, hub_date):
+        if not isinstance(hub_date, date):
+            return
+        prev = self._read_sealed_hub_day()
+        if prev and hub_date <= prev:
+            return
+        self.a.kv(HUB_SEALED_DAY_KEY, hub_date.isoformat())
+
+    def _accept_network_hub_calendar(self, data, recover_clock=False):
+        """Trust hub calendar only when signed by a pinned kid; never roll back sealed day."""
+        day = hub_time.verify_hub_calendar(data, self._trusted_key_by_kid())
+        if not day:
+            return False
+        try:
+            hub_date = date.fromisoformat(day)
+        except ValueError:
+            return False
+        sealed = self._read_sealed_hub_day()
+        if sealed and hub_date < sealed:
+            return False
+        pinned = (self.a.kv(HUB_URL_PIN_KEY) or '').strip().rstrip('/')
+        current = (self.hub() or '').strip().rstrip('/')
+        if sealed and pinned and current and pinned != current:
+            return False
+        noted = self._note_hub_calendar_day(day, recover_clock=recover_clock)
+        if noted:
+            stored = self._hub_calendar_max_day()
+            if stored:
+                self._seal_hub_day(stored)
+            if current and not pinned:
+                self.a.kv(HUB_URL_PIN_KEY, current)
+        return noted
 
     def _state_bind(self):
         return self.machine_tag()
@@ -475,6 +527,7 @@ class Licence:
             return False
         self._note_profile_clock_established()
         self._note_hub_calendar_established()
+        self._seal_hub_day(hub_date)
         return True
 
     def _trial_latch_set(self):
@@ -539,6 +592,9 @@ class Licence:
         hub_max = self._hub_calendar_max_day()
         if hub_max and hub_max > today:
             today = hub_max
+        sealed = self._read_sealed_hub_day()
+        if sealed and sealed > today:
+            today = sealed
         last = self._read_max_seen()
         if last and last.date() > today:
             today = last.date()
@@ -756,8 +812,12 @@ class Licence:
                 result.update(state='invalid', full=False, reason='state_corrupt')
             elif self._stored_licence_code() and status in ('missing', 'corrupt'):
                 result.update(full=False, reason='state_corrupt')
+                if result.get('state') in ('active', 'grace', 'trial'):
+                    result.update(state='warning')
             elif self._profile_clock_established():
                 result.update(full=False, reason='state_corrupt')
+                if result.get('state') in ('active', 'grace', 'trial'):
+                    result.update(state='warning')
             clock_back = False
         elif self._paid_hub_calendar_required() and not state_ok:
             result.update(state='invalid', full=False, reason='state_corrupt')
@@ -994,7 +1054,7 @@ class Licence:
                     elif code != 200:
                         self._failed(st, f'http_{code}')
                     else:
-                        self._note_hub_calendar_day(d.get('calendar_day'))
+                        self._accept_network_hub_calendar(d)
                         if d.get('status') == 'issued':
                             self._activate(st, url, d.get('code'))
                         elif d.get('status') == 'refused':
@@ -1069,7 +1129,7 @@ class Licence:
             while True:
                 code, d = self._call('GET', url + '/licence/time')
                 if code == 200 and isinstance(d, dict):
-                    noted = self._note_hub_calendar_day(d.get('calendar_day'), recover_clock=True)
+                    noted = self._accept_network_hub_calendar(d, recover_clock=True)
                     if noted == 'partial':
                         _partial_hub_catchup = True
                         stored = self._hub_calendar_max_day()
@@ -1107,8 +1167,8 @@ class Licence:
             return
         try:
             code, d = self._call('GET', url + '/licence/status?id=' + str(watch['id']), token=watch['poll_token'])
-            if code == 200 and isinstance(d, dict) and self._note_hub_calendar_day(
-                    d.get('calendar_day'), recover_clock=True) is True:
+            if code == 200 and isinstance(d, dict) and self._accept_network_hub_calendar(
+                    d, recover_clock=True) is True:
                 with _lock:
                     _cache.clear()
             elif code == 401:

@@ -207,6 +207,7 @@
     'lic.state.invalid': 'The code is not valid',
     'lic.state.not_yet_valid': 'Not valid yet',
     'lic.state.clock_back': 'The PC clock was moved back',
+    'lic.state.warning': 'Licence needs attention (sync with the hub)',
     'lic.kind.trial': 'Trial',
     'lic.kind.standard': 'Monthly',
     'lic.kind.pro': 'Monthly pro',

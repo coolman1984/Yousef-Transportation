@@ -1,3 +1,5 @@
-import { wireOffline } from '/owner/app.js';
+import { wireOffline, mountOfflineTier } from '/owner/app.js';
 
-wireOffline(document.getElementById('offline-form'), document.getElementById('out'));
+const card = document.querySelector('.card');
+mountOfflineTier(card);
+wireOffline(document.getElementById('offline-form'), document.getElementById('out'), card);

@@ -1,6 +1,48 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-owner6 hub downgrade and customers (2026-10-14)
+
+**What/why:** `currentTerm` merges customers + issued/delivered rows (code may be cleared after ack); all issue paths return 409 `downgrade` with `current` unless `force`; reissue confirm no longer sends `force`; customers list joins `customers` with latest grant row per device+product.
+**Checks:** `cd licence-hub && timeout 120 npm test` (88 pass); `cd gateway && node --test test/gateway.test.js`; `cd tests && timeout 600 python3 -m unittest` (398 pass, 40 skipped).
+**Next:** Owner deploy hub worker; no D1 migration.
+
+## REV-owner5 hub fixes (2026-10-14)
+
+**What/why:** Block licence downgrades unless `force`; sign new codes before replacing stored rows (503 on missing key); pending cards preselect request kind; `d:` trial lock only for trip-orders; customer list shows tier; CI workflow_dispatch validates optional hub public keys.
+**Checks:** `cd licence-hub && npm test` (84 pass); `cd tests && timeout 600 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time test_crypto`.
+**Next:** Owner deploy hub worker; no D1 migration.
+
+## REV-owner4 hub fixes (2026-10-14)
+
+**What/why:** Paid/permanent online approval upgrades after trial without clearing one-trial locks; force reissue keeps trial lock; legacy `d:` / `offline:<device>` honoured for offline trip-orders; offline lock races check `storedGrantMatches`; owner approve cancel skips POST; customers API one row per device+product.
+**Checks:** `cd licence-hub && timeout 120 npm test` (77 pass); `cd tests && timeout 600 python3 -m unittest` (full suite pass).
+**Next:** Owner deploy hub worker; no D1 migration.
+
+## REV-owner3 hub fixes (2026-10-14)
+
+**What/why:** Offline activation rows keyed `offline:<product>:<device>` with product-aware grant match and locks; hub calendar signs only global trial/paid keys (documented); owner capabilities and panel tier controls per product; offline submit waits for products; customers list shows product.
+**Checks:** `cd licence-hub && npm test` (71 pass); `cd gateway && node --test test/gateway.test.js` (24 pass); `cd tests && timeout 600 python3 -m unittest` (full suite pass).
+**Next:** Owner deploy; ensure every product build trusts global `trial-hub` / `paid` public keys for hub time.
+
+## REV-owner2 hub fixes (2026-10-14)
+
+**What/why:** Purge stale codes by `licence_tier` only; register `GET /owner/api/products` before 405; hub time and owner capabilities honor per-product signing keys; real `0002` migration SQL, `--local` CLI note, `wrangler.toml` products list.
+**Checks:** `cd licence-hub && timeout 120 npm test`; `cd tests && timeout 300 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time`.
+**Next:** Owner deploy with optional `*_AL_STORE` secrets only if trip-orders globals omitted.
+
+## Grok review fixes — hub seal, re-issue, multi-product (2026-10-14)
+
+**What/why:** Address REV-owner1 (P1–Low): capped hub-day sealing in office; hub clock signing via plain env keys (trial then paid kid); grant-aware re-issue; trial-only code purge; D1 migration docs/guard; owner tier radios per card; Cairo month clamp; hub URL pin; multi-product `trip-orders` + `al-store`, route prefixes, `/licence/clock`.
+**Checks:** `cd licence-hub && timeout 120 npm test` (61 pass); `cd tests && timeout 300 python3 -m unittest test_commercial_licence test_licence_hub_signer` (65 pass).
+**Next:** Owner runs guarded migrations before deploy; set `LICENCE_PRODUCTS` and optional per-product keys on Cloudflare.
+
+## Owner panel paid hub licences (2026-10-14)
+
+**What/why:** Single owner panel issues trial, paid-until-date, and permanent codes (`PAID_SIGNING_KEY` kid `paid`); signed hub calendar time; office trusts `paid` keys, warns on corrupt clock file, seals hub day against hub URL rollback; CI workflow_dispatch optional trial-hub and paid public keys.
+**Checks:** `cd licence-hub && timeout 300 npm test` (45 pass); `cd tests && timeout 600 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time` (64 pass).
+**Next:** Owner deploy `PAID_SIGNING_KEY`, run D1 migration, rebuild commercial installers with `paid:<public>`.
+
 ## Merge origin/main into feat/licence-standard (2026-10-13)
 
 **What/why:** Merged `main` into PR #31 branch after `feat/simple-trial-activation` merge; kept licence-standard hub catch-up cap and paid calendar recovery.

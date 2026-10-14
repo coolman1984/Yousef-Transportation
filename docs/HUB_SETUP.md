@@ -27,7 +27,7 @@ Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screens
 - **Licence public keys (contract / source installs):** one or more `kid:key` lines in `licence_keys.txt` next to `config.json` (or `TO_LICENCE_KEYS`, or `"licence_keys"` in `config.json`). With no key the program is "licence by contract" and nothing is enforced.
 - **Commercial installers:** trusted public keys and which keys are **trial-only** are compiled into the program at build time (`TO_RELEASE_PUBLIC_KEYS` with `trial-hub:` and `studio:` kids). Customer `licence_keys.txt` cannot change that policy.
 
-The calendar response uses `LICENCE_CALENDAR_TZ` (default `Africa/Cairo`) and only moves the effective licence day forward. A paid licence past its last day plus its signed grace period becomes expired: editing stops, while reading, exporting and backing up remain available under existing permissions. Network failures leave the calendar unchanged. Redeploy the updated hub and rebuild the customer app to enable this protection.
+The calendar response uses `LICENCE_CALENDAR_TZ` (default `Africa/Cairo`), is **signed** (`calendar_day`, `kid` `trial-hub` or `paid`, `sig`), and only moves the effective licence day forward when the office trusts the signature. A sealed hub day in assist storage cannot be lowered by changing `licence_hub_url` to another hub. A paid licence past its last day plus its signed grace period becomes expired: editing stops, while reading, exporting and backing up remain available under existing permissions. Network failures leave the calendar unchanged. Redeploy the updated hub and rebuild the customer app to enable this protection.
 
 Activation processing and calendar checking have separate failure boundaries. HTTP errors, truncated responses, non-object JSON and invalid dates leave the last good date intact and schedule a retry. The trial status watch still runs when the public calendar check fails. Retry timers only schedule requests; they do not measure usage or determine expiry.
 
@@ -51,7 +51,7 @@ openssl pkey -in trial-hub.pem -pubout -outform DER | tail -c 32 | openssl base6
 
 1. Deploy **licence hub** with `npx wrangler secret put LICENCE_SIGNING_KEY` ← PKCS#8 PEM of **trial-hub.pem** only.
 2. Customer **commercial** builds embed `trial-hub:<public>` and `studio:<public>` via `TO_RELEASE_PUBLIC_KEYS` at build time (not via `licence_keys.txt`).
-3. Keep the Licence Studio **paid** private key off Cloudflare. Monthly/permanent codes stay Studio-only; the office refuses codes from the `trial-hub` kid unless they are **trial** edition and at most **14 days**.
+3. Set `PAID_SIGNING_KEY` (kid `paid`) for hub-issued monthly/permanent codes, or keep paid signing in Licence Studio only. The office refuses codes from the `trial-hub` kid unless they are **trial** edition and at most **14 days**; `paid` is not trial-capped.
 
 The program enforces that rule in `server/afcodes.py` / `server/licence.py`, so a leaked Worker secret cannot mint monthly or perpetual licences customers will accept.
 

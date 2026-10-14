@@ -56,3 +56,7 @@ textarea.code { min-height: 6rem; font-family: ui-monospace, monospace; directio
 .row { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; }
 .err { color: var(--bad); }
 .big-code { font-size: 1.1rem; word-break: break-all; direction: ltr; text-align: start; }
+.tier-pick { border: 1px solid var(--line); border-radius: 10px; padding: .75rem; margin: .75rem 0; }
+.tier-pick legend { font-weight: 600; padding: 0 .25rem; }
+.tier-opt { display: block; margin-block: .35rem; }
+.tier-paid { margin-block-start: .5rem; padding-inline-start: .25rem; }

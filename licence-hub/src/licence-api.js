@@ -1,6 +1,9 @@
-import { issueTrialCode, normalize } from './afcodes.js';
+import {
+  issueTrialCode, issuePaidUntilCode, issuePermanentCode, paidPresetLastDay, normalize, importSigningKey,
+} from './afcodes.js';
 import { hex } from './auth.js';
-import { calendarDateInTz } from './calendar.js';
+import { calendarDateInTz, isValidCalendarIso } from './calendar.js';
+import { signHubCalendar } from './hub-time.js';
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -18,8 +21,11 @@ const TIME_MAX_IPS = 5000;
 const timeIps = new Map();
 let timeWindow;
 
-const REQUIRED = ['product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
+const REQUIRED = ['kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
 export const REASON_PAID_IN_STUDIO = 'paid_in_licence_studio';
+export const REASON_PAID_KEY_MISSING = 'paid_signing_key_missing';
+const HUB_TIME_KID_TRIAL = 'trial-hub';
+const HUB_TIME_KID_PAID = 'paid';
 
 const MAX_DEVICE = 32;
 const MAX_MACHINE = 128;
@@ -75,8 +81,37 @@ function timeLimited(ip) {
   return false;
 }
 
-function products(env) {
-  return new Set(String(env.LICENCE_PRODUCTS || 'trip-orders').split(',').map((s) => s.trim()).filter(Boolean));
+export function products(env) {
+  return new Set(String(env.LICENCE_PRODUCTS || 'trip-orders,al-store').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+export function productEnvSuffix(productId) {
+  return String(productId || 'trip-orders').trim().toUpperCase().replace(/-/g, '_');
+}
+
+export function signingKeyForProduct(env, baseName, productId) {
+  const specific = env[`${baseName}_${productEnvSuffix(productId)}`];
+  if (specific) return specific;
+  return env[baseName] || null;
+}
+
+/** First non-empty global or per-product secret in LICENCE_PRODUCTS order. */
+export function anySigningKeyPem(env, baseName) {
+  if (env[baseName]) return env[baseName];
+  for (const productId of products(env)) {
+    const specific = env[`${baseName}_${productEnvSuffix(productId)}`];
+    if (specific) return specific;
+  }
+  return null;
+}
+
+export async function loadSigningKeys(env, productId = 'trip-orders') {
+  const keys = { trialKey: null, paidKey: null };
+  const trialPem = signingKeyForProduct(env, 'LICENCE_SIGNING_KEY', productId);
+  const paidPem = signingKeyForProduct(env, 'PAID_SIGNING_KEY', productId);
+  if (trialPem) keys.trialKey = await importSigningKey(trialPem);
+  if (paidPem) keys.paidKey = await importSigningKey(paidPem);
+  return keys;
 }
 
 function pendingTtl(env) {
@@ -99,6 +134,26 @@ export function deviceKey(device) {
 
 export function deviceLockKey(dkey) {
   return `d:${dkey}`;
+}
+
+export function offlineRequestId(productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `offline:${product}:${dkey}`;
+}
+
+/** Pre–multi-product offline request id and lock row (trip-orders trial only). */
+export function legacyOfflineRequestId(dkey) {
+  return `offline:${dkey}`;
+}
+
+export function legacyOfflineLockKey(dkey) {
+  return legacyOfflineRequestId(dkey);
+}
+
+/** Offline trial lock is per product + device so multiple products can share one device code. */
+export function offlineDeviceLockKey(productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `od:${product}:${dkey}`;
 }
 
 export function machineLockKey(machineHash) {
@@ -150,6 +205,18 @@ export async function trialUsedForDevice(env, deviceKeyNorm) {
   return Boolean(row);
 }
 
+export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await trialLockRow(env, offlineDeviceLockKey(product, deviceKeyNorm))) return true;
+  if (product !== 'trip-orders') return false;
+  if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
+  if (await trialLockRow(env, legacyOfflineLockKey(deviceKeyNorm))) return true;
+  const legacyReq = await env.DB.prepare(
+    "SELECT id FROM licence_requests WHERE id = ? AND status IN ('issued', 'delivered')",
+  ).bind(legacyOfflineRequestId(deviceKeyNorm)).first();
+  return Boolean(legacyReq);
+}
+
 /** Online path: refuse when device code or stable machine hash was already used. */
 export async function trialUsedOnline(env, deviceKeyNorm, machineHash) {
   if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
@@ -177,6 +244,174 @@ function hubCalendarDay(env) {
   return calendarDateInTz(new Date(), tz).iso;
 }
 
+export function hubTimeSigningMaterial(env) {
+  const trialPem = env.LICENCE_SIGNING_KEY || null;
+  const paidPem = env.PAID_SIGNING_KEY || null;
+  if (!trialPem && !paidPem) return null;
+  if (trialPem) return { pem: trialPem, kid: HUB_TIME_KID_TRIAL };
+  if (paidPem) return { pem: paidPem, kid: HUB_TIME_KID_PAID };
+  return null;
+}
+
+export async function hubCalendarSigned(env) {
+  const day = hubCalendarDay(env);
+  const material = hubTimeSigningMaterial(env);
+  const serverTime = now();
+  if (!material) return { calendar_day: day, serverTime };
+  const key = await importSigningKey(material.pem);
+  const signed = await signHubCalendar(key, material.kid, day);
+  return { ...signed, serverTime };
+}
+
+export function parseOwnerGrant(body = {}) {
+  const grant = String(body.grant || body.tier || 'trial').trim().toLowerCase();
+  if (grant === 'trial' || grant === '14d') return { grant: 'trial' };
+  if (grant === 'permanent' || grant === 'perm') return { grant: 'permanent' };
+  if (grant === 'paid' || grant === 'monthly') {
+    const preset = String(body.preset || '').trim();
+    let until = String(body.paid_until || body.until || '').trim();
+    if (preset && !until) {
+      try {
+        until = paidPresetLastDay(preset);
+      } catch {
+        throw new Error('bad_preset');
+      }
+    }
+    if (!isValidCalendarIso(until)) throw new Error('bad_paid_until');
+    return { grant: 'paid', paid_until: until };
+  }
+  throw new Error('bad_grant');
+}
+
+export function storedGrantMatches(row, grant, productId) {
+  const expectedProduct = String(productId ?? row.product ?? 'trip-orders').trim() || 'trip-orders';
+  const rowProduct = String(row.product || 'trip-orders').trim() || 'trip-orders';
+  if (rowProduct !== expectedProduct) return false;
+  const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
+  const expiry = String(row.licence_expiry || '').trim();
+  if (grant.grant === 'trial') return tier === 'trial' || tier === '';
+  if (grant.grant === 'permanent') return tier === 'permanent';
+  if (grant.grant === 'paid') return tier === 'paid' && expiry === grant.paid_until;
+  return false;
+}
+
+export function grantStrengthFromRow(row) {
+  const tier = String(row?.licence_tier || row?.kind || '').trim().toLowerCase();
+  if (tier === 'permanent') return { level: 3, paidUntil: '' };
+  if (tier === 'paid' || tier === 'monthly') {
+    return { level: 2, paidUntil: String(row?.licence_expiry || '').trim() };
+  }
+  return { level: 1, paidUntil: '' };
+}
+
+export function grantStrengthFromGrant(grant) {
+  if (grant.grant === 'permanent') return { level: 3, paidUntil: '' };
+  if (grant.grant === 'paid') return { level: 2, paidUntil: String(grant.paid_until || '').trim() };
+  return { level: 1, paidUntil: '' };
+}
+
+/** True when a new grant would replace a stored code with a weaker or shorter paid term. */
+export function wouldDowngradeGrant(existingRow, grant) {
+  if (!existingRow) return false;
+  const cur = grantStrengthFromRow(existingRow);
+  if (!cur.level) return false;
+  const next = grantStrengthFromGrant(grant);
+  if (next.level < cur.level) return true;
+  if (cur.level === 2 && next.level === 2 && cur.paidUntil && next.paidUntil && next.paidUntil < cur.paidUntil) {
+    return true;
+  }
+  return false;
+}
+
+export function termFromRow(row) {
+  if (!row) return null;
+  const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
+  if (!tier) return null;
+  const paidLike = tier === 'paid' || tier === 'monthly';
+  const until = paidLike ? String(row.licence_expiry ?? row.last_day ?? '').trim() : '';
+  return { tier: tier === 'monthly' ? 'paid' : tier, until };
+}
+
+export function pickStrongerTerm(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const cur = grantStrengthFromRow({ licence_tier: a.tier, licence_expiry: a.until });
+  const other = grantStrengthFromRow({ licence_tier: b.tier, licence_expiry: b.until });
+  if (other.level > cur.level) return b;
+  if (cur.level > other.level) return a;
+  if (cur.level === 2 && other.level === 2 && other.paidUntil > cur.paidUntil) return b;
+  return a;
+}
+
+/** Strongest known grant for product+device from customers and issued/delivered rows (code may be cleared after ack). */
+export async function currentTerm(env, productId, device) {
+  const dkey = deviceKey(device);
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  const offlineId = offlineRequestId(product, dkey);
+  let best = null;
+
+  const cust = await env.DB.prepare(
+    'SELECT licence_tier, licence_expiry, kind, last_day FROM customers WHERE device = ?',
+  ).bind(device).first();
+  best = pickStrongerTerm(best, termFromRow(cust));
+
+  const rows = await env.DB.prepare(
+    `SELECT licence_tier, licence_expiry, kind FROM licence_requests
+     WHERE device_key = ? AND status IN ('issued', 'delivered') AND (product = ? OR id = ?)`,
+  ).bind(dkey, product, offlineId).all();
+  for (const row of rows.results || []) {
+    best = pickStrongerTerm(best, termFromRow(row));
+  }
+  return best;
+}
+
+export function wouldDowngradeTerm(term, grant) {
+  if (!term?.tier) return false;
+  const cur = grantStrengthFromRow({ licence_tier: term.tier, licence_expiry: term.until });
+  const next = grantStrengthFromGrant(grant);
+  if (next.level < cur.level) return true;
+  if (cur.level === 2 && next.level === 2 && cur.paidUntil && next.paidUntil && next.paidUntil < cur.paidUntil) {
+    return true;
+  }
+  return false;
+}
+
+export function downgradeError(term) {
+  const e = new Error('downgrade');
+  e.current = { tier: term.tier, until: term.until || '' };
+  return e;
+}
+
+async function latestIssuedForDeviceProduct(env, productId, dkey) {
+  return env.DB.prepare(
+    "SELECT * FROM licence_requests WHERE product = ? AND device_key = ? AND status IN ('issued', 'delivered') ORDER BY updated_at DESC LIMIT 1",
+  ).bind(String(productId || 'trip-orders').trim() || 'trip-orders', dkey).first();
+}
+
+function customerUpsertStmts(env, shop, signed, meta, t, requestId) {
+  const device = signed.device;
+  const shopTrim = shop.slice(0, 60) || '—';
+  const expiry = meta.expiry || null;
+  return [
+    env.DB.prepare(
+      `UPDATE customers SET shop = ?, kind = ?, serial = ?, first_day = ?, last_day = ?, licence_tier = ?, licence_expiry = ?
+       WHERE device = ? AND EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)`,
+    ).bind(shopTrim, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, expiry, device, requestId, signed.code),
+    env.DB.prepare(
+      `INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM customers WHERE device = ?)
+         AND EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)`,
+    ).bind(crypto.randomUUID(), shopTrim, device, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, expiry, t, device, requestId, signed.code),
+  ];
+}
+
+function tierMeta(grant, signed) {
+  if (grant.grant === 'trial') return { kind: 'trial', tier: 'trial', expiry: signed.last_day || '' };
+  if (grant.grant === 'permanent') return { kind: 'permanent', tier: 'permanent', expiry: '' };
+  return { kind: 'monthly', tier: 'paid', expiry: grant.paid_until || signed.last_day || '' };
+}
+
 async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
   const locks = [deviceLockKey(dkey)];
   if (machineHash) locks.push(machineLockKey(machineHash));
@@ -187,13 +422,23 @@ async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
   return true;
 }
 
+export function licencePathname(pathname) {
+  let p = pathname;
+  for (const prefix of ['/api', '/licence-hub']) {
+    if (p === prefix) p = '/';
+    else if (p.startsWith(prefix + '/')) p = p.slice(prefix.length);
+  }
+  return p;
+}
+
 export async function handleLicence(request, env, url) {
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
-  if (url.pathname === '/licence/time' && request.method === 'GET') {
+  const path = licencePathname(url.pathname);
+  if ((path === '/licence/time' || path === '/licence/clock') && request.method === 'GET') {
     if (timeLimited(ip)) {
       return json({ error: 'rate' }, 429, { 'Retry-After': String(WINDOW - now() % WINDOW) });
     }
-    return json({ calendar_day: hubCalendarDay(env) });
+    return json(await hubCalendarSigned(env));
   }
 
   if (await limited(env, 'lic:ip:' + ip, 120)) return json({ error: 'rate' }, 429);
@@ -202,12 +447,16 @@ export async function handleLicence(request, env, url) {
   await migrateLegacyTrialLocks(env);
   await expireStalePending(env);
 
-  if (url.pathname === '/licence/request' && request.method === 'POST') {
+  if (path === '/licence/request' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'json' }, 400); }
     for (const f of REQUIRED) {
       if (typeof body[f] !== 'string') return json({ field: f }, 400);
     }
+    const product = typeof body.product === 'string' && body.product.trim()
+      ? body.product.trim()
+      : 'trip-orders';
+    body.product = product;
     if (body.device.length > MAX_DEVICE || body.machine.length > MAX_MACHINE || body.nonce.length > MAX_NONCE) {
       return json({ field: 'device' }, 400);
     }
@@ -237,10 +486,15 @@ export async function handleLicence(request, env, url) {
     const t = now();
 
     if (body.kind !== 'trial') {
+      if (await openRequestForDevice(env, dkey)) {
+        return json({ field: 'device' }, 400);
+      }
+      if (await limited(env, 'lic:pending:' + ip, MAX_PENDING_PER_IP)) return json({ error: 'rate' }, 429);
       await env.DB.prepare(
-        'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, body.shop.slice(0, 60), body.ref.slice(0, 60), body.version.slice(0, 40), 'refused', REASON_PAID_IN_STUDIO, t, t).run();
-      return json({ id, poll_token: poll, status: 'refused', reason: REASON_PAID_IN_STUDIO });
+        'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, body.shop.slice(0, 60), body.ref.slice(0, 60), body.version.slice(0, 40), 'pending', t, t).run();
+      await notifyOwner(env, body);
+      return json({ id, poll_token: poll, status: 'pending' });
     }
 
     if (await trialUsedOnline(env, dkey, machineHash)) {
@@ -264,7 +518,7 @@ export async function handleLicence(request, env, url) {
     return json({ id, poll_token: poll, status: 'pending' });
   }
 
-  if (url.pathname === '/licence/status' && request.method === 'GET') {
+  if (path === '/licence/status' && request.method === 'GET') {
     const id = url.searchParams.get('id') || '';
     const auth = request.headers.get('Authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -272,29 +526,29 @@ export async function handleLicence(request, env, url) {
     const pollHash = await sha256Hex(token);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ? AND poll_token_hash = ?').bind(id, pollHash).first();
     if (!row) return json({}, 401);
-    const calendarDay = hubCalendarDay(env);
-    if (row.status === 'pending') return json({ status: 'pending', stage: row.stage || '', calendar_day: calendarDay });
-    if (row.status === 'approved') return json({ status: 'pending', stage: 'approved', calendar_day: calendarDay });
+    const cal = await hubCalendarSigned(env);
+    if (row.status === 'pending') return json({ status: 'pending', stage: row.stage || '', ...cal });
+    if (row.status === 'approved') return json({ status: 'pending', stage: 'approved', ...cal });
     if (row.status === 'issued' && row.code) {
       let dkey;
       try {
         dkey = deviceKey(row.device_key || row.device);
       } catch {
-        return json({ status: 'pending', calendar_day: calendarDay });
+        return json({ status: 'pending', ...cal });
       }
       const machineHash = normalizeMachineHash(row.machine);
       if (!(await locksOwnedByRequest(env, dkey, machineHash, row.id))) {
-        return json({ status: 'pending', calendar_day: calendarDay });
+        return json({ status: 'pending', ...cal });
       }
-      return json({ status: 'issued', code: row.code, calendar_day: calendarDay });
+      return json({ status: 'issued', code: row.code, ...cal });
     }
-    if (row.status === 'refused') return json({ status: 'refused', reason: row.reason || 'refused', calendar_day: calendarDay });
-    if (row.status === 'expired') return json({ status: 'expired', calendar_day: calendarDay });
-    if (row.status === 'delivered') return json({ status: 'delivered', calendar_day: calendarDay });
-    return json({ status: row.status, calendar_day: calendarDay });
+    if (row.status === 'refused') return json({ status: 'refused', reason: row.reason || 'refused', ...cal });
+    if (row.status === 'expired') return json({ status: 'expired', ...cal });
+    if (row.status === 'delivered') return json({ status: 'delivered', ...cal });
+    return json({ status: row.status, ...cal });
   }
 
-  if (url.pathname === '/licence/ack' && request.method === 'POST') {
+  if (path === '/licence/ack' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'json' }, 400); }
     const id = body.id || '';
@@ -315,7 +569,7 @@ async function notifyOwner(env, body) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chat = env.TELEGRAM_CHAT_ID;
   if (!token || !chat) return;
-  const text = `طلب ترخيص جديد\n${body.kind} · ${body.shop || '—'}\nجهاز: ${body.device}`;
+  const text = `طلب ترخيص جديد\n${body.product || 'trip-orders'} · ${body.kind} · ${body.shop || '—'}\nجهاز: ${body.device}`;
   try {
     await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -338,10 +592,21 @@ function signedFromRow(row, signed = null) {
   };
 }
 
-async function clearTrialLocks(env, dkey, machineHash) {
-  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
-  if (machineHash) await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(machineLockKey(machineHash)).run();
-  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
+async function upsertDeviceLocks(env, requestId, dkey, machineHash, t) {
+  const locks = [deviceLockKey(dkey)];
+  if (machineHash) locks.push(machineLockKey(machineHash));
+  for (const lock of locks) {
+    await env.DB.prepare(
+      'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id, at = excluded.at',
+    ).bind(lock, requestId, t).run();
+  }
+}
+
+async function reassignOfflineProductLock(env, productId, dkey, requestId, t) {
+  const lock = offlineDeviceLockKey(productId, dkey);
+  await env.DB.prepare(
+    'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id, at = excluded.at',
+  ).bind(lock, requestId, t).run();
 }
 
 async function waitForIssuedOffline(env, requestId, attempts = 30) {
@@ -362,32 +627,58 @@ async function ensureCustomerRecord(env, row, signed, t) {
 }
 
 async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, meta = {}) {
-  if (force) await clearTrialLocks(env, dkey, machineHash);
+  const grantKind = meta.grantKind || 'trial';
+  const isTrialGrant = grantKind === 'trial';
+  const deviceTrialUsed = await trialUsedForDevice(env, dkey);
+  const paidUpgrade = !isTrialGrant && deviceTrialUsed;
+  const replace = meta.replace === true;
 
   const locks = [deviceLockKey(dkey)];
   if (machineHash) locks.push(machineLockKey(machineHash));
 
-  const stmts = locks.map((lock) =>
-    env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
-  );
-  let issueSql =
-    'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ? WHERE id = ? AND code IS NULL AND status NOT IN (?, ?) AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
-  const issueBinds = ['issued', 'approved', signed.code, t, requestId, 'refused', 'delivered', deviceLockKey(dkey), requestId];
-  if (machineHash) {
-    issueSql += ' AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
-    issueBinds.push(machineLockKey(machineHash), requestId);
+  const stmts = [];
+  if (replace || (force && isTrialGrant) || paidUpgrade) {
+    await upsertDeviceLocks(env, requestId, dkey, machineHash, t);
+  } else {
+    for (const lock of locks) {
+      stmts.push(
+        env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
+      );
+    }
   }
-  stmts.push(env.DB.prepare(issueSql).bind(...issueBinds));
+
   const shop = meta.shop || '—';
   const kind = meta.kind || 'trial';
-  stmts.push(env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code));
+  const tier = meta.tier || kind;
+  const expiry = meta.expiry || signed.last_day || '';
+  let issueSql;
+  let issueBinds;
+  if (replace) {
+    issueSql =
+      'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ?, licence_tier = ?, licence_expiry = ? WHERE id = ? AND status NOT IN (?, ?)';
+    issueBinds = ['issued', 'approved', signed.code, t, tier, expiry || null, requestId, 'refused', 'delivered'];
+  } else {
+    issueSql =
+      'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ? WHERE id = ? AND code IS NULL AND status NOT IN (?, ?) AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
+    issueBinds = ['issued', 'approved', signed.code, t, requestId, 'refused', 'delivered', deviceLockKey(dkey), requestId];
+    if (machineHash) {
+      issueSql += ' AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
+      issueBinds.push(machineLockKey(machineHash), requestId);
+    }
+  }
+  stmts.push(env.DB.prepare(issueSql).bind(...issueBinds));
+  stmts.push(...customerUpsertStmts(env, shop, signed, { kind, tier, expiry }, t, requestId));
+  if (!replace) {
+    stmts.push(env.DB.prepare(
+      'UPDATE licence_requests SET licence_tier = ?, licence_expiry = ? WHERE id = ? AND code = ?',
+    ).bind(tier, expiry || null, requestId, signed.code));
+  }
   stmts.push(env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId));
+  const issueStmtIndex = replace ? stmts.length - 4 : stmts.length - 5;
   const results = await env.DB.batch(stmts);
-  const issued = results[locks.length]?.meta?.changes > 0;
+  const issued = results[issueStmtIndex]?.meta?.changes > 0;
   if (!issued) {
     const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (existing?.code && existing.status === 'issued') {
@@ -401,16 +692,32 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   return { ok: true, signed };
 }
 
-export async function approveRequest(env, requestId, privateKey, options = {}) {
+async function signGrant(env, keys, grant, row) {
+  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
+  const when = new Date();
+  if (grant.grant === 'trial') {
+    if (!keys.trialKey) throw new Error('no_signing_key');
+    const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
+    return issueTrialCode(keys.trialKey, row.product, row.device, days, when, tz);
+  }
+  if (!keys.paidKey) return { refused: true, reason: REASON_PAID_KEY_MISSING };
+  if (grant.grant === 'permanent') {
+    return issuePermanentCode(keys.paidKey, row.product, row.device, when, tz);
+  }
+  return issuePaidUntilCode(keys.paidKey, row.product, row.device, grant.paid_until, when, tz);
+}
+
+export async function approveRequest(env, requestId, keys, options = {}) {
   await migrateLegacyTrialLocks(env);
   const force = options.force === true;
+  let grant;
+  try {
+    grant = parseOwnerGrant(options);
+  } catch {
+    throw new Error('bad_grant');
+  }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (!row || row.status === 'refused' || row.status === 'delivered') return null;
-
-  if (row.kind !== 'trial') {
-    await refuseRequest(env, requestId, REASON_PAID_IN_STUDIO);
-    return { refused: true, reason: REASON_PAID_IN_STUDIO };
-  }
 
   let dkey;
   try {
@@ -420,35 +727,51 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
     throw new Error('bad_device_code');
   }
   const machineHash = normalizeMachineHash(row.machine);
+  const productId = String(row.product || 'trip-orders').trim() || 'trip-orders';
+  const rowIssued = row.status === 'issued' && row.code ? row : null;
+  const knownTerm = await currentTerm(env, productId, row.device);
 
-  if (row.status === 'issued' && row.code) {
-    if (await locksOwnedByRequest(env, dkey, machineHash, requestId)) {
+  let replaceMode = false;
+  if (rowIssued) {
+    const ownsLocks = await locksOwnedByRequest(env, dkey, machineHash, requestId);
+    if (!force && storedGrantMatches(row, grant, productId) && ownsLocks) {
       await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
-    await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, updated_at = ? WHERE id = ?')
-      .bind('approved', now(), requestId).run();
+    if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
+    replaceMode = true;
+  } else if (!force && knownTerm && wouldDowngradeTerm(knownTerm, grant)) {
+    throw downgradeError(knownTerm);
   }
 
-  if (!force && (await trialUsedOnline(env, dkey, machineHash))) {
-    await refuseRequest(env, requestId, 'already_used');
-    return null;
+  if (grant.grant === 'trial' && !force && (await trialUsedOnline(env, dkey, machineHash))) {
+    const owns = await locksOwnedByRequest(env, dkey, machineHash, requestId);
+    if (!owns) {
+      if (knownTerm && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
+      await refuseRequest(env, requestId, 'already_used');
+      return null;
+    }
   }
 
   const t = now();
-  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
-  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   let signed;
   try {
-    signed = await issueTrialCode(privateKey, row.product, row.device, days, new Date(), tz);
+    signed = await signGrant(env, keys, grant, row);
   } catch (e) {
     if (e?.message === 'bad_device_code') {
       await refuseRequest(env, requestId, 'bad_device');
     }
     throw e;
   }
+  if (signed?.refused) {
+    await refuseRequest(env, requestId, signed.reason || REASON_PAID_KEY_MISSING);
+    return signed;
+  }
 
-  const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, { shop: row.shop, kind: row.kind });
+  const meta = tierMeta(grant, signed);
+  const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, {
+    shop: row.shop, kind: meta.kind, tier: meta.tier, expiry: meta.expiry, grantKind: grant.grant, replace: replaceMode,
+  });
   if (!outcome.ok) return null;
   return outcome.signed || signed;
 }
@@ -458,21 +781,36 @@ export async function refuseRequest(env, requestId, reason = 'refused') {
     .bind('refused', reason, now(), requestId).run();
 }
 
-async function issueOfflineCustomerInner(env, privateKey, device, shop, productId, options = {}) {
+async function issueOfflineCustomerInner(env, keys, device, shop, productId, options = {}) {
   const force = options.force === true;
+  let grant;
+  try {
+    grant = parseOwnerGrant(options);
+  } catch {
+    throw new Error('bad_grant');
+  }
   const dkey = deviceKey(device);
-  const requestId = 'offline:' + dkey;
-  const lock = deviceLockKey(dkey);
+  const requestId = offlineRequestId(productId, dkey);
+  const lock = offlineDeviceLockKey(productId, dkey);
+  const knownTerm = await currentTerm(env, productId, device);
   const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+  let ownsLock = false;
+  let replacingIssued = false;
   if (existing?.code && existing.status === 'issued') {
     const claim = await trialLockRow(env, lock);
     if (claim && claim.request_id === requestId) {
-      await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
-      return signedFromRow(existing);
+      if (!force && storedGrantMatches(existing, grant, productId)) {
+        await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
+        return signedFromRow(existing);
+      }
+      if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
+      ownsLock = true;
+      replacingIssued = true;
     }
+  } else if (!force && knownTerm && wouldDowngradeTerm(knownTerm, grant)) {
+    throw downgradeError(knownTerm);
   }
-  let ownsLock = false;
-  if (!force && (await trialUsedForDevice(env, dkey))) {
+  if (grant.grant === 'trial' && !force && (await trialUsedForOfflineProduct(env, productId, dkey))) {
     const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (row?.code && row.status === 'issued') {
@@ -483,11 +821,26 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     else throw new Error('already_used');
   }
   const t = now();
-  if (force) await clearTrialLocks(env, dkey, null);
+  if (force && grant.grant === 'trial') await reassignOfflineProductLock(env, productId, dkey, requestId, t);
 
+  const resolveOfflineRowGrant = async (row) => {
+    if (!row?.code || row.status !== 'issued') return false;
+    if (storedGrantMatches(row, grant, productId)) {
+      await ensureCustomerRecord(env, row, signedFromRow(row), t);
+      return signedFromRow(row);
+    }
+    if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
+    if (replacingIssued || force) {
+      ownsLock = true;
+      return false;
+    }
+    throw new Error('grant_conflict');
+  };
+
+  const offlineKind = grant.grant === 'permanent' ? 'permanent' : grant.grant === 'paid' ? 'monthly' : 'trial';
   await env.DB.prepare(
-    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
-  ).bind(requestId, 'offline', productId, 'trial', device, dkey, '', 'offline-' + dkey, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET product = excluded.product, kind = excluded.kind, shop = excluded.shop, updated_at = excluded.updated_at',
+  ).bind(requestId, 'offline', productId, offlineKind, device, dkey, '', 'offline-' + requestId, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
 
   if (!ownsLock) {
     const ins = await env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
@@ -496,18 +849,18 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
       const claim = await trialLockRow(env, lock);
       if (claim?.request_id === requestId) {
         const row = await waitForIssuedOffline(env, requestId);
-        if (row) {
-          await ensureCustomerRecord(env, row, signedFromRow(row), t);
-          return signedFromRow(row);
-        }
+        const done = row ? await resolveOfflineRowGrant(row) : false;
+        if (done) return done;
         ownsLock = true;
       } else {
         const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
+        const done = row ? await resolveOfflineRowGrant(row) : false;
+        if (done) return done;
         if (row?.code && row.status === 'issued') {
-          await ensureCustomerRecord(env, row, signedFromRow(row), t);
-          return signedFromRow(row);
+          ownsLock = true;
+        } else {
+          throw new Error('already_used');
         }
-        throw new Error('already_used');
       }
     } else {
       ownsLock = true;
@@ -516,34 +869,58 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
   const claim = await trialLockRow(env, lock);
   if (!claim || claim.request_id !== requestId) {
     const row = await waitForIssuedOffline(env, requestId);
-    if (row) {
-      await ensureCustomerRecord(env, row, signedFromRow(row), t);
-      return signedFromRow(row);
-    }
-    throw new Error('already_used');
+    const done = row ? await resolveOfflineRowGrant(row) : false;
+    if (done) return done;
+    if (!ownsLock && !replacingIssued) throw new Error('already_used');
+    ownsLock = true;
   }
 
-  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
-  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
-  const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
-  const issueSql =
-    'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ? WHERE id = ? AND code IS NULL AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
-  const customerStmt = env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code);
+  const grantRow = { product: productId, device };
+  let signed;
+  try {
+    signed = await signGrant(env, keys, grant, grantRow);
+  } catch (e) {
+    if (e?.message === 'no_signing_key') throw e;
+    throw e;
+  }
+  if (signed?.refused) throw new Error(signed.reason || 'paid_signing_key_missing');
+  const meta = tierMeta(grant, signed);
+  const replacing = replacingIssued;
+  const issueSql = replacing
+    ? 'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ?, licence_tier = ?, licence_expiry = ? WHERE id = ? AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)'
+    : 'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ? WHERE id = ? AND code IS NULL AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
+  const issueBinds = replacing
+    ? ['issued', signed.code, signed.device, t, meta.tier, meta.expiry || null, requestId, lock, requestId]
+    : ['issued', signed.code, signed.device, t, requestId, lock, requestId];
+  const customerStmts = customerUpsertStmts(env, shop, signed, meta, t, requestId);
+  const tierStmt = replacing
+    ? null
+    : env.DB.prepare(
+      'UPDATE licence_requests SET licence_tier = ?, licence_expiry = ? WHERE id = ? AND code = ?',
+    ).bind(meta.tier, meta.expiry || null, requestId, signed.code);
   const cleanupStmt = env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId);
+  const batchStmts = [
+    env.DB.prepare(issueSql).bind(...issueBinds),
+    ...customerStmts,
+    cleanupStmt,
+  ];
+  if (tierStmt) batchStmts.splice(2, 0, tierStmt);
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (grant.grant === 'trial' && product === 'trip-orders') {
+    batchStmts.push(
+      env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
+        .bind(deviceLockKey(dkey), requestId, t),
+    );
+  }
   try {
-    const results = await env.DB.batch([
-      env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
-      customerStmt,
-      cleanupStmt,
-    ]);
+    const results = await env.DB.batch(batchStmts);
     const issued = results[0]?.meta?.changes > 0;
     if (!issued) {
       const row = await waitForIssuedOffline(env, requestId);
       if (row) {
+        if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
         await ensureCustomerRecord(env, row, signedFromRow(row), t);
         return signedFromRow(row);
       }
@@ -552,6 +929,7 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
   } catch (e) {
     const row = await waitForIssuedOffline(env, requestId);
     if (row) {
+      if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
       await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }
@@ -570,23 +948,37 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
   throw new Error('already_used');
 }
 
-export function issueOfflineCustomer(env, privateKey, device, shop, productId, options = {}) {
+export function issueOfflineCustomer(env, keys, device, shop, productId, options = {}) {
   const dkey = deviceKey(device);
+  const tailKey = `${String(productId || 'trip-orders').trim()}:${dkey}`;
   const tails = offlineTailMap(env);
-  const prev = tails.get(dkey) || Promise.resolve();
-  const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, privateKey, device, shop, productId, options));
-  tails.set(dkey, job);
+  const prev = tails.get(tailKey) || Promise.resolve();
+  const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, keys, device, shop, productId, options));
+  tails.set(tailKey, job);
   return job.finally(() => {
-    if (tails.get(dkey) === job) tails.delete(dkey);
+    if (tails.get(tailKey) === job) tails.delete(tailKey);
   });
 }
 
 /** Drop activation codes from delivered rows older than TRIAL_DAYS (scheduled). */
+export function ownerCapabilities(env) {
+  const byProduct = {};
+  for (const productId of products(env)) {
+    byProduct[productId] = {
+      paid_available: Boolean(signingKeyForProduct(env, 'PAID_SIGNING_KEY', productId)),
+      trial_available: Boolean(signingKeyForProduct(env, 'LICENCE_SIGNING_KEY', productId)),
+    };
+  }
+  const paidAny = Object.values(byProduct).some((p) => p.paid_available);
+  const trialAny = Object.values(byProduct).some((p) => p.trial_available);
+  return { products: byProduct, paid_available: paidAny, trial_available: trialAny };
+}
+
 export async function purgeStaleCodes(env) {
   const days = Number(env.TRIAL_DAYS || 14);
   const cutoff = now() - days * 86400;
   await expireStalePending(env);
   await env.DB.prepare(
-    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued')",
+    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued') AND (licence_tier = '' OR licence_tier = 'trial')",
   ).bind(cutoff).run();
 }

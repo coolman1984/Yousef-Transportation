@@ -20,6 +20,7 @@ from harness import ADMIN, ApiError, Server, make_authority, wait_until
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
 import afcodes  # noqa: E402
+import hub_time  # noqa: E402
 
 try:
     from cryptography.hazmat.primitives import serialization
@@ -38,6 +39,7 @@ class FakeHub:
         self.key, self.batches, self.requests, self.acks, self.mode = key, [], [], [], 'issue'
         self.edition, self.days, self.device_override = 'trial', 14, None
         self.calendar_day = None
+        self.calendar_kid = 'paid'
         hub = self
 
         class H(BaseHTTPRequestHandler):
@@ -73,7 +75,7 @@ class FakeHub:
 
             def do_GET(self):
                 if self.path == '/licence/time' and hub.calendar_day:
-                    return self.reply(200, {'calendar_day': hub.calendar_day})
+                    return self.reply(200, hub.calendar_payload(hub.calendar_day))
                 if self.path.startswith('/licence/status'):
                     if self.headers.get('Authorization') != 'Bearer lp_secret':
                         return self.reply(401, {})
@@ -90,6 +92,17 @@ class FakeHub:
             return ''
         raw = self.key.public_key().public_bytes(serialization.Encoding.Raw, serialization.PublicFormat.Raw)
         return base64.urlsafe_b64encode(raw).decode().rstrip('=')
+
+    def calendar_payload(self, day):
+        if self.key is None:
+            return {'calendar_day': day}
+        pem = self.key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+                                     serialization.NoEncryption())
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key
+        private = load_pem_private_key(pem, password=None)
+        kid = self.calendar_kid
+        sig = base64.urlsafe_b64encode(private.sign(hub_time.hub_time_message(day, kid))).decode().rstrip('=')
+        return {'calendar_day': day, 'kid': kid, 'sig': sig}
 
     def sign(self, device, edition=None, days=None, first=None):
         pem = self.key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
@@ -111,7 +124,8 @@ class Base(unittest.TestCase):
         if with_hub:
             extra['hub_url'] = cls.hub.url
         if with_keys:
-            extra['licence_keys'] = [cls.hub.public()]
+            pub = cls.hub.public()
+            extra['licence_keys'] = [pub, f'paid:{pub}']
         cls._profile_dir = tempfile.mkdtemp(prefix='triporders-profile-')
         os.environ['TO_DEVICE_ID'] = 'test-pc-' + name
         os.environ['TRIPORDERS_DPAPI_DIR'] = cls._profile_dir

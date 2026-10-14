@@ -17,13 +17,14 @@ html_handling = "none"  # default auto-trailing-slash loops /owner/login.html <-
 crons = ["0 4 * * *"]
 
 [vars]
-LICENCE_PRODUCTS = "trip-orders"
+LICENCE_PRODUCTS = "trip-orders,al-store"
 TRIAL_DAYS = "14"
 SESSION_HOURS = "8"
 LICENCE_CALENDAR_TZ = "Africa/Cairo"
 
 # Secrets (never in git):
-#   npx wrangler secret put LICENCE_SIGNING_KEY   # PKCS#8 PEM Ed25519 private key only
+#   npx wrangler secret put LICENCE_SIGNING_KEY   # PKCS#8 PEM Ed25519 trial-hub private key only
+#   npx wrangler secret put PAID_SIGNING_KEY      # PKCS#8 PEM Ed25519 paid kid "paid" (monthly/permanent hub codes)
 #   npx wrangler secret put SESSION_SECRET
 #   npx wrangler secret put OWNER_PASSWORD_HASH   # pbkdf2-sha256:iterations:salt_hex:hash_hex
 # Optional Telegram on new request:

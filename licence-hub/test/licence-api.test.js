@@ -5,6 +5,9 @@ import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
+  hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
+  offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
+  currentTerm,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -25,6 +28,13 @@ function pemFromSeed(seed32) {
     type: 'pkcs8',
   });
   return pk.export({ type: 'pkcs8', format: 'pem' });
+}
+
+async function signingKeys(trialByte = 9, paidByte = null) {
+  const keys = { trialKey: null, paidKey: null };
+  if (trialByte !== null) keys.trialKey = await importSigningKey(pemFromSeed(Buffer.alloc(32, trialByte)));
+  if (paidByte !== null) keys.paidKey = await importSigningKey(pemFromSeed(Buffer.alloc(32, paidByte)));
+  return keys;
 }
 
 function env() {
@@ -71,12 +81,11 @@ async function getStatus(e, id, poll) {
   return { res, data: await res.json() };
 }
 
-test('monthly and permanent requests are refused at submit', async () => {
+test('monthly and permanent requests enter pending for owner approval', async () => {
   const e = env();
-  for (const kind of ['monthly', 'permanent']) {
-    const { data } = await postRequest(e, body({ kind }));
-    assert.equal(data.status, 'refused');
-    assert.equal(data.reason, REASON_PAID_IN_STUDIO);
+  for (const [kind, device] of [['monthly', '7KD2M-QX9TP'], ['permanent', 'ABCDE-FGHJK']]) {
+    const { data } = await postRequest(e, body({ kind, nonce: 'n-' + kind, device }));
+    assert.equal(data.status, 'pending');
     assert.ok(data.poll_token);
   }
 });
@@ -93,7 +102,7 @@ test('nonce replay returns the same poll token', async () => {
 
 test('losing concurrent approval never exposes issued code on status poll', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 19)));
+  const keys = await signingKeys(19);
   const device = '7KD2M-QX9TP';
   const dkey = deviceKey(device);
   const t = 1;
@@ -105,7 +114,7 @@ test('losing concurrent approval never exposes issued code on status poll', asyn
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind('b', pollHash(pollB), 'trip-orders', 'trial', device, dkey, MACHINE_B, 'n-b', '', '', '', 'pending', t, t).run();
-  const [signedA, signedB] = await Promise.all([approveRequest(e, 'a', key), approveRequest(e, 'b', key)]);
+  const [signedA, signedB] = await Promise.all([approveRequest(e, 'a', keys), approveRequest(e, 'b', keys)]);
   const winners = [signedA, signedB].filter((s) => s?.code);
   assert.equal(winners.length, 1);
   const stB = await getStatus(e, 'b', pollB);
@@ -116,7 +125,7 @@ test('losing concurrent approval never exposes issued code on status poll', asyn
 
 test('only one trial wins on concurrent approval for the same device', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 9)));
+  const keys = await signingKeys(9);
   const device = '7KD2M-QX9TP';
   const dkey = deviceKey(device);
   const t = 1;
@@ -126,7 +135,7 @@ test('only one trial wins on concurrent approval for the same device', async () 
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind('b', 'h2', 'trip-orders', 'trial', device, dkey, MACHINE_B, 'n2', '', '', '', 'pending', t, t).run();
-  const [signedA, signedB] = await Promise.all([approveRequest(e, 'a', key), approveRequest(e, 'b', key)]);
+  const [signedA, signedB] = await Promise.all([approveRequest(e, 'a', keys), approveRequest(e, 'b', keys)]);
   const winners = [signedA, signedB].filter((s) => s?.code);
   assert.equal(winners.length, 1);
   const rowB = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('b').first();
@@ -138,9 +147,9 @@ test('only one trial wins on concurrent approval for the same device', async () 
 
 test('second online trial for same machine hash is refused after install_id wipe (new device code)', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 7)));
+  const keys = await signingKeys(7);
   const first = await postRequest(e, body({ device: '7KD2M-QX9TP', machine: MACHINE_A, nonce: 'n1' }));
-  await approveRequest(e, first.data.id, key);
+  await approveRequest(e, first.data.id, await signingKeys(9));
   const second = await postRequest(e, body({ device: 'ABCDE-FGHJK', machine: MACHINE_A, nonce: 'n2' }));
   assert.equal(second.data.status, 'refused');
   assert.equal(second.data.reason, 'already_used');
@@ -148,21 +157,22 @@ test('second online trial for same machine hash is refused after install_id wipe
 
 test('offline mint blocks later online trial for that device', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 11)));
-  await issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders');
+  const keys = await signingKeys(11);
+  await issueOfflineCustomer(e, keys, '7KD2M-QX9TP', 'Shop', 'trip-orders');
   const rows = await e.DB.prepare('SELECT machine FROM machine_trials').bind().all();
-  assert.equal(rows.results[0].machine, deviceLockKey(deviceKey('7KD2M-QX9TP')));
+  const machines = (rows.results || []).map((r) => r.machine);
+  assert.ok(machines.includes(deviceLockKey(deviceKey('7KD2M-QX9TP'))));
   const online = await postRequest(e, body({ nonce: 'n3' }));
   assert.equal(online.data.reason, 'already_used');
 });
 
 test('offline concurrent mint only succeeds once', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 12)));
+  const keys = await signingKeys(12);
   const device = '7KD2M-QX9TP';
   const results = await Promise.allSettled([
-    issueOfflineCustomer(e, key, device, 'A', 'trip-orders'),
-    issueOfflineCustomer(e, key, device, 'B', 'trip-orders'),
+    issueOfflineCustomer(e, keys, device, 'A', 'trip-orders'),
+    issueOfflineCustomer(e, keys, device, 'B', 'trip-orders'),
   ]);
   const ok = results.filter((r) => r.status === 'fulfilled');
   assert.equal(ok.length, 2);
@@ -198,12 +208,13 @@ test('status returns calendar_day as YYYY-MM-DD string', async () => {
   assert.match(st.data.calendar_day, /^\d{4}-\d{2}-\d{2}$/);
 });
 
-test('time returns the hub calendar day without auth, secrets, or database access', async () => {
+test('time returns signed hub calendar day without database access', async () => {
   for (const tz of [undefined, 'Pacific/Kiritimati', 'America/Los_Angeles']) {
     const e = {
       LICENCE_CALENDAR_TZ: tz,
+      LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 77)),
       get DB() { assert.fail('time must not access the database'); },
-      get SESSION_SECRET() { assert.fail('time must not read secrets'); },
+      get SESSION_SECRET() { assert.fail('time must not read session secret'); },
     };
     const req = new Request('https://hub.test/licence/time');
     const before = calendarDateInTz(new Date(), tz || 'Africa/Cairo').iso;
@@ -212,16 +223,17 @@ test('time returns the hub calendar day without auth, secrets, or database acces
     const after = calendarDateInTz(new Date(), tz || 'Africa/Cairo').iso;
     assert.equal(res.status, 200);
     assert.equal(res.headers.get('Cache-Control'), 'no-store');
-    assert.deepEqual(Object.keys(data), ['calendar_day']);
+    assert.equal(data.kid, 'trial-hub');
+    assert.ok(data.sig);
     assert.ok([before, after].includes(data.calendar_day));
   }
 });
 
 test('ack clears stored activation code', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 2)));
+  const keys = await signingKeys(2);
   const { data } = await postRequest(e, body());
-  await approveRequest(e, data.id, key);
+  await approveRequest(e, data.id, await signingKeys(9));
   const poll = data.poll_token;
   const ackReq = new Request('https://hub.test/licence/ack', {
     method: 'POST',
@@ -236,27 +248,27 @@ test('ack clears stored activation code', async () => {
 
 test('owner force reissue replaces device trial lock', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 4)));
+  const keys = await signingKeys(4);
   const device = '7KD2M-QX9TP';
   const first = await postRequest(e, body({ nonce: 'f1' }));
-  await approveRequest(e, first.data.id, key);
+  await approveRequest(e, first.data.id, await signingKeys(9));
   const retry = await postRequest(e, body({ nonce: 'f2' }));
   assert.equal(retry.data.reason, 'already_used');
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind('lost', 'hx', 'trip-orders', 'trial', device, deviceKey(device), MACHINE_A, 'n-lost', '', '', '', 'pending', 2, 2).run();
-  const forced = await approveRequest(e, 'lost', key, { force: true });
+  const forced = await approveRequest(e, 'lost', await signingKeys(9), { force: true });
   assert.ok(forced?.code);
 });
 
 test('issued row without machine lock is not returned until claim is repaired', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 6)));
+  const keys = await signingKeys(6);
   const { data } = await postRequest(e, body({ nonce: 'orphan' }));
   await e.DB.prepare(
     "UPDATE licence_requests SET status = 'issued', code = 'FAKE-CODE' WHERE id = ?",
   ).bind(data.id).run();
-  const out = await approveRequest(e, data.id, key);
+  const out = await approveRequest(e, data.id, await signingKeys(9));
   assert.ok(out?.code);
   assert.notEqual(out.code, 'FAKE-CODE');
   assert.match(out.code, /^[0-9A-Z-]+$/);
@@ -278,22 +290,31 @@ test('purgeStaleCodes blanks old issued rows', async () => {
 
 test('approve retry returns the same code', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 3)));
+  const keys = await signingKeys(3);
   const { data } = await postRequest(e, body());
-  const first = await approveRequest(e, data.id, key);
-  const second = await approveRequest(e, data.id, key);
+  const first = await approveRequest(e, data.id, keys);
+  const second = await approveRequest(e, data.id, keys);
   assert.equal(first.code, second.code);
 });
 
-test('paid pending request approval is refused', async () => {
+test('paid pending request needs PAID_SIGNING_KEY', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 5)));
+  const keys = await signingKeys(5);
   await e.DB.prepare(
-    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind('id1', 'hash', 'trip-orders', 'monthly', '7KD2M-QX9TP', 'm1', 'n-old', '', '', '', 'pending', 1, 1).run();
-  const out = await approveRequest(e, 'id1', key);
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('id1', 'hash', 'trip-orders', 'monthly', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), 'm1', 'n-old', '', '', '', 'pending', 1, 1).run();
+  const out = await approveRequest(e, 'id1', keys, { grant: 'paid', paid_until: '2027-01-01' });
   assert.equal(out.refused, true);
-  assert.equal(out.reason, REASON_PAID_IN_STUDIO);
+});
+
+test('owner can approve paid until date with PAID_SIGNING_KEY', async () => {
+  const e = env();
+  const keys = await signingKeys(5, 8);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('id2', 'hash', 'trip-orders', 'monthly', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n-paid', '', '', '', 'pending', 1, 1).run();
+  const out = await approveRequest(e, 'id2', keys, { grant: 'paid', preset: '1m' });
+  assert.ok(out.code);
 });
 
 test('legacy unprefixed machine_trials row blocks reuse after upgrade', async () => {
@@ -308,7 +329,7 @@ test('legacy unprefixed machine_trials row blocks reuse after upgrade', async ()
 
 test('offline issuance survives customer insert failure and retries same code', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 21)));
+  const keys = await signingKeys(21);
   const device = '7KD2M-QX9TP';
   const origPrepare = e.DB.prepare.bind(e.DB);
   let failCustomers = true;
@@ -327,11 +348,11 @@ test('offline issuance survives customer insert failure and retries same code', 
     }
     return stmt;
   };
-  await assert.rejects(() => issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders'), /simulated-D1-error/);
+  await assert.rejects(() => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders'), /simulated-D1-error/);
   failCustomers = false;
-  const second = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
+  const second = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders');
   assert.ok(second.code);
-  const third = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
+  const third = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders');
   assert.equal(third.code, second.code);
 });
 
@@ -364,10 +385,10 @@ function wrapAsyncD1(syncDb) {
 test('offline issuance awaits D1 run() like production', async () => {
   const e = env();
   e.DB = wrapAsyncD1(e.DB);
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 31)));
-  const signed = await issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders');
+  const keys = await signingKeys(31);
+  const signed = await issueOfflineCustomer(e, keys, '7KD2M-QX9TP', 'Shop', 'trip-orders');
   assert.ok(signed.code);
-  const again = await issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders');
+  const again = await issueOfflineCustomer(e, keys, '7KD2M-QX9TP', 'Shop', 'trip-orders');
   assert.equal(again.code, signed.code);
 });
 
@@ -390,7 +411,7 @@ test('legacy migration backfills machine hash lock from delivered request', asyn
 
 test('losing concurrent approval releases partial device locks', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 33)));
+  const keys = await signingKeys(33);
   const hash = MACHINE_A;
   const devA = '7KD2M-QX9TP';
   const devB = 'ABCDE-FGHJK';
@@ -401,7 +422,7 @@ test('losing concurrent approval releases partial device locks', async () => {
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind('lose', 'h2', 'trip-orders', 'trial', devB, deviceKey(devB), hash, 'n2', '', '', '', 'pending', t, t).run();
-  const [a, b] = await Promise.all([approveRequest(e, 'win', key), approveRequest(e, 'lose', key)]);
+  const [a, b] = await Promise.all([approveRequest(e, 'win', keys), approveRequest(e, 'lose', keys)]);
   const winners = [a, b].filter((s) => s?.code);
   assert.equal(winners.length, 1);
   const locks = await e.DB.prepare('SELECT machine, request_id FROM machine_trials').bind().all();
@@ -416,7 +437,7 @@ test('losing concurrent approval releases partial device locks', async () => {
 
 test('offline issuance survives interrupted code write and retries same code', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 34)));
+  const keys = await signingKeys(34);
   const device = '7KD2M-QX9TP';
   const origPrepare = e.DB.prepare.bind(e.DB);
   let failIssue = true;
@@ -435,9 +456,9 @@ test('offline issuance survives interrupted code write and retries same code', a
     }
     return stmt;
   };
-  await assert.rejects(() => issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders'), /simulated-D1-error/);
+  await assert.rejects(() => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders'), /simulated-D1-error/);
   failIssue = false;
-  const second = await issueOfflineCustomer(e, key, device, 'Shop', 'trip-orders');
+  const second = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders');
   assert.ok(second.code);
 });
 
@@ -452,7 +473,7 @@ test('request with empty, short or non-hex machine tag is rejected', async () =>
 
 test('approval-race loser keeps no machine_trials rows and adds no customer', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 35)));
+  const keys = await signingKeys(35);
   const devA = '7KD2M-QX9TP';
   const devB = 'ABCDE-FGHJK';
   for (const [id, dev, n] of [['w2', devA, 'm1'], ['l2', devB, 'm2']]) {
@@ -460,7 +481,7 @@ test('approval-race loser keeps no machine_trials rows and adds no customer', as
       'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).bind(id, 'h' + id, 'trip-orders', 'trial', dev, deviceKey(dev), MACHINE_A, n, '', '', '', 'pending', 1, 1).run();
   }
-  const [a, b] = await Promise.all([approveRequest(e, 'w2', key), approveRequest(e, 'l2', key)]);
+  const [a, b] = await Promise.all([approveRequest(e, 'w2', keys), approveRequest(e, 'l2', keys)]);
   const winner = a?.code ? 'w2' : 'l2';
   assert.equal([a, b].filter((s) => s?.code).length, 1);
   const locks = (await e.DB.prepare('SELECT machine, request_id FROM machine_trials').bind().all()).results || [];
@@ -472,9 +493,9 @@ test('approval-race loser keeps no machine_trials rows and adds no customer', as
 
 test('concurrent approval of the same request keeps device locks and one code', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 41)));
+  const keys = await signingKeys(41);
   const { data } = await postRequest(e, body());
-  const [a, b] = await Promise.all([approveRequest(e, data.id, key), approveRequest(e, data.id, key)]);
+  const [a, b] = await Promise.all([approveRequest(e, data.id, keys), approveRequest(e, data.id, keys)]);
   assert.ok(a?.code);
   assert.equal(a.code, b.code);
   const locks = (await e.DB.prepare('SELECT machine FROM machine_trials WHERE request_id = ?').bind(data.id).all()).results || [];
@@ -493,11 +514,11 @@ test('separate offline queues on one database return the same issued code', asyn
     LICENCE_CALENDAR_TZ: 'Africa/Cairo',
     _offlineTails: new Map(),
   });
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 43)));
+  const keys = await signingKeys(43);
   const device = '7KD2M-QX9TP';
   const [a, b] = await Promise.all([
-    issueOfflineCustomer(mk(), key, device, 'A', 'trip-orders'),
-    issueOfflineCustomer(mk(), key, device, 'B', 'trip-orders'),
+    issueOfflineCustomer(mk(), keys, device, 'A', 'trip-orders'),
+    issueOfflineCustomer(mk(), keys, device, 'B', 'trip-orders'),
   ]);
   assert.equal(a.code, b.code);
   const cust = (await db.prepare('SELECT id FROM customers').bind().all()).results || [];
@@ -506,7 +527,7 @@ test('separate offline queues on one database return the same issued code', asyn
 
 test('owner approval migrates legacy hash lock before issuing second trial', async () => {
   const e = env();
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 44)));
+  const keys = await signingKeys(44);
   const oldDev = '7KD2M-QX9TP';
   const newDev = 'ABCDE-FGHJK';
   const dkeyOld = deviceKey(oldDev);
@@ -518,7 +539,7 @@ test('owner approval migrates legacy hash lock before issuing second trial', asy
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
   ).bind('pending-new', 'h9', 'trip-orders', 'trial', newDev, deviceKey(newDev), MACHINE_A, 'n9', '', '', '', 'pending', t, t).run();
-  const out = await approveRequest(e, 'pending-new', key);
+  const out = await approveRequest(e, 'pending-new', await signingKeys(9));
   assert.equal(out, null);
   const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('pending-new').first();
   assert.equal(row.status, 'refused');
@@ -527,9 +548,403 @@ test('owner approval migrates legacy hash lock before issuing second trial', asy
 
 test('TRIAL_DAYS above 14 refuses to sign offline trials', async () => {
   const e = { ...env(), TRIAL_DAYS: '30' };
-  const key = await importSigningKey(pemFromSeed(Buffer.alloc(32, 55)));
+  const keys = await signingKeys(55);
   await assert.rejects(
-    () => issueOfflineCustomer(e, key, '7KD2M-QX9TP', 'Shop', 'trip-orders'),
+    () => issueOfflineCustomer(e, keys, '7KD2M-QX9TP', 'Shop', 'trip-orders'),
     /trial_days_out_of_range/,
+  );
+});
+
+test('hub time signs with getter-bound LICENCE_SIGNING_KEY', async () => {
+  const pem = pemFromSeed(Buffer.alloc(32, 88));
+  const e = {
+    LICENCE_CALENDAR_TZ: 'Africa/Cairo',
+    get LICENCE_SIGNING_KEY() { return pem; },
+  };
+  const req = new Request('https://hub.test/licence/time');
+  const res = await handleLicence(req, e, new URL(req.url));
+  const data = await res.json();
+  assert.equal(data.kid, 'trial-hub');
+  assert.ok(data.sig);
+  assert.ok(data.serverTime);
+});
+
+test('hub time uses paid key and kid when trial key missing', async () => {
+  const pem = pemFromSeed(Buffer.alloc(32, 89));
+  const e = { PAID_SIGNING_KEY: pem };
+  const req = new Request('https://hub.test/licence/clock');
+  const res = await handleLicence(req, e, new URL(req.url));
+  const data = await res.json();
+  assert.equal(data.kid, 'paid');
+  assert.ok(data.sig);
+});
+
+test('re-issue with different grant signs a new code', async () => {
+  const e = env();
+  const keys = await signingKeys(5, 10);
+  const device = '7KD2M-QX9TP';
+  const t = 1;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid1', 'h', 'trip-orders', 'monthly', device, deviceKey(device), MACHINE_A, 'n', '', '', '', 'issued', 'OLD-CODE', 'paid', '2027-06-01', t, t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind(deviceLockKey(deviceKey(device)), 'paid1', t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind('h:' + MACHINE_A, 'paid1', t).run();
+  const out = await approveRequest(e, 'paid1', keys, { grant: 'paid', paid_until: '2028-01-01' });
+  assert.ok(out.code);
+  assert.notEqual(out.code, 'OLD-CODE');
+});
+
+test('re-issue with identical grant returns the same code', async () => {
+  const e = env();
+  const keys = await signingKeys(5, 11);
+  const device = 'ABCDE-FGHJK';
+  const t = 2;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid2', 'h2', 'trip-orders', 'monthly', device, deviceKey(device), MACHINE_B, 'n2', '', '', '', 'issued', 'SAME-CODE', 'paid', '2027-06-01', t, t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind(deviceLockKey(deviceKey(device)), 'paid2', t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind('h:' + MACHINE_B, 'paid2', t).run();
+  const out = await approveRequest(e, 'paid2', keys, { grant: 'paid', paid_until: '2027-06-01' });
+  assert.equal(out.code, 'SAME-CODE');
+});
+
+test('offline re-issue with different grant replaces trial code', async () => {
+  const e = env();
+  const keys = await signingKeys(5, 12);
+  const device = '7KD2M-QX9TP';
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2027-12-31' });
+  assert.notEqual(paid.code, trial.code);
+});
+
+test('purgeStaleCodes keeps paid issued codes', async () => {
+  const e = env();
+  const old = Math.floor(Date.now() / 1000) - 20 * 86400;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid-old', 'h', 'trip-orders', 'monthly', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'issued', 'PAID-CODE', 'paid', old, old).run();
+  await purgeStaleCodes(e);
+  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('paid-old').first();
+  assert.equal(row.code, 'PAID-CODE');
+});
+
+test('request without product defaults to trip-orders', async () => {
+  const e = env();
+  const payload = body();
+  delete payload.product;
+  const { data } = await postRequest(e, payload);
+  assert.equal(data.status, 'pending');
+  const row = await e.DB.prepare('SELECT product FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.product, 'trip-orders');
+});
+
+test('licence routes accept /api and /licence-hub prefixes', async () => {
+  const e = env();
+  const req = new Request('https://hub.test/api/licence/status?id=x', {
+    headers: { Authorization: 'Bearer bad' },
+  });
+  const res = await handleLicence(req, e, new URL(req.url));
+  assert.equal(res.status, 401);
+});
+
+test('bad paid_until calendar date is rejected', async () => {
+  const e = env();
+  const keys = await signingKeys(5, 13);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('bad-date', 'h', 'trip-orders', 'monthly', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'pending', 1, 1).run();
+  await assert.rejects(
+    () => approveRequest(e, 'bad-date', keys, { grant: 'paid', paid_until: '2026-02-31' }),
+    /bad_grant/,
+  );
+});
+
+test('purgeStaleCodes keeps issued row when kind is trial but licence_tier is paid', async () => {
+  const e = env();
+  const old = Math.floor(Date.now() / 1000) - 20 * 86400;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('trial-kind-paid-tier', 'h', 'trip-orders', 'trial', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'issued', 'APPROVED-PAID', 'paid', old, old).run();
+  await purgeStaleCodes(e);
+  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('trial-kind-paid-tier').first();
+  assert.equal(row.code, 'APPROVED-PAID');
+});
+
+test('hub calendar uses global signing keys only', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 88));
+  assert.equal(hubTimeSigningMaterial(e), null);
+  const out = await hubCalendarSigned(e);
+  assert.equal(out.sig, undefined);
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 87));
+  const signed = await hubCalendarSigned(e);
+  assert.ok(signed.sig);
+  assert.equal(signed.kid, 'trial-hub');
+});
+
+test('ownerCapabilities reflects per-product paid key', () => {
+  const e = {
+    LICENCE_PRODUCTS: 'trip-orders,al-store',
+    PAID_SIGNING_KEY_AL_STORE: pemFromSeed(Buffer.alloc(32, 89)),
+  };
+  const caps = ownerCapabilities(e);
+  assert.equal(caps.paid_available, true);
+  assert.equal(caps.trial_available, false);
+  assert.equal(caps.products['trip-orders'].paid_available, false);
+  assert.equal(caps.products['al-store'].paid_available, true);
+});
+
+test('storedGrantMatches requires matching product', () => {
+  const row = { product: 'trip-orders', licence_tier: 'trial', kind: 'trial' };
+  assert.equal(storedGrantMatches(row, { grant: 'trial' }, 'trip-orders'), true);
+  assert.equal(storedGrantMatches(row, { grant: 'trial' }, 'al-store'), false);
+});
+
+test('offline manual activation is keyed per product and device', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 90));
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 91));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keysTo = await loadSigningKeys(e, 'trip-orders');
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  const trip = await issueOfflineCustomer(e, keysTo, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const store = await issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' });
+  assert.equal(trip.product, 'trip-orders');
+  assert.equal(store.product, 'al-store');
+  assert.notEqual(trip.code, store.code);
+  const tripRow = await e.DB.prepare('SELECT id, product FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  const storeRow = await e.DB.prepare('SELECT id, product FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('al-store', dkey)).first();
+  assert.equal(tripRow.product, 'trip-orders');
+  assert.equal(storeRow.product, 'al-store');
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+  assert.equal(await trialUsedForOfflineProduct(e, 'al-store', dkey), true);
+});
+
+test('paid online request after issued trial upgrades without force and keeps trial lock', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const trialKeys = await signingKeys(30);
+  const paidKeys = await signingKeys(30, 31);
+  const trialReq = await postRequest(e, body({ nonce: 'trial-then-paid' }));
+  const trialCode = await approveRequest(e, trialReq.data.id, trialKeys);
+  assert.ok(trialCode?.code);
+  const trialLock = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.equal(trialLock.request_id, trialReq.data.id);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid-after-trial', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-paid', '', '', '', 'pending', 3, 3).run();
+  const paidOut = await approveRequest(e, 'paid-after-trial', paidKeys, { grant: 'paid', paid_until: '2028-06-01' });
+  assert.ok(paidOut?.code);
+  assert.notEqual(paidOut.code, trialCode.code);
+  const paidRow = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('paid-after-trial').first();
+  assert.equal(paidRow.status, 'issued');
+  assert.equal(paidRow.reason, '');
+  const lockAfter = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.ok(lockAfter);
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+  const retryTrial = await postRequest(e, body({ nonce: 'trial-blocked' }));
+  assert.equal(retryTrial.data.status, 'refused');
+  assert.equal(retryTrial.data.reason, 'already_used');
+});
+
+test('owner force reissue keeps one-trial lock so a second online trial is refused', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const first = await postRequest(e, body({ nonce: 'force-keep-1' }));
+  await approveRequest(e, first.data.id, await signingKeys(32));
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('lost-keep', 'hx2', 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n-lost2', '', '', '', 'pending', 4, 4).run();
+  const forced = await approveRequest(e, 'lost-keep', await signingKeys(33), { force: true });
+  assert.ok(forced?.code);
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+  const retry = await postRequest(e, body({ nonce: 'force-keep-2' }));
+  assert.equal(retry.data.reason, 'already_used');
+});
+
+test('legacy d: and offline: device rows block offline trip-orders trial', async () => {
+  const e = env();
+  const device = 'ABCDE-FGHJK';
+  const dkey = deviceKey(device);
+  const t = 1;
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(dkey), 'legacy-off', t).run();
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`offline:${dkey}`, 'legacy-off', t).run();
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+});
+
+test('wouldDowngradeGrant blocks paid to trial and shorter paid term', () => {
+  const paid = { code: 'X', licence_tier: 'paid', licence_expiry: '2028-06-01' };
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'trial' }), true);
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'paid', paid_until: '2027-01-01' }), true);
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'paid', paid_until: '2029-01-01' }), false);
+  const perm = { code: 'Y', licence_tier: 'permanent' };
+  assert.equal(wouldDowngradeGrant(perm, { grant: 'paid', paid_until: '2029-01-01' }), true);
+});
+
+test('offline paid reissue as trial without force is refused and keeps paid code', async () => {
+  const e = env();
+  const keys = await signingKeys(50, 51);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  assert.ok(paid.code);
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }),
+    /downgrade/,
+  );
+  const row = await e.DB.prepare('SELECT code, licence_tier FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  assert.equal(row.code, paid.code);
+  assert.equal(row.licence_tier, 'paid');
+});
+
+test('pending monthly approve as trial without force returns downgrade not refuse', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(52, 53);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('monthly-pending', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-month', '', '', '', 'pending', 9, 9).run();
+  await assert.rejects(() => approveRequest(e, 'monthly-pending', keys, { grant: 'trial' }), /downgrade/);
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('monthly-pending').first();
+  assert.equal(row.status, 'pending');
+  assert.equal(row.reason, '');
+});
+
+test('al-store offline trial does not write trip-orders d: lock or block trip-orders trial', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 60));
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 61));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  const keysTo = await loadSigningKeys(e, 'trip-orders');
+  await issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' });
+  const legacyLock = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.ok(!legacyLock);
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), false);
+  const trip = await issueOfflineCustomer(e, keysTo, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trip.code);
+});
+
+test('signing failure on offline reissue leaves stored paid code', async () => {
+  const e = env();
+  const keys = await signingKeys(54, 55);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  const keysNoTrial = { trialKey: null, paidKey: keys.paidKey };
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keysNoTrial, device, 'Shop', 'trip-orders', { grant: 'trial', force: true }),
+    /no_signing_key/,
+  );
+  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  assert.equal(row.code, paid.code);
+});
+
+test('currentTerm keeps paid term after ack clears stored code', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(70, 71);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  assert.ok(paid.code);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  await e.DB.prepare(
+    'UPDATE licence_requests SET status = ?, code = NULL, updated_at = ? WHERE id = ?',
+  ).bind('delivered', 99, requestId).run();
+  const term = await currentTerm(e, 'trip-orders', device);
+  assert.deepEqual(term, { tier: 'paid', until: '2028-06-01' });
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2027-01-01' }),
+    (err) => err.message === 'downgrade' && err.current?.tier === 'paid',
+  );
+});
+
+test('online delivered row blocks shorter monthly approve without force', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(72, 73);
+  await e.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, licence_tier, licence_expiry, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+  ).bind('c-del', 'Shop', device, 'monthly', 'paid', '2028-06-01', 1).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, code, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+  ).bind('delivered-online', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-del', 'Shop', '', '', 'delivered', 'paid', '2028-06-01', 5, 5).run();
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('monthly-new', 'hp2', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-new', 'Shop', '', '', 'pending', 6, 6).run();
+  await assert.rejects(
+    () => approveRequest(e, 'monthly-new', keys, { grant: 'paid', paid_until: '2027-01-01' }),
+    (err) => err.message === 'downgrade' && err.current?.until === '2028-06-01',
+  );
+  const pending = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('monthly-new').first();
+  assert.equal(pending.status, 'pending');
+});
+
+test('offline manual compares online delivered paid for same product', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(74, 75);
+  await e.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, licence_tier, licence_expiry, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+  ).bind('c-on', 'Shop', device, 'monthly', 'paid', '2028-12-01', 1).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind('online-paid', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-on', 'Shop', '', '', 'delivered', 'paid', '2028-12-01', 2, 2).run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2027-06-01' }),
+    /downgrade/,
+  );
+});
+
+test('offline lock race does not return success with a different grant code', async () => {
+  const e = env();
+  const keys = await signingKeys(40, 41);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  const lock = `od:trip-orders:${dkey}`;
+  const t = 5;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(requestId, 'offline', 'trip-orders', 'trial', device, dkey, '', 'offline-x', 'S', '', '', 'issued', 'WINNER-CODE', 'trial', '', t, t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(lock, 'other-request', t).run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'S', 'trip-orders', { grant: 'paid', paid_until: '2028-01-01' }),
+    /grant_conflict|already_used/,
   );
 });

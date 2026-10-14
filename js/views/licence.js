@@ -74,14 +74,15 @@
         if (codeEl) draftCode = codeEl.value;
         if (shopEl) draftShop = shopEl.value;
         var q = lic.request || { status: 'none', available: false }, ln = line(q);
-        var good = ['trial', 'active', 'grace', 'contract'].indexOf(lic.state) >= 0;
+        var warn = lic.state === 'warning';
+        var good = !warn && lic.full && ['trial', 'active', 'grace', 'contract'].indexOf(lic.state) >= 0;
         var showLicenceTools = canEdit && lic.enforced && (!lic.full || lic.state === 'trial' || lic.state === 'expired');
         var canHubRequest = showLicenceTools && q.available && !lic.full && q.status === 'none';
         var showRequestLine = showLicenceTools && q.status !== 'none' && ln.html;
         var shopField = showLicenceTools && q.available ? '<div class="field"><label for="lic-shop">' + TO.esc(TO.t('lic.orgName')) + '</label><input id="lic-shop" class="input" maxlength="60" value="' + TO.esc(draftShop || defaultShop) + '"></div>' : '';
         host.innerHTML = (lic.build_channel === 'ci-test' ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<b>' + TO.esc(TO.t('lic.ciTest')) + '</b></div>' : '') +
           '<div class="lic ' + (good ? 'good' : '') + '">' +
-          '<div class="lic-state">' + TO.icon(good ? 'shield' : 'lock') + '<div><b data-lic-state>' + TO.esc(TO.t('lic.state.' + lic.state)) + '</b>' +
+          '<div class="lic-state">' + TO.icon(warn ? 'alert' : good ? 'shield' : 'lock') + '<div><b data-lic-state>' + TO.esc(TO.t('lic.state.' + lic.state)) + '</b>' +
           (lic.edition ? '<div class="small">' + TO.esc(TO.t('lic.kind.' + lic.edition)) + '</div>' : '') +
           (lic.last_day && lic.state !== 'trial' ? '<div class="small muted">' + TO.esc(TO.t('lic.until', { day: lic.last_day, n: lic.days_left })) + '</div>' : '') +
           trialCountdown(lic) + '</div></div>' +

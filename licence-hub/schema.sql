@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS licence_requests (
   stage           TEXT NOT NULL DEFAULT '',
   reason          TEXT NOT NULL DEFAULT '',
   code            TEXT,
+  licence_tier    TEXT NOT NULL DEFAULT '',
+  licence_expiry  TEXT,
   created_at      INTEGER NOT NULL,
   updated_at      INTEGER NOT NULL
 );
@@ -44,6 +46,8 @@ CREATE TABLE IF NOT EXISTS customers (
   serial     TEXT,
   first_day  TEXT,
   last_day   TEXT,
+  licence_tier   TEXT NOT NULL DEFAULT '',
+  licence_expiry TEXT,
   created_at INTEGER NOT NULL
 );
 

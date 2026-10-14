@@ -1,4 +1,7 @@
-import { handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes, REASON_PAID_IN_STUDIO } from './licence-api.js';
+import {
+  handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
+  REASON_PAID_IN_STUDIO, ownerCapabilities,
+} from './licence-api.js';
 import { importSigningKey } from './afcodes.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -33,9 +36,11 @@ async function fetchOwnerAsset(env, request, url) {
   return withSecurityHeaders(res);
 }
 
-async function signingKey(env) {
-  if (!env.LICENCE_SIGNING_KEY) throw new Error('no_signing_key');
-  return importSigningKey(env.LICENCE_SIGNING_KEY);
+async function loadSigningKeys(env) {
+  const keys = { trialKey: null, paidKey: null };
+  if (env.LICENCE_SIGNING_KEY) keys.trialKey = await importSigningKey(env.LICENCE_SIGNING_KEY);
+  if (env.PAID_SIGNING_KEY) keys.paidKey = await importSigningKey(env.PAID_SIGNING_KEY);
+  return keys;
 }
 
 async function ownerApi(request, env, url, session) {
@@ -43,6 +48,9 @@ async function ownerApi(request, env, url, session) {
 
   if (path === '/session' && request.method === 'GET') {
     return json({ csrf: session.csrf, expires: session.expires_at });
+  }
+  if (path === '/capabilities' && request.method === 'GET') {
+    return json(ownerCapabilities(env));
   }
   if (path === '/issued' && request.method === 'GET') {
     const id = url.searchParams.get('id') || '';
@@ -82,16 +90,23 @@ async function ownerApi(request, env, url, session) {
   if (!csrfOk(session, request, body)) return json({ error: 'csrf' }, 403);
 
   if (path === '/approve') {
-    const key = await signingKey(env);
+    const keys = await loadSigningKeys(env);
     try {
-      const signed = await approveRequest(env, body.id, key, { force: body.force === true });
+      const signed = await approveRequest(env, body.id, keys, {
+        force: body.force === true,
+        grant: body.grant,
+        preset: body.preset,
+        paid_until: body.paid_until,
+      });
       if (!signed) return json({ error: 'not_found' }, 404);
       if (signed.refused) {
-        return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: 'paid_in_studio' }, 400);
+        const msg = signed.reason === 'paid_signing_key_missing' ? 'paid_key_missing' : 'paid_in_studio';
+        return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: msg }, 400);
       }
       return json({ ok: true, code: signed.code });
     } catch (e) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
+      if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       throw e;
     }
   }
@@ -103,13 +118,20 @@ async function ownerApi(request, env, url, session) {
     const device = String(body.device || '').trim();
     const shop = String(body.shop || '').trim();
     if (!device) return json({ error: 'device' }, 400);
-    const key = await signingKey(env);
+    const keys = await loadSigningKeys(env);
     try {
-      const signed = await issueOfflineCustomer(env, key, device, shop, 'trip-orders', { force: body.force === true });
+      const signed = await issueOfflineCustomer(env, keys, device, shop, 'trip-orders', {
+        force: body.force === true,
+        grant: body.grant,
+        preset: body.preset,
+        paid_until: body.paid_until,
+      });
       return json({ ok: true, code: signed.code, device: signed.device });
     } catch (e) {
       if (e?.message === 'already_used') return json({ error: 'already_used' }, 400);
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device' }, 400);
+      if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
+      if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       throw e;
     }
   }

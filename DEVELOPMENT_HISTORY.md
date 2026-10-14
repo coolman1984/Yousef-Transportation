@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Owner panel paid hub licences (2026-10-14)
+
+**What/why:** Single owner panel issues trial, paid-until-date, and permanent codes (`PAID_SIGNING_KEY` kid `paid`); signed hub calendar time; office trusts `paid` keys, warns on corrupt clock file, seals hub day against hub URL rollback; CI workflow_dispatch optional trial-hub and paid public keys.
+**Checks:** `cd licence-hub && timeout 300 npm test` (45 pass); `cd tests && timeout 600 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time` (64 pass).
+**Next:** Owner deploy `PAID_SIGNING_KEY`, run D1 migration, rebuild commercial installers with `paid:<public>`.
+
 ## Merge origin/main into feat/licence-standard (2026-10-13)
 
 **What/why:** Merged `main` into PR #31 branch after `feat/simple-trial-activation` merge; kept licence-standard hub catch-up cap and paid calendar recovery.

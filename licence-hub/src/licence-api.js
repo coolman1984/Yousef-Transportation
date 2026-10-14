@@ -1,6 +1,9 @@
-import { issueTrialCode, normalize } from './afcodes.js';
+import {
+  issueTrialCode, issuePaidUntilCode, issuePermanentCode, paidPresetLastDay, normalize, importSigningKey,
+} from './afcodes.js';
 import { hex } from './auth.js';
 import { calendarDateInTz } from './calendar.js';
+import { signHubCalendar } from './hub-time.js';
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -20,6 +23,8 @@ let timeWindow;
 
 const REQUIRED = ['product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
 export const REASON_PAID_IN_STUDIO = 'paid_in_licence_studio';
+export const REASON_PAID_KEY_MISSING = 'paid_signing_key_missing';
+const HUB_TIME_KID = 'trial-hub';
 
 const MAX_DEVICE = 32;
 const MAX_MACHINE = 128;
@@ -177,6 +182,46 @@ function hubCalendarDay(env) {
   return calendarDateInTz(new Date(), tz).iso;
 }
 
+function signingPemFromEnv(env) {
+  const desc = Object.getOwnPropertyDescriptor(env, 'LICENCE_SIGNING_KEY');
+  if (desc && 'value' in desc && desc.value) return desc.value;
+  return null;
+}
+
+async function hubCalendarSigned(env) {
+  const day = hubCalendarDay(env);
+  const pem = signingPemFromEnv(env);
+  if (!pem) return { calendar_day: day };
+  const key = await importSigningKey(pem);
+  return signHubCalendar(key, HUB_TIME_KID, day);
+}
+
+export function parseOwnerGrant(body = {}) {
+  const grant = String(body.grant || body.tier || 'trial').trim().toLowerCase();
+  if (grant === 'trial' || grant === '14d') return { grant: 'trial' };
+  if (grant === 'permanent' || grant === 'perm') return { grant: 'permanent' };
+  if (grant === 'paid' || grant === 'monthly') {
+    const preset = String(body.preset || '').trim();
+    let until = String(body.paid_until || body.until || '').trim();
+    if (preset && !until) {
+      try {
+        until = paidPresetLastDay(preset);
+      } catch {
+        throw new Error('bad_preset');
+      }
+    }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('bad_paid_until');
+    return { grant: 'paid', paid_until: until };
+  }
+  throw new Error('bad_grant');
+}
+
+function tierMeta(grant, signed) {
+  if (grant.grant === 'trial') return { kind: 'trial', tier: 'trial', expiry: signed.last_day || '' };
+  if (grant.grant === 'permanent') return { kind: 'permanent', tier: 'permanent', expiry: '' };
+  return { kind: 'monthly', tier: 'paid', expiry: grant.paid_until || signed.last_day || '' };
+}
+
 async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
   const locks = [deviceLockKey(dkey)];
   if (machineHash) locks.push(machineLockKey(machineHash));
@@ -193,7 +238,7 @@ export async function handleLicence(request, env, url) {
     if (timeLimited(ip)) {
       return json({ error: 'rate' }, 429, { 'Retry-After': String(WINDOW - now() % WINDOW) });
     }
-    return json({ calendar_day: hubCalendarDay(env) });
+    return json(await hubCalendarSigned(env));
   }
 
   if (await limited(env, 'lic:ip:' + ip, 120)) return json({ error: 'rate' }, 429);
@@ -237,10 +282,15 @@ export async function handleLicence(request, env, url) {
     const t = now();
 
     if (body.kind !== 'trial') {
+      if (await openRequestForDevice(env, dkey)) {
+        return json({ field: 'device' }, 400);
+      }
+      if (await limited(env, 'lic:pending:' + ip, MAX_PENDING_PER_IP)) return json({ error: 'rate' }, 429);
       await env.DB.prepare(
-        'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, body.shop.slice(0, 60), body.ref.slice(0, 60), body.version.slice(0, 40), 'refused', REASON_PAID_IN_STUDIO, t, t).run();
-      return json({ id, poll_token: poll, status: 'refused', reason: REASON_PAID_IN_STUDIO });
+        'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, body.shop.slice(0, 60), body.ref.slice(0, 60), body.version.slice(0, 40), 'pending', t, t).run();
+      await notifyOwner(env, body);
+      return json({ id, poll_token: poll, status: 'pending' });
     }
 
     if (await trialUsedOnline(env, dkey, machineHash)) {
@@ -272,26 +322,26 @@ export async function handleLicence(request, env, url) {
     const pollHash = await sha256Hex(token);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ? AND poll_token_hash = ?').bind(id, pollHash).first();
     if (!row) return json({}, 401);
-    const calendarDay = hubCalendarDay(env);
-    if (row.status === 'pending') return json({ status: 'pending', stage: row.stage || '', calendar_day: calendarDay });
-    if (row.status === 'approved') return json({ status: 'pending', stage: 'approved', calendar_day: calendarDay });
+    const cal = await hubCalendarSigned(env);
+    if (row.status === 'pending') return json({ status: 'pending', stage: row.stage || '', ...cal });
+    if (row.status === 'approved') return json({ status: 'pending', stage: 'approved', ...cal });
     if (row.status === 'issued' && row.code) {
       let dkey;
       try {
         dkey = deviceKey(row.device_key || row.device);
       } catch {
-        return json({ status: 'pending', calendar_day: calendarDay });
+        return json({ status: 'pending', ...cal });
       }
       const machineHash = normalizeMachineHash(row.machine);
       if (!(await locksOwnedByRequest(env, dkey, machineHash, row.id))) {
-        return json({ status: 'pending', calendar_day: calendarDay });
+        return json({ status: 'pending', ...cal });
       }
-      return json({ status: 'issued', code: row.code, calendar_day: calendarDay });
+      return json({ status: 'issued', code: row.code, ...cal });
     }
-    if (row.status === 'refused') return json({ status: 'refused', reason: row.reason || 'refused', calendar_day: calendarDay });
-    if (row.status === 'expired') return json({ status: 'expired', calendar_day: calendarDay });
-    if (row.status === 'delivered') return json({ status: 'delivered', calendar_day: calendarDay });
-    return json({ status: row.status, calendar_day: calendarDay });
+    if (row.status === 'refused') return json({ status: 'refused', reason: row.reason || 'refused', ...cal });
+    if (row.status === 'expired') return json({ status: 'expired', ...cal });
+    if (row.status === 'delivered') return json({ status: 'delivered', ...cal });
+    return json({ status: row.status, ...cal });
   }
 
   if (url.pathname === '/licence/ack' && request.method === 'POST') {
@@ -380,9 +430,14 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   stmts.push(env.DB.prepare(issueSql).bind(...issueBinds));
   const shop = meta.shop || '—';
   const kind = meta.kind || 'trial';
+  const tier = meta.tier || kind;
+  const expiry = meta.expiry || signed.last_day || '';
   stmts.push(env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code));
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
+  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, tier, expiry, t, requestId, signed.code));
+  stmts.push(env.DB.prepare(
+    'UPDATE licence_requests SET licence_tier = ?, licence_expiry = ? WHERE id = ? AND code = ?',
+  ).bind(tier, expiry || null, requestId, signed.code));
   stmts.push(env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId));
@@ -401,16 +456,32 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   return { ok: true, signed };
 }
 
-export async function approveRequest(env, requestId, privateKey, options = {}) {
+async function signGrant(env, keys, grant, row) {
+  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
+  const when = new Date();
+  if (grant.grant === 'trial') {
+    if (!keys.trialKey) throw new Error('no_signing_key');
+    const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
+    return issueTrialCode(keys.trialKey, row.product, row.device, days, when, tz);
+  }
+  if (!keys.paidKey) return { refused: true, reason: REASON_PAID_KEY_MISSING };
+  if (grant.grant === 'permanent') {
+    return issuePermanentCode(keys.paidKey, row.product, row.device, when, tz);
+  }
+  return issuePaidUntilCode(keys.paidKey, row.product, row.device, grant.paid_until, when, tz);
+}
+
+export async function approveRequest(env, requestId, keys, options = {}) {
   await migrateLegacyTrialLocks(env);
   const force = options.force === true;
+  let grant;
+  try {
+    grant = parseOwnerGrant(options);
+  } catch {
+    throw new Error('bad_grant');
+  }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (!row || row.status === 'refused' || row.status === 'delivered') return null;
-
-  if (row.kind !== 'trial') {
-    await refuseRequest(env, requestId, REASON_PAID_IN_STUDIO);
-    return { refused: true, reason: REASON_PAID_IN_STUDIO };
-  }
 
   let dkey;
   try {
@@ -430,25 +501,30 @@ export async function approveRequest(env, requestId, privateKey, options = {}) {
       .bind('approved', now(), requestId).run();
   }
 
-  if (!force && (await trialUsedOnline(env, dkey, machineHash))) {
+  if (grant.grant === 'trial' && !force && (await trialUsedOnline(env, dkey, machineHash))) {
     await refuseRequest(env, requestId, 'already_used');
     return null;
   }
 
   const t = now();
-  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
-  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
   let signed;
   try {
-    signed = await issueTrialCode(privateKey, row.product, row.device, days, new Date(), tz);
+    signed = await signGrant(env, keys, grant, row);
   } catch (e) {
     if (e?.message === 'bad_device_code') {
       await refuseRequest(env, requestId, 'bad_device');
     }
     throw e;
   }
+  if (signed?.refused) {
+    await refuseRequest(env, requestId, signed.reason || REASON_PAID_KEY_MISSING);
+    return signed;
+  }
 
-  const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, { shop: row.shop, kind: row.kind });
+  const meta = tierMeta(grant, signed);
+  const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, {
+    shop: row.shop, kind: meta.kind, tier: meta.tier, expiry: meta.expiry,
+  });
   if (!outcome.ok) return null;
   return outcome.signed || signed;
 }
@@ -458,8 +534,14 @@ export async function refuseRequest(env, requestId, reason = 'refused') {
     .bind('refused', reason, now(), requestId).run();
 }
 
-async function issueOfflineCustomerInner(env, privateKey, device, shop, productId, options = {}) {
+async function issueOfflineCustomerInner(env, keys, device, shop, productId, options = {}) {
   const force = options.force === true;
+  let grant;
+  try {
+    grant = parseOwnerGrant(options);
+  } catch {
+    throw new Error('bad_grant');
+  }
   const dkey = deviceKey(device);
   const requestId = 'offline:' + dkey;
   const lock = deviceLockKey(dkey);
@@ -472,7 +554,7 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     }
   }
   let ownsLock = false;
-  if (!force && (await trialUsedForDevice(env, dkey))) {
+  if (grant.grant === 'trial' && !force && (await trialUsedForDevice(env, dkey))) {
     const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (row?.code && row.status === 'issued') {
@@ -485,9 +567,10 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
   const t = now();
   if (force) await clearTrialLocks(env, dkey, null);
 
+  const offlineKind = grant.grant === 'permanent' ? 'permanent' : grant.grant === 'paid' ? 'monthly' : 'trial';
   await env.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
-  ).bind(requestId, 'offline', productId, 'trial', device, dkey, '', 'offline-' + dkey, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
+  ).bind(requestId, 'offline', productId, offlineKind, device, dkey, '', 'offline-' + dkey, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
 
   if (!ownsLock) {
     const ins = await env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
@@ -523,14 +606,18 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     throw new Error('already_used');
   }
 
-  const days = hubTrialDaysInclusive(env.TRIAL_DAYS || 14);
-  const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
-  const signed = await issueTrialCode(privateKey, productId, device, days, new Date(), tz);
+  const grantRow = { product: productId, device };
+  let signed = await signGrant(env, keys, grant, grantRow);
+  if (signed?.refused) throw new Error(signed.reason || 'paid_signing_key_missing');
+  const meta = tierMeta(grant, signed);
   const issueSql =
     'UPDATE licence_requests SET status = ?, code = ?, device = ?, updated_at = ? WHERE id = ? AND code IS NULL AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
   const customerStmt = env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, 'trial', signed.serial, signed.first_day, signed.last_day, t, requestId, signed.code);
+    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
+  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, meta.expiry || null, t, requestId, signed.code);
+  const tierStmt = env.DB.prepare(
+    'UPDATE licence_requests SET licence_tier = ?, licence_expiry = ? WHERE id = ? AND code = ?',
+  ).bind(meta.tier, meta.expiry || null, requestId, signed.code);
   const cleanupStmt = env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId);
@@ -538,6 +625,7 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
     const results = await env.DB.batch([
       env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
       customerStmt,
+      tierStmt,
       cleanupStmt,
     ]);
     const issued = results[0]?.meta?.changes > 0;
@@ -570,11 +658,11 @@ async function issueOfflineCustomerInner(env, privateKey, device, shop, productI
   throw new Error('already_used');
 }
 
-export function issueOfflineCustomer(env, privateKey, device, shop, productId, options = {}) {
+export function issueOfflineCustomer(env, keys, device, shop, productId, options = {}) {
   const dkey = deviceKey(device);
   const tails = offlineTailMap(env);
   const prev = tails.get(dkey) || Promise.resolve();
-  const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, privateKey, device, shop, productId, options));
+  const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, keys, device, shop, productId, options));
   tails.set(dkey, job);
   return job.finally(() => {
     if (tails.get(dkey) === job) tails.delete(dkey);
@@ -582,6 +670,13 @@ export function issueOfflineCustomer(env, privateKey, device, shop, productId, o
 }
 
 /** Drop activation codes from delivered rows older than TRIAL_DAYS (scheduled). */
+export function ownerCapabilities(env) {
+  return {
+    paid_available: Boolean(env.PAID_SIGNING_KEY),
+    trial_available: Boolean(env.LICENCE_SIGNING_KEY),
+  };
+}
+
 export async function purgeStaleCodes(env) {
   const days = Number(env.TRIAL_DAYS || 14);
   const cutoff = now() - days * 86400;

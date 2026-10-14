@@ -10,6 +10,15 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
+    inputs:
+      trial_hub_public_key:
+        description: 'Optional PUBLIC trial-hub key (base64url) for this CI test build'
+        required: false
+        default: ''
+      paid_public_key:
+        description: 'Optional PUBLIC paid key (base64url, kid paid) for this CI test build'
+        required: false
+        default: ''
 
 permissions:
   contents: read  # no automatic customer releases from ephemeral CI builds
@@ -74,6 +83,17 @@ jobs:
           choco upgrade innosetup -y --no-progress
       - name: Generate a throwaway signing key for CI only
         run: python tools/ci_signing_key.py
+      - name: Also trust owner PUBLIC hub keys (manual workflow_dispatch only)
+        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.trial_hub_public_key != '' || inputs.paid_public_key != '') }}
+        shell: bash
+        env:
+          TRIAL_HUB_PUB: ${{ inputs.trial_hub_public_key }}
+          PAID_PUB: ${{ inputs.paid_public_key }}
+        run: |
+          extra=""
+          if [ -n "$TRIAL_HUB_PUB" ]; then extra="${extra},trial-hub:${TRIAL_HUB_PUB}"; fi
+          if [ -n "$PAID_PUB" ]; then extra="${extra},paid:${PAID_PUB}"; fi
+          echo "TO_RELEASE_PUBLIC_KEYS=${TO_RELEASE_PUBLIC_KEYS}${extra}" >> "$GITHUB_ENV"
       - name: Build a NON-CUSTOMER test installer
         run: python tools/build_windows.py
       - name: Check that the built program folder starts and serves its pages

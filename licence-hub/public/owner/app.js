@@ -7,15 +7,88 @@ async function api(path, opts) {
 }
 
 let csrf = '';
+let paidAvailable = false;
 
 async function session() {
   const s = await api('/session');
   if (s) csrf = s.csrf || '';
+  const cap = await api('/capabilities');
+  if (cap) paidAvailable = Boolean(cap.paid_available);
   return s;
 }
 
 function headers() {
   return { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf };
+}
+
+function escape(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function kindLabelAr(kind) {
+  if (kind === 'trial') return 'تجربة';
+  if (kind === 'monthly') return 'اشتراك مدفوع';
+  if (kind === 'permanent') return 'دائم';
+  return kind;
+}
+
+function tierPickerHtml(disabledPaid, customDate) {
+  const paidOff = disabledPaid ? ' disabled' : '';
+  const paidMsg = disabledPaid
+    ? '<p class="err">إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY في Cloudflare.</p>' : '';
+  return paidMsg + '<fieldset class="tier-pick" data-tier-form>' +
+    '<legend>نوع الترخيص</legend>' +
+    '<label class="tier-opt"><input type="radio" name="tier" value="trial" checked> تجربة ١٤ يوماً</label>' +
+    '<label class="tier-opt"><input type="radio" name="tier" value="paid"' + paidOff + '> مدفوع حتى تاريخ</label>' +
+    '<div class="tier-paid" data-paid-opts hidden>' +
+    '<div class="row wrap">' +
+    '<button type="button" class="btn sm" data-preset="1m">شهر</button>' +
+    '<button type="button" class="btn sm" data-preset="3m">٣ أشهر</button>' +
+    '<button type="button" class="btn sm" data-preset="6m">٦ أشهر</button>' +
+    '<button type="button" class="btn sm" data-preset="1y">سنة</button>' +
+    '</div>' +
+    '<div class="field"><label>تاريخ الانتهاء</label><input type="date" data-paid-until dir="ltr" value="' + escape(customDate || '') + '"></div>' +
+    '</div>' +
+    '<label class="tier-opt"><input type="radio" name="tier" value="permanent"' + paidOff + '> دائم</label>' +
+    '</fieldset>';
+}
+
+function wireTierForm(root) {
+  const form = root.querySelector('[data-tier-form]');
+  if (!form) return;
+  const paidBox = form.querySelector('[data-paid-opts]');
+  form.querySelectorAll('input[name="tier"]').forEach((radio) => {
+    radio.addEventListener('change', () => {
+      if (paidBox) paidBox.hidden = form.querySelector('input[value="paid"]:checked') == null;
+    });
+  });
+  form.querySelectorAll('[data-preset]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const preset = btn.getAttribute('data-preset');
+      const months = { '1m': 1, '3m': 3, '6m': 6, '1y': 12 }[preset];
+      const d = new Date();
+      d.setUTCMonth(d.getUTCMonth() + months);
+      const iso = d.toISOString().slice(0, 10);
+      const inp = form.querySelector('[data-paid-until]');
+      if (inp) inp.value = iso;
+      const paidRadio = form.querySelector('input[value="paid"]');
+      if (paidRadio) paidRadio.checked = true;
+      if (paidBox) paidBox.hidden = false;
+    });
+  });
+}
+
+function readGrant(root) {
+  const form = root.querySelector('[data-tier-form]');
+  if (!form) return { grant: 'trial' };
+  const tier = form.querySelector('input[name="tier"]:checked');
+  const val = tier ? tier.value : 'trial';
+  if (val === 'permanent') return { grant: 'permanent' };
+  if (val === 'paid') {
+    const until = form.querySelector('[data-paid-until]');
+    return { grant: 'paid', paid_until: until ? until.value : '' };
+  }
+  return { grant: 'trial' };
 }
 
 export function showIssuedCode(host, code, requestId) {
@@ -66,38 +139,46 @@ export async function loadPending(host) {
     ul.innerHTML = '<li class="muted">لا توجد طلبات معلّقة.</li>';
     return;
   }
+  const disablePaid = !paidAvailable;
   data.items.forEach((item) => {
     const li = document.createElement('li');
     const when = new Date(item.created_at * 1000).toLocaleString('ar-EG');
     const kindLabel = kindLabelAr(item.kind);
-    const paidNote = item.kind !== 'trial' ? '<div class="err">الاشتراك الشهري والدائم يُصدر من Licence Studio فقط — لا يمكن الموافقة من هنا.</div>' : '';
-    const usedNote = item.has_customer ? '<div class="err">هذا الجهاز لديه عميل مسجّل — الموافقة العادية مرفوضة؛ استخدم «إعادة إصدار» إن فُقد الكود.</div>' : '';
-    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · ' + escape(item.device) + '</div>' + paidNote + usedNote + '<div class="muted">' + when + '</div></div>';
+    const usedNote = item.has_customer ? '<div class="err">هذا الجهاز لديه عميل مسجّل — استخدم «إعادة إصدار» إن فُقد الكود.</div>' : '';
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · <span dir="ltr">' + escape(item.device) + '</span></div>' + usedNote + '<div class="muted">' + when + '</div></div>';
+    li.innerHTML += tierPickerHtml(disablePaid);
+    wireTierForm(li);
     const row = document.createElement('div');
     row.className = 'row';
     const ok = document.createElement('button');
     ok.className = 'btn primary';
     ok.type = 'button';
-    ok.textContent = 'موافق — تجربة';
-    ok.disabled = item.kind !== 'trial';
+    ok.textContent = 'موافقة — إصدار الكود';
     ok.addEventListener('click', async () => {
       ok.disabled = true;
-      const force = item.has_customer && confirm('إعادة إصدار تجربة لهذا الجهاز؟ (فقدان الكود فقط)');
-      const res = await api('/approve', { method: 'POST', headers: headers(), body: JSON.stringify({ id: item.id, csrf, force }) });
-      if (res && res.error === 'paid_in_licence_studio') {
-        alert('هذا الطلب اشتراك مدفوع — استخدم Licence Studio على جهاز المكتب.');
-      } else if (res && res.error === 'bad_device') {
+      const grant = readGrant(li);
+      const force = item.has_customer && confirm('إعادة إصدار لهذا الجهاز؟ (فقدان الكود فقط)');
+      const res = await api('/approve', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify({ id: item.id, csrf, force, ...grant }),
+      });
+      if (res && res.message === 'paid_key_missing') {
+        alert('إصدار المدفوع غير متاح على الخادم — راجع PAID_SIGNING_KEY.');
+        ok.disabled = false;
+        return;
+      }
+      if (res && res.error === 'bad_device') {
         alert('رمز الجهاز غير صالح — ارفض الطلب.');
         ok.disabled = false;
         return;
-      } else if (res && res.error && !res.ok) {
+      }
+      if (res && res.error && !res.ok) {
         alert('تعذّرت الموافقة: ' + res.error);
         ok.disabled = false;
         return;
       }
-      if (res && res.ok && res.code) {
-        showIssuedCode(host, res.code, item.id);
-      }
+      if (res && res.ok && res.code) showIssuedCode(host, res.code, item.id);
       loadPending(host);
     });
     const no = document.createElement('button');
@@ -129,35 +210,38 @@ export async function loadCustomers(host) {
   });
 }
 
-export function wireOffline(form, out) {
+export function wireOffline(form, out, tierHost) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
     await session();
     out.hidden = true;
     const device = form.device.value.trim();
     const shop = form.shop.value.trim();
-    const data = await api('/offline', { method: 'POST', headers: headers(), body: JSON.stringify({ device, shop, csrf }) });
+    const grant = readGrant(tierHost || form.closest('.card') || document);
+    const data = await api('/offline', {
+      method: 'POST',
+      headers: headers(),
+      body: JSON.stringify({ device, shop, csrf, ...grant }),
+    });
     if (!data || !data.ok) {
-      out.textContent = 'تعذّر إصدار الكود.';
+      out.textContent = data && data.error === 'paid_key_missing'
+        ? 'إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY.'
+        : 'تعذّر إصدار الكود.';
       out.hidden = false;
       return;
     }
-    out.innerHTML = '<p class="muted">اقرأ هذا الكود للعميل:</p><p class="big-code" id="issued-code"></p><button type="button" class="btn" id="copy-code">نسخ</button>';
+    out.innerHTML = '<p class="muted">اقرأ هذا الكود للعميل:</p><p class="big-code" id="issued-code"></p><button type="button" class="btn" data-copy>نسخ</button>';
     out.querySelector('#issued-code').textContent = data.code;
-    out.querySelector('#copy-code').addEventListener('click', () => {
-      navigator.clipboard.writeText(data.code);
-    });
+    out.querySelector('[data-copy]').addEventListener('click', () => navigator.clipboard.writeText(data.code));
     out.hidden = false;
   });
 }
 
-function escape(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-
-function kindLabelAr(kind) {
-  if (kind === 'trial') return 'تجربة';
-  if (kind === 'monthly') return 'شهري (Licence Studio)';
-  if (kind === 'permanent') return 'دائم (Licence Studio)';
-  return kind;
+export function mountOfflineTier(host) {
+  const slot = host.querySelector('[data-tier-slot]');
+  if (!slot) return;
+  session().then(() => {
+    slot.innerHTML = tierPickerHtml(!paidAvailable);
+    wireTierForm(slot);
+  });
 }

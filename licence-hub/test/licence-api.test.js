@@ -120,12 +120,28 @@ test('replay is refused for any mismatched identity even when nonce is known', a
     { kind: 'monthly' },
     { shop: 'Different shop' },
     { ref: 'different-ref' },
-    { version: '2.0' },
   ]) {
     const { res, data } = await postRequest(e, { ...original, ...changes });
     assert.equal(res.status, 401, JSON.stringify(changes));
     assert.equal(data.poll_token, undefined);
   }
+});
+
+test('request recovery still works if app upgraded before retry', async () => {
+  const e = env();
+  const original = body({ version: '1.0.0' });
+  const first = await postRequest(e, original);
+  const retry = await postRequest(e, { ...original, version: '2.3.0' });
+  assert.equal(retry.res.status, 200);
+  assert.equal(retry.data.replay, true);
+  assert.equal(retry.data.id, first.data.id);
+  assert.equal(retry.data.poll_token, first.data.poll_token);
+  const status = await getStatus(e, retry.data.id, retry.data.poll_token);
+  assert.equal(status.data.status, 'pending');
+  const rows = await e.DB.prepare('SELECT id, version FROM licence_requests WHERE nonce = ?')
+    .bind(original.nonce).all();
+  assert.equal(rows.results.length, 1);
+  assert.equal(rows.results[0].version, '1.0.0', 'original metadata remains intact');
 });
 
 test('replay on refused request retains the refusal reason without creating duplicates', async () => {

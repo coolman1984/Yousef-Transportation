@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Canonical trial-only key compare in afcodes (2026-10-14)
+
+**What/why:** Vendored `server/afcodes.py` matches Apps-Factory: trial-hub enforcement compares decoded 32-byte Ed25519 keys (padded/url or std base64 aliases); malformed `trial_only_keys` entries are skipped; `trial_key_days` vs `trial_key_grace` split when span alone exceeds 14 vs grace pushes total past 14.
+**Checks:** `cd tests && timeout 600 python3 -m unittest test_release_policy test_commercial_licence test_licence_hub_signer` (74 pass).
+**Next:** Merge PR; no hub or release-key changes.
+
 ## REV-iso1 + af-REV74 hub cross-channel locks (2026-10-14)
 
 **What/why:** Online/offline trial locks share `od:` + `pd:`/`ph:` (trip-orders still bridges via `d:`/`h:`); missing `PAID_SIGNING_KEY` on approve returns 503 `paid_key_missing` and leaves pending; owner tier picker defaults to trial when paid disabled; `0001` migrations per column + `0003` dedupe before unique index; `date_out_of_range` → 400; presets use `LICENCE_CALENDAR_TZ`; README documents sealed hub day replay guard + office regression test.

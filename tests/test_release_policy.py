@@ -145,8 +145,8 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
             long_trial = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 20, device=device)["code"]
             self.assertEqual(lic._check(long_trial, device, date.today(), lic.trusted_keys())["reason"], "trial_key_days")
             graced = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 14, device=device, grace_days=60)["code"]
-            self.assertEqual(lic._check(graced, device, date.today() + timedelta(days=70), lic.trusted_keys())["reason"], "trial_key_days")
-            self.assertEqual(lic._check(graced, device, date.today(), lic.trusted_keys())["reason"], "trial_key_days")
+            self.assertEqual(lic._check(graced, device, date.today() + timedelta(days=70), lic.trusted_keys())["reason"], "trial_key_grace")
+            self.assertEqual(lic._check(graced, device, date.today(), lic.trusted_keys())["reason"], "trial_key_grace")
             with patch.object(afcodes, "_device_tag", lambda code: b"\0" * 6):
                 unbound = afcodes.issue_code(hub_pem, "trip-orders", "trial", date.today(), 14, device=device)["code"]
             self.assertFalse(lic._check(unbound, device, date.today(), lic.trusted_keys())["full"])
@@ -156,6 +156,82 @@ assert st['enforced'] and not st['full'] and st['state'] == 'none'
             self.assertEqual(lic._check(monthly, device, date.today(), lic.trusted_keys())["reason"], "trial_key_edition")
             paid = afcodes.issue_code(studio_pem, "trip-orders", "standard", date.today(), 30, device=device)["code"]
             self.assertTrue(lic._check(paid, device, date.today(), lic.trusted_keys())["full"])
+
+    def test_trial_only_key_aliases_reject_paid_editions(self):
+        from datetime import date
+        from cryptography.hazmat.primitives import serialization
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        sys.path.insert(0, str(ROOT / "server"))
+        import afcodes
+
+        hub = None
+        hub_pub = hub_pub_padded = hub_pub_std = None
+        for _ in range(2000):
+            candidate = Ed25519PrivateKey.generate()
+            raw = candidate.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+            url = base64.urlsafe_b64encode(raw).decode().rstrip("=")
+            std = base64.b64encode(raw).decode().rstrip("=")
+            if std != url and ('+' in std or '/' in std):
+                hub = candidate
+                hub_pub, hub_pub_std = url, std
+                hub_pub_padded = base64.urlsafe_b64encode(raw).decode()
+                break
+        self.assertIsNotNone(hub, "need a key whose standard and url-safe spellings differ")
+
+        hub_pem = hub.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+        studio = Ed25519PrivateKey.generate()
+        studio_raw = studio.public_key().public_bytes(
+            serialization.Encoding.Raw, serialization.PublicFormat.Raw)
+        studio_pub = base64.urlsafe_b64encode(studio_raw).decode().rstrip("=")
+        studio_pem = studio.private_bytes(
+            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+        device = "ABCDE-FGHJK"
+        trusted = [hub_pub]
+        today = date.today()
+        mid = len(hub_pub) // 2
+        hub_pub_spaced = hub_pub[:mid] + " \n" + hub_pub[mid:]
+
+        paid_codes = {
+            "standard": afcodes.issue_code(
+                hub_pem, "trip-orders", "standard", today, 30, device=device)["code"],
+            "pro": afcodes.issue_code(hub_pem, "trip-orders", "pro", today, 30, device=device)["code"],
+            "perpetual": afcodes.issue_code(
+                hub_pem, "trip-orders", "perpetual", today, 1, device=device)["code"],
+        }
+        trial_spellings = (
+            hub_pub_padded,
+            hub_pub_std,
+            f"trial-hub:{hub_pub}",
+            hub_pub_spaced,
+            frozenset({"not-a-key", hub_pub_padded}),
+        )
+
+        for spelling in trial_spellings:
+            trial_only = spelling if isinstance(spelling, frozenset) else frozenset({spelling})
+            label = next(iter(trial_only))[:20]
+            for edition, code in paid_codes.items():
+                with self.subTest(trial_only=label, edition=edition):
+                    result = afcodes.read_code(
+                        code, trusted, "trip-orders", device=device, today=today,
+                        trial_only_keys=trial_only)
+                    self.assertEqual(result.reason, "trial_key_edition")
+
+        trial_ok = afcodes.issue_code(hub_pem, "trip-orders", "trial", today, 14, device=device)["code"]
+        self.assertTrue(
+            afcodes.read_code(
+                trial_ok, trusted, "trip-orders", device=device, today=today,
+                trial_only_keys=frozenset({hub_pub_std, "garbage"})).full_access)
+
+        honest_paid = afcodes.issue_code(
+            studio_pem, "trip-orders", "standard", today, 30, device=device)["code"]
+        messy_trusted = ["not-a-key", "%%%%", studio_pub]
+        paid_result = afcodes.read_code(
+            honest_paid, messy_trusted, "trip-orders", device=device, today=today,
+            trial_only_keys=frozenset({hub_pub}))
+        self.assertTrue(paid_result.full_access)
 
     def test_ci_build_is_conspicuously_not_for_customers(self):
         build = (ROOT / "tools" / "build_windows.py").read_text("utf-8")

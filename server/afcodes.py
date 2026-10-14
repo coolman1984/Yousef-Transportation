@@ -107,15 +107,30 @@ def product_tag(product_id: str) -> bytes:
     return hashlib.sha256(b'AF-PRODUCT/1|' + product_id.encode('utf-8')).digest()[:4]
 
 
+def canonical_key_bytes(s: str) -> bytes | None:
+    """32-byte Ed25519 public key from config text, or None if malformed (never raises)."""
+    if not isinstance(s, str):
+        return None
+    t = s.strip()
+    if ':' in t:
+        t = t.split(':', 1)[1]
+    t = ''.join(t.split())
+    t = t.rstrip('=')
+    t = t.replace('+', '-').replace('/', '_')
+    pad = '=' * (-len(t) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(t + pad)
+    except (binascii.Error, ValueError):
+        return None
+    if len(raw) != 32:
+        return None
+    return raw
+
+
 def _decode_ed25519_public_b64(text: str) -> bytes:
     """Raw 32-byte Ed25519 public key (urlsafe or standard base64, optional padding)."""
-    s = text.strip()
-    pad = '=' * (-len(s) % 4)
-    try:
-        raw = base64.urlsafe_b64decode(s + pad)
-    except (binascii.Error, ValueError):
-        raw = base64.b64decode(s + pad)
-    if len(raw) != 32:
+    raw = canonical_key_bytes(text)
+    if raw is None:
         raise ValueError('bad_public_key_length')
     return raw
 
@@ -133,10 +148,9 @@ def _trial_only_raw_keys(trial_only_keys: frozenset[str] | None) -> frozenset[by
         return frozenset()
     out: set[bytes] = set()
     for k in trial_only_keys:
-        try:
-            out.add(_decode_ed25519_public_b64(k))
-        except ValueError:
-            continue
+        raw = canonical_key_bytes(k)
+        if raw is not None:
+            out.add(raw)
     return frozenset(out)
 
 
@@ -219,7 +233,9 @@ def read_code(text: str, trusted_public_keys: list[str], product_id: str, device
         return bad('unknown_version')
     keys: dict[bytes, bytes] = {}
     for k in trusted_public_keys:
-        raw = _decode_ed25519_public_b64(k)
+        raw = canonical_key_bytes(k)
+        if raw is None:
+            continue
         keys[_key_tag_raw(raw)] = raw
     if ktag not in keys:
         return bad('unknown_key')

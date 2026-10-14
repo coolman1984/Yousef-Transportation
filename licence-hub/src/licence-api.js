@@ -709,13 +709,26 @@ export async function handleLicence(request, env, url) {
     const shopStored = blankLongDigitRuns(body.shop).slice(0, 60);
     const refStored = await refFingerprint(body.ref);
 
-    const existing = await env.DB.prepare('SELECT id, poll_token_hash, status, reason FROM licence_requests WHERE nonce = ?').bind(body.nonce).first();
+    // A fresh random client nonce is the recovery capability after a lost HTTP response.
+    // Re-derive its HMAC poll token only for the identical request, never for a
+    // different device, product, machine or licence kind reusing the same nonce.
+    const existing = await env.DB.prepare(
+      'SELECT id, poll_token_hash, status, reason, product, kind, device_key, machine, shop, ref, version FROM licence_requests WHERE nonce = ?',
+    ).bind(body.nonce).first();
     if (existing) {
-      if (existing.poll_token_hash !== pollHash) return json({}, 401);
+      if (existing.poll_token_hash !== pollHash
+          || existing.product !== body.product || existing.kind !== body.kind
+          || existing.device_key !== dkey || existing.machine !== body.machine
+          || existing.shop !== shopStored || existing.ref !== refStored
+          || existing.version !== body.version.slice(0, 40)) return json({}, 401);
+      // The original request and its persisted id are reused: no extra licence
+      // request, new trial window or owner notification is created on a replay.
       return json({
         replay: true,
         id: existing.id,
+        poll_token: poll,
         status: existing.status,
+        ...(existing.status === 'refused' ? { reason: existing.reason } : {}),
       });
     }
 

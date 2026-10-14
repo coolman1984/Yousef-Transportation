@@ -6,7 +6,7 @@ import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
-  offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct,
+  offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -782,6 +782,87 @@ test('legacy d: and offline: device rows block offline trip-orders trial', async
   await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
     .bind(`offline:${dkey}`, 'legacy-off', t).run();
   assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+});
+
+test('wouldDowngradeGrant blocks paid to trial and shorter paid term', () => {
+  const paid = { code: 'X', licence_tier: 'paid', licence_expiry: '2028-06-01' };
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'trial' }), true);
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'paid', paid_until: '2027-01-01' }), true);
+  assert.equal(wouldDowngradeGrant(paid, { grant: 'paid', paid_until: '2029-01-01' }), false);
+  const perm = { code: 'Y', licence_tier: 'permanent' };
+  assert.equal(wouldDowngradeGrant(perm, { grant: 'paid', paid_until: '2029-01-01' }), true);
+});
+
+test('offline paid reissue as trial without force is refused and keeps paid code', async () => {
+  const e = env();
+  const keys = await signingKeys(50, 51);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  assert.ok(paid.code);
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }),
+    /downgrade/,
+  );
+  const row = await e.DB.prepare('SELECT code, licence_tier FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  assert.equal(row.code, paid.code);
+  assert.equal(row.licence_tier, 'paid');
+});
+
+test('pending monthly approve as trial without force returns downgrade not refuse', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(52, 53);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('monthly-pending', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-month', '', '', '', 'pending', 9, 9).run();
+  await assert.rejects(() => approveRequest(e, 'monthly-pending', keys, { grant: 'trial' }), /downgrade/);
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('monthly-pending').first();
+  assert.equal(row.status, 'pending');
+  assert.equal(row.reason, '');
+});
+
+test('al-store offline trial does not write trip-orders d: lock or block trip-orders trial', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 60));
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 61));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  const keysTo = await loadSigningKeys(e, 'trip-orders');
+  await issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' });
+  const legacyLock = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.ok(!legacyLock);
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), false);
+  const trip = await issueOfflineCustomer(e, keysTo, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trip.code);
+});
+
+test('signing failure on offline reissue leaves stored paid code', async () => {
+  const e = env();
+  const keys = await signingKeys(54, 55);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  const keysNoTrial = { trialKey: null, paidKey: keys.paidKey };
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keysNoTrial, device, 'Shop', 'trip-orders', { grant: 'trial', force: true }),
+    /no_signing_key/,
+  );
+  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  assert.equal(row.code, paid.code);
 });
 
 test('offline lock race does not return success with a different grant code', async () => {

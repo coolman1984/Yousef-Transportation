@@ -116,6 +116,8 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
+      if (e?.message === 'downgrade') return json({ error: 'downgrade' }, 409);
+      if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
   }
@@ -145,6 +147,8 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
+      if (e?.message === 'downgrade') return json({ error: 'downgrade' }, 409);
+      if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
   }

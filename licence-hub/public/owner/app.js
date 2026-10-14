@@ -38,6 +38,22 @@ export function approveAfterReissueConfirm(hasCustomer, userConfirmed) {
   return { abort: false, force: Boolean(hasCustomer && userConfirmed) };
 }
 
+export function defaultTierSelection(requestKind) {
+  if (requestKind === 'permanent') return { tier: 'permanent' };
+  if (requestKind === 'monthly') return { tier: 'paid', paidUntil: presetPaidUntil('1m') };
+  return { tier: 'trial' };
+}
+
+export function customerTierLabelAr(item) {
+  const tier = String(item.licence_tier || item.kind || '').trim().toLowerCase();
+  if (tier === 'permanent') return 'دائم';
+  if (tier === 'paid' || tier === 'monthly') {
+    const until = String(item.licence_expiry || item.last_day || '').trim();
+    return until ? ('مدفوع حتى ' + until) : 'مدفوع';
+  }
+  return 'تجربة';
+}
+
 export function productLabelAr(productId) {
   if (productId === 'trip-orders') return 'طلبات الرحلات (يوسف)';
   if (productId === 'al-store') return 'المتجر';
@@ -77,25 +93,31 @@ function kindLabelAr(kind) {
   return kind;
 }
 
-export function tierPickerHtml(disabledPaid, customDate, requestId) {
+export function tierPickerHtml(disabledPaid, customDate, requestId, requestKind) {
   const tierName = 'tier-' + (requestId || 'offline');
+  const sel = defaultTierSelection(requestKind);
   const paidOff = disabledPaid ? ' disabled' : '';
   const paidMsg = disabledPaid
     ? '<p class="err">إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY في Cloudflare.</p>' : '';
+  const trialChecked = sel.tier === 'trial' ? ' checked' : '';
+  const paidChecked = sel.tier === 'paid' ? ' checked' : '';
+  const permChecked = sel.tier === 'permanent' ? ' checked' : '';
+  const paidBoxHidden = sel.tier === 'paid' ? '' : ' hidden';
+  const dateVal = escape(customDate || sel.paidUntil || '');
   return paidMsg + '<fieldset class="tier-pick" data-tier-form>' +
     '<legend>نوع الترخيص</legend>' +
-    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="trial" checked> تجربة ١٤ يوماً</label>' +
-    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="paid"' + paidOff + '> مدفوع حتى تاريخ</label>' +
-    '<div class="tier-paid" data-paid-opts hidden>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="trial"' + trialChecked + '> تجربة ١٤ يوماً</label>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="paid"' + paidOff + paidChecked + '> مدفوع حتى تاريخ</label>' +
+    '<div class="tier-paid" data-paid-opts' + paidBoxHidden + '>' +
     '<div class="row wrap">' +
     '<button type="button" class="btn sm" data-preset="1m">شهر</button>' +
     '<button type="button" class="btn sm" data-preset="3m">٣ أشهر</button>' +
     '<button type="button" class="btn sm" data-preset="6m">٦ أشهر</button>' +
     '<button type="button" class="btn sm" data-preset="1y">سنة</button>' +
     '</div>' +
-    '<div class="field"><label>تاريخ الانتهاء</label><input type="date" data-paid-until dir="ltr" value="' + escape(customDate || '') + '"></div>' +
+    '<div class="field"><label>تاريخ الانتهاء</label><input type="date" data-paid-until dir="ltr" value="' + dateVal + '"></div>' +
     '</div>' +
-    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="permanent"' + paidOff + '> دائم</label>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="permanent"' + paidOff + permChecked + '> دائم</label>' +
     '</fieldset>';
 }
 
@@ -228,7 +250,7 @@ function renderPendingList(host, items) {
     const prod = productLabelAr(item.product || 'trip-orders');
     const usedNote = item.has_customer ? '<div class="err">هذا الجهاز لديه عميل مسجّل — استخدم «إعادة إصدار» إن فُقد الكود.</div>' : '';
     li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(prod) + ' · ' + escape(kindLabel) + ' · <span dir="ltr">' + escape(item.device) + '</span></div>' + usedNote + '<div class="muted">' + when + '</div></div>';
-    li.innerHTML += tierPickerHtml(disablePaid, '', item.id);
+    li.innerHTML += tierPickerHtml(disablePaid, '', item.id, item.kind);
     wireTierForm(li);
     const row = document.createElement('div');
     row.className = 'row';
@@ -244,12 +266,25 @@ function renderPendingList(host, items) {
         ok.disabled = false;
         return;
       }
-      const force = opts.force;
-      const res = await api('/approve', {
+      let force = opts.force;
+      const approveBody = () => ({ id: item.id, csrf, force, ...grant });
+      let res = await api('/approve', {
         method: 'POST',
         headers: headers(),
-        body: JSON.stringify({ id: item.id, csrf, force, ...grant }),
+        body: JSON.stringify(approveBody()),
       });
+      if (res && res.error === 'downgrade' && !force) {
+        if (!confirm('تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟')) {
+          ok.disabled = false;
+          return;
+        }
+        force = true;
+        res = await api('/approve', {
+          method: 'POST',
+          headers: headers(),
+          body: JSON.stringify(approveBody()),
+        });
+      }
       if (res && res.message === 'paid_key_missing') {
         alert('إصدار المدفوع غير متاح على الخادم — راجع PAID_SIGNING_KEY.');
         ok.disabled = false;
@@ -291,9 +326,10 @@ export async function loadCustomers(host) {
   ul.innerHTML = '';
   data.items.forEach((item) => {
     const li = document.createElement('li');
+    const tierLabel = customerTierLabelAr(item);
     const left = item.days_left != null ? (' · باقي ' + item.days_left + ' يوم') : '';
     const prod = productLabelAr(item.product || 'trip-orders');
-    li.innerHTML = '<div><strong>' + escape(item.shop) + '</strong><div class="muted">' + escape(prod) + '</div><div class="muted" dir="ltr">' + escape(item.device) + left + '</div></div>';
+    li.innerHTML = '<div><strong>' + escape(item.shop) + '</strong><div class="muted">' + escape(prod) + ' · ' + escape(tierLabel) + '</div><div class="muted" dir="ltr">' + escape(item.device) + left + '</div></div>';
     ul.append(li);
   });
 }
@@ -310,11 +346,22 @@ export function wireOffline(form, out, tierHost) {
     const productEl = form.querySelector('[name="product"]');
     const product = productEl ? productEl.value : 'trip-orders';
     const grant = readGrant(tierHost || form.closest('.card') || document);
-    const data = await api('/offline', {
+    const offlineBody = (force) => ({ device, shop, product, csrf, force, ...grant });
+    let data = await api('/offline', {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify({ device, shop, product, csrf, ...grant }),
+      body: JSON.stringify(offlineBody(false)),
     });
+    if (data && data.error === 'downgrade') {
+      if (!confirm('تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟')) {
+        return;
+      }
+      data = await api('/offline', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(offlineBody(true)),
+      });
+    }
     if (!data || !data.ok) {
       out.textContent = data && data.error === 'paid_key_missing'
         ? 'إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY.'

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier, approveAfterReissueConfirm,
+  defaultTierSelection, customerTierLabelAr,
 } from '../public/owner/app.js';
 
 function panelEl() {
@@ -41,6 +42,21 @@ test('issued code panel is outside the pending list and stays after refresh', ()
   pending.innerHTML = '<li class="muted">لا توجد طلبات معلّقة.</li>';
   assert.match(issued.innerHTML, /CODE-123/);
   assert.equal(issued.dataset.requestId, 'req-1');
+});
+
+test('tier picker preselects grant from request kind', () => {
+  const monthly = tierPickerHtml(false, '', 'req-m', 'monthly');
+  assert.match(monthly, /value="paid"[^>]*checked/);
+  assert.doesNotMatch(monthly, /value="trial"[^>]*checked/);
+  const perm = tierPickerHtml(false, '', 'req-p', 'permanent');
+  assert.match(perm, /value="permanent"[^>]*checked/);
+  assert.deepEqual(defaultTierSelection('monthly').tier, 'paid');
+});
+
+test('customerTierLabelAr shows trial paid and permanent', () => {
+  assert.equal(customerTierLabelAr({ licence_tier: 'trial' }), 'تجربة');
+  assert.equal(customerTierLabelAr({ licence_tier: 'paid', licence_expiry: '2028-01-15' }), 'مدفوع حتى 2028-01-15');
+  assert.equal(customerTierLabelAr({ licence_tier: 'permanent' }), 'دائم');
 });
 
 test('tier picker uses unique radio group names per request', () => {

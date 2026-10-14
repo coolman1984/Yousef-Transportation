@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-owner5 hub fixes (2026-10-14)
+
+**What/why:** Block licence downgrades unless `force`; sign new codes before replacing stored rows (503 on missing key); pending cards preselect request kind; `d:` trial lock only for trip-orders; customer list shows tier; CI workflow_dispatch validates optional hub public keys.
+**Checks:** `cd licence-hub && npm test` (84 pass); `cd tests && timeout 600 python3 -m unittest test_commercial_licence test_licence_hub_signer test_hub_time test_crypto`.
+**Next:** Owner deploy hub worker; no D1 migration.
+
 ## REV-owner4 hub fixes (2026-10-14)
 
 **What/why:** Paid/permanent online approval upgrades after trial without clearing one-trial locks; force reissue keeps trial lock; legacy `d:` / `offline:<device>` honoured for offline trip-orders; offline lock races check `storedGrantMatches`; owner approve cancel skips POST; customers API one row per device+product.

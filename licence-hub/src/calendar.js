@@ -17,6 +17,13 @@ export function addCalendarDays(iso, days) {
   return end.toISOString().slice(0, 10);
 }
 
+/** Shift a YYYY-MM-DD string by signed whole calendar days. */
+export function shiftCalendarDays(iso, deltaDays) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = Date.UTC(y, m - 1, d);
+  return new Date(t + deltaDays * 86400000).toISOString().slice(0, 10);
+}
+
 function daysInMonth(year, month1to12) {
   return new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
 }

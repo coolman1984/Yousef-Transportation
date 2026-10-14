@@ -1,6 +1,7 @@
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
-  REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, licencePathname,
+  REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, defaultProduct, ownerProductsPayload,
+  licencePathname, currentTerm,
 } from './licence-api.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -65,33 +66,39 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/customers' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      `SELECT c.shop, r.device, r.product,
-         COALESCE(NULLIF(r.licence_tier, ''), NULLIF(c.licence_tier, ''), r.kind, c.kind) AS kind,
-         COALESCE(r.licence_expiry, c.licence_expiry, c.last_day, '') AS last_day,
-         COALESCE(NULLIF(r.licence_tier, ''), NULLIF(c.licence_tier, ''), r.kind, c.kind) AS licence_tier,
-         COALESCE(r.licence_expiry, c.licence_expiry) AS licence_expiry,
-         c.created_at, r.updated_at
+      `SELECT c.shop, c.device, c.product, c.kind, c.licence_tier, c.licence_expiry, c.last_day, c.created_at
        FROM customers c
-       INNER JOIN (
-         SELECT shop, device, device_key, product, kind, licence_tier, licence_expiry, updated_at,
-           ROW_NUMBER() OVER (PARTITION BY device_key, product ORDER BY updated_at DESC) AS rn
-         FROM licence_requests
-         WHERE status IN ('issued', 'delivered')
-       ) r ON r.device = c.device AND r.product = c.product AND r.rn = 1
-       ORDER BY r.updated_at DESC LIMIT 200`,
+       ORDER BY c.created_at DESC LIMIT 200`,
     ).bind().all();
-    const items = (rows.results || []).map((r) => {
+    const items = [];
+    for (const c of rows.results || []) {
+      const term = await currentTerm(env, c.product, c.device);
+      const licenceTier = term?.tier || c.licence_tier || c.kind || '';
+      const licenceExpiry = term?.until || c.licence_expiry || c.last_day || '';
+      const lastDay = licenceExpiry || c.last_day || '';
       let daysLeft = null;
-      if (r.last_day) {
-        const end = Date.parse(r.last_day + 'T12:00:00Z');
+      if (lastDay && licenceTier !== 'permanent') {
+        const end = Date.parse(lastDay + 'T12:00:00Z');
         daysLeft = Math.max(0, Math.floor((end - Date.now()) / 86400000) + 1);
       }
-      return { ...r, days_left: daysLeft };
-    });
+      items.push({
+        shop: c.shop,
+        device: c.device,
+        product: c.product,
+        kind: licenceTier,
+        licence_tier: licenceTier,
+        licence_expiry: licenceExpiry,
+        last_day: lastDay,
+        created_at: c.created_at,
+        days_left: daysLeft,
+      });
+    }
     return json({ items });
   }
   if (path === '/products' && request.method === 'GET') {
-    return json({ products: [...products(env)] });
+    const payload = ownerProductsPayload(env);
+    if (!payload) return json({ error: 'config' }, 503);
+    return json(payload);
   }
 
   if (request.method !== 'POST') return json({ error: 'method' }, 405);
@@ -101,10 +108,12 @@ async function ownerApi(request, env, url, session) {
 
   if (path === '/approve') {
     const reqRow = await env.DB.prepare('SELECT product FROM licence_requests WHERE id = ?').bind(body.id || '').first();
-    const keys = await loadSigningKeys(env, reqRow?.product || 'trip-orders');
+    const keys = await loadSigningKeys(env, reqRow?.product || defaultProduct(env));
     try {
       const signed = await approveRequest(env, body.id, keys, {
         force: body.force === true,
+        reissue: body.reissue === true,
+        confirm_downgrade: body.confirm_downgrade === true,
         grant: body.grant,
         preset: body.preset,
         paid_until: body.paid_until,
@@ -126,6 +135,11 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'downgrade') {
         return json({ error: 'downgrade', current: e.current || undefined }, 409);
       }
+      if (e?.message === 'downgrade_forbidden') {
+        return json({ error: 'downgrade_forbidden', current: e.current || undefined }, 409);
+      }
+      if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
+      if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
@@ -138,12 +152,18 @@ async function ownerApi(request, env, url, session) {
     const device = String(body.device || '').trim();
     const shop = String(body.shop || '').trim();
     if (!device) return json({ error: 'device' }, 400);
-    const product = String(body.product || 'trip-orders').trim() || 'trip-orders';
-    if (!products(env).has(product)) return json({ error: 'product' }, 400);
+    const allowed = products(env);
+    if (!allowed) return json({ error: 'config' }, 503);
+    const fallback = defaultProduct(env);
+    if (!fallback) return json({ error: 'config' }, 503);
+    const product = String(body.product || fallback).trim() || fallback;
+    if (!allowed.has(product)) return json({ error: 'product' }, 400);
     const keys = await loadSigningKeys(env, product);
     try {
       const signed = await issueOfflineCustomer(env, keys, device, shop, product, {
         force: body.force === true,
+        reissue: body.reissue === true,
+        confirm_downgrade: body.confirm_downgrade === true,
         grant: body.grant,
         preset: body.preset,
         paid_until: body.paid_until,
@@ -160,6 +180,11 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'downgrade') {
         return json({ error: 'downgrade', current: e.current || undefined }, 409);
       }
+      if (e?.message === 'downgrade_forbidden') {
+        return json({ error: 'downgrade_forbidden', current: e.current || undefined }, 409);
+      }
+      if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
+      if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
@@ -245,7 +270,7 @@ export default {
       }
       const owner = await ownerPages(request, env, url);
       if (owner) return owner;
-      if (url.pathname === '/') return html('<p>Trip Orders licence hub</p>');
+      if (url.pathname === '/') return html('<p>Licence hub</p>');
       return new Response('Not found', { status: 404, headers: HEADERS });
     } catch (e) {
       return json({ error: 'server' }, 500);

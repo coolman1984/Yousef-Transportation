@@ -2,7 +2,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier, approveAfterReissueConfirm,
-  defaultTierSelection, customerTierLabelAr, downgradeConfirmMessageAr,
+  offlineAfterBlockedError, offlineFlagsAfterDowngradeConfirmed, ownerIssueFlags, defaultTierSelection, customerTierLabelAr, downgradeConfirmMessageAr, productLabelAr,
+  setOwnerHubCalendarTz,
 } from '../public/owner/app.js';
 
 function panelEl() {
@@ -21,9 +22,25 @@ function panelEl() {
 }
 
 test('approveAfterReissueConfirm aborts when owner cancels reissue confirm', () => {
-  assert.deepEqual(approveAfterReissueConfirm(true, false), { abort: true, force: false });
-  assert.deepEqual(approveAfterReissueConfirm(true, true), { abort: false, force: false });
-  assert.deepEqual(approveAfterReissueConfirm(false, false), { abort: false, force: false });
+  assert.deepEqual(approveAfterReissueConfirm(true, false), { abort: true, reissue: false });
+  assert.deepEqual(approveAfterReissueConfirm(true, true), { abort: false, reissue: true });
+  assert.deepEqual(approveAfterReissueConfirm(false, false), { abort: false, reissue: false });
+});
+
+test('offlineAfterBlockedError maps reissue and already_used to reissue retry', () => {
+  assert.deepEqual(offlineAfterBlockedError('reissue_confirm', false), { abort: true, reissue: false });
+  assert.deepEqual(offlineAfterBlockedError('already_used', true), { abort: false, reissue: true });
+  assert.deepEqual(offlineAfterBlockedError('downgrade', true), { abort: false, reissue: false });
+});
+
+test('offlineFlagsAfterDowngradeConfirmed sets reissue for delivered replacement', () => {
+  assert.deepEqual(offlineFlagsAfterDowngradeConfirmed(), { confirmDowngrade: true, reissue: true });
+});
+
+test('ownerIssueFlags sends reissue and confirm_downgrade explicitly', () => {
+  assert.deepEqual(ownerIssueFlags({}), {});
+  assert.deepEqual(ownerIssueFlags({ reissue: true }), { reissue: true });
+  assert.deepEqual(ownerIssueFlags({ reissue: true, confirmDowngrade: true }), { reissue: true, confirm_downgrade: true });
 });
 
 test('downgradeConfirmMessageAr includes current paid term', () => {
@@ -66,6 +83,11 @@ test('tier picker falls back to trial when paid radios are disabled', () => {
   assert.deepEqual(defaultTierSelection('monthly', false).tier, 'trial');
 });
 
+test('productLabelAr uses labels map and falls back to product id', () => {
+  assert.equal(productLabelAr('my-app', { 'my-app': 'تطبيقي' }), 'تطبيقي');
+  assert.equal(productLabelAr('trip-orders', {}), 'trip-orders');
+});
+
 test('customerTierLabelAr shows trial paid and permanent', () => {
   assert.equal(customerTierLabelAr({ licence_tier: 'trial' }), 'تجربة');
   assert.equal(customerTierLabelAr({ licence_tier: 'paid', licence_expiry: '2028-01-15' }), 'مدفوع حتى 2028-01-15');
@@ -101,7 +123,9 @@ test('offline submit stays disabled until product list is loaded', async (t) => 
     const path = String(url);
     if (path.includes('/session')) return { status: 200, json: async () => ({ csrf: 'x' }) };
     if (path.includes('/capabilities')) return { status: 200, json: async () => ({ products: { 'trip-orders': { paid_available: true } } }) };
-    if (path.includes('/products')) return { status: 200, json: async () => ({ products: ['trip-orders'] }) };
+    if (path.includes('/products')) {
+      return { status: 200, json: async () => ({ products: ['trip-orders'], labels: {}, default_product: 'trip-orders' }) };
+    }
     return { status: 404, json: async () => ({}) };
   });
   const tierWrap = { innerHTML: '', querySelector: () => null };
@@ -128,12 +152,14 @@ test('offline submit stays disabled until product list is loaded', async (t) => 
   assert.equal(submit.disabled, false);
 });
 
-test('presetPaidUntil clamps month overflow from Cairo today', () => {
+test('presetPaidUntil clamps month overflow using hub calendar tz', () => {
+  setOwnerHubCalendarTz('Pacific/Kiritimati');
   const orig = Date.prototype.toLocaleDateString;
   Date.prototype.toLocaleDateString = function (locales, opts) {
-    if (opts && opts.timeZone === 'Africa/Cairo') return '2026-01-31';
+    if (opts && opts.timeZone === 'Pacific/Kiritimati') return '2026-01-31';
     return orig.call(this, locales, opts);
   };
   assert.equal(presetPaidUntil('1m'), '2026-02-28');
   Date.prototype.toLocaleDateString = orig;
+  setOwnerHubCalendarTz('Africa/Cairo');
 });

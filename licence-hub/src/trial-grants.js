@@ -201,11 +201,6 @@ function requestIsTrialGrantSource(row) {
     if (status === 'expired' && !hasExpiry) return false;
     return true;
   }
-  const kind = String(row?.kind ?? '').trim().toLowerCase();
-  if (kind === 'trial') {
-    if (status === 'expired' && !hasExpiry) return false;
-    return hasExpiry || ['issued', 'delivered'].includes(status);
-  }
   return false;
 }
 
@@ -215,12 +210,22 @@ function trialWindowFromEtwRow(row) {
   if (!etw) return null;
   const win = parseEtwWindow(row.request_id);
   if (!win) return null;
+  let subject;
+  if (etw.kind === 'm') {
+    subject = etw.subject.toLowerCase();
+  } else {
+    try {
+      subject = deviceKeyNorm(etw.subject);
+    } catch {
+      return null;
+    }
+  }
   return {
     first: win.first,
     last: win.last,
     product: etw.product,
     kind: etw.kind,
-    subject: etw.kind === 'm' ? etw.subject.toLowerCase() : etw.subject,
+    subject,
     source: null,
   };
 }
@@ -377,15 +382,19 @@ async function computeLinkedClosure(env, product, device, machines = [], budget 
 /** Every linked device key and machine hash (lowercased) for trial identity. */
 export async function linkedSubjects(env, productId, device, machines = []) {
   const product = normalizeProduct(productId);
-  const closure = await computeLinkedClosure(env, product, device, machines, null);
+  const budget = { used: 0 };
+  const closure = await computeLinkedClosure(env, product, device, machines, budget);
   if (closure.blocked) {
     return { devices: [], machines: [], deviceCodes: [], link_limit: true };
   }
-  const deviceCodes = await deviceCodesForClosure(env, product, device, closure.devices);
+  const codeResult = await deviceCodesForClosure(env, product, device, closure.devices, budget);
+  if (codeResult.limit) {
+    return { devices: [], machines: [], deviceCodes: [], link_limit: true };
+  }
   return {
     devices: closure.devices,
     machines: closure.machines,
-    deviceCodes,
+    deviceCodes: codeResult.codes,
     link_limit: false,
   };
 }
@@ -543,6 +552,11 @@ export async function resolveTrial(env, productId, device, machines = [], option
   return { kind: 'eligible' };
 }
 
+/**
+ * Insert-only trial ledger rows for a device and optional machine hashes.
+ * Device rows are skipped when a machine row already exists with a different window
+ * (callers must re-resolve inside the same batch before granting — PR B).
+ */
 export function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);
   const dkey = deviceKeyNorm(device);
@@ -553,22 +567,46 @@ export function trialGrantStatements(env, productId, device, machines, window, s
   }
   const createdAt = new Date().toISOString();
   const src = sourceRequest || null;
-  const stmts = [
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-       VALUES(?, 'd', ?, ?, ?, ?, ?)`,
-    ).bind(product, dkey, first, last, createdAt, src),
-  ];
+  const mhList = [];
   const seen = new Set();
   for (const raw of machines || []) {
     const mh = normalizeMachineHash(raw);
     if (!mh || seen.has(mh)) continue;
     seen.add(mh);
+    mhList.push(mh);
+  }
+  const stmts = [];
+  if (!mhList.length) {
     stmts.push(
       env.DB.prepare(
         `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-         VALUES(?, 'm', ?, ?, ?, ?, ?)`,
-      ).bind(product, mh, first, last, createdAt, src),
+         VALUES(?, 'd', ?, ?, ?, ?, ?)`,
+      ).bind(product, dkey, first, last, createdAt, src),
+    );
+  } else {
+    const mPh = mhList.map(() => '?').join(', ');
+    stmts.push(
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
+         SELECT ?, 'd', ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM trial_grants tg
+           WHERE tg.product = ? AND tg.subject_kind = 'm' AND tg.subject IN (${mPh})
+             AND NOT (tg.first_day = ? AND tg.last_day = ?)
+         )`,
+      ).bind(product, dkey, first, last, createdAt, src, product, ...mhList, first, last),
+    );
+  }
+  for (const mh of mhList) {
+    stmts.push(
+      env.DB.prepare(
+        `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
+         SELECT ?, 'm', ?, ?, ?, ?, ?
+         WHERE NOT EXISTS (
+           SELECT 1 FROM trial_grants tg
+           WHERE tg.product = ? AND tg.subject_kind = 'm' AND tg.subject = ?
+         )`,
+      ).bind(product, mh, first, last, createdAt, src, product, mh),
     );
   }
   return stmts;

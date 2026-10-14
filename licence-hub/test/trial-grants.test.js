@@ -779,6 +779,67 @@ test('linkedSubjects merges machines across devices', async () => {
   assert.ok(linked.devices.includes(DKEY_A));
   assert.ok(linked.devices.includes(DKEY_B));
   assert.ok(linked.machines.includes(MACHINE_A));
+  assert.ok(Array.isArray(linked.deviceCodes));
+  assert.equal(linked.link_limit, false);
+  assert.ok(linked.deviceCodes.includes(DEVICE_B));
+});
+
+test('linkedSubjects fails closed when closure query budget is exceeded', async () => {
+  const e = env();
+  const machines = [];
+  for (let i = 0; i < 4351; i++) {
+    machines.push(i.toString(16).padStart(64, '0'));
+  }
+  const linked = await linkedSubjects(e, PRODUCT, DEVICE_A, machines);
+  assert.equal(linked.link_limit, true);
+  assert.ok(Array.isArray(linked.deviceCodes));
+  assert.equal(linked.deviceCodes.length, 0);
+  assert.equal(linked.devices.length, 0);
+});
+
+test('etw d subject with hyphenated device code normalizes on backfill', async () => {
+  const e = env();
+  const { first, last } = trialWindow('2026-01-14');
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`etw|${PRODUCT}|d|${DEVICE_A}`, `${first}|${last}`, 1).run();
+  await backfillTrialGrants(e, PRODUCT);
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [], { today: '2026-01-10' });
+  assert.equal(r.kind, 'existing');
+  assert.equal(r.last_day, last);
+});
+
+test('delivered kind trial with paid tier is not trial backfill evidence', async () => {
+  const e = env();
+  await insertRequest(e, {
+    id: 'trial-kind-paid-tier',
+    kind: 'trial',
+    tier: 'paid',
+    expiry: '2026-12-31',
+    status: 'delivered',
+  });
+  const n = await backfillTrialGrants(e, PRODUCT);
+  assert.equal(n, 0);
+  const rows = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(rows.n, 0);
+});
+
+test('second device grant does not store a different window when machine row exists', async () => {
+  const e = env();
+  await insertRequest(e, { id: 'ga', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A });
+  await insertRequest(e, { id: 'gb', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_A });
+  const win1 = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  const win2 = { first_day: '2026-07-01', last_day: '2026-07-14' };
+  await e.DB.batch(trialGrantStatements(e, PRODUCT, DEVICE_A, [MACHINE_A], win1, 'req-a'));
+  await e.DB.batch(trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A], win2, 'req-b'));
+  const bRow = await e.DB.prepare(
+    'SELECT first_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('d', DKEY_B).first();
+  assert.equal(bRow, null);
+  const mRow = await e.DB.prepare(
+    'SELECT first_day, last_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('m', MACHINE_A).first();
+  assert.equal(mRow.first_day, '2026-06-01');
+  assert.equal(mRow.last_day, '2026-06-14');
 });
 
 test('isActiveStrongTerm treats paid_until equal to today as active', () => {

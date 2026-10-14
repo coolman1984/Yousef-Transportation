@@ -95,11 +95,13 @@ The `trial_grants` table is the authoritative, insert-only record of which devic
 
 **Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial locks and requests populate the ledger.
 
-**Resolver limits:** `resolveTrial` expands device↔machine links with a recursive SQL closure over `licence_requests`, capped at **256** nodes; above that it returns `blocked` / `link_limit` (fail closed). Each D1 statement keeps bind count ≤ **90** (closure seeds are chunked; ledger/term lookups are chunked). Paid/permanent blocking follows customers plus `issued`/`delivered` requests only. Blank `licence_expiry` on a paid customer falls back to `last_day` like `NULL`.
+**Resolver limits:** `resolveTrial` and `linkedSubjects` expand device↔machine links with a recursive SQL closure over `licence_requests`, capped at **256** nodes; above that they fail closed with `link_limit`. Each resolver keeps total D1 statements under **50** (closure seed chunks included). Each statement keeps bind count ≤ **90** (closure seeds are chunked; ledger/term lookups are chunked). `linkedSubjects` always returns `deviceCodes` as a plain array plus `link_limit`. Paid/permanent blocking follows customers plus `issued`/`delivered` requests only. Blank `licence_expiry` on a paid customer falls back to `last_day` like `NULL`.
 
 **Legacy backfill (lenient):** `backfillTrialGrants` creates ledger rows only from (1) `licence_requests` still marked trial (`kind`/`licence_tier`) that were actually issued (`issued`/`delivered`, or `expired` except `pending_timeout`) with a valid `licence_expiry` window, (2) `customers` rows of trial kind/tier with `first_day`/`last_day` (not paid/permanent), and (3) `etw|` rows in `machine_trials`. **d:/h:/od: lock rows are not trial evidence** (paid issues write locks too). Windows are never invented from `created_at` or lock timestamps. **Accepted edge case:** a device that went trial→paid in the hub (request row overwritten) may receive one more online trial after paid expires; there is no separate historical trial row to backfill.
 
 **Backfill I/O:** three reads (`etw|` locks, requests, customers) plus one batch insert; unnormalizable devices are skipped.
+
+**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices.
 
 ## Tests / الاختبارات
 

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence hub trial window round 3 (2026-10-14)
+
+**What/why:** Final review on `fix/trial-after-expired-paid`: one trial window per machine hash (earliest `etw|…|m|…` wins, no second dates on the same machine); `originalTrialWindow`/`trialSignOptions`/reissue use that canonical window; online approve transfers `d:`/`h:` locks from expired paid rows instead of `already_used`; lock upsert only on reissue/replace so concurrent first mints cannot steal each other.
+**Checks:** `cd licence-hub && npm test` (158 pass).
+**Next:** Owner review PR; deploy hub worker after merge.
+
 ## Licence hub trial window round 2 (2026-10-14)
 
 **What/why:** Review on `fix/trial-after-expired-paid`: one trial window per device+product must survive paid/permanent upgrades and block fresh mints (P0–P1). Immutable `etw|` markers in `machine_trials` (no D1 schema change); `originalTrialWindow`/`trialSignOptions`/`currentTerm` honour active trial vs expired paid; offline/online reuse issued trial codes; reissue no longer steals locks to extend or restart.

@@ -307,34 +307,98 @@ function parseEmbeddedTrialWindowMachineKey(machine) {
   return null;
 }
 
+async function fetchEarliestEmbeddedTrialWindowByPrefix(env, prefix) {
+  const rows = await env.DB.prepare(
+    'SELECT machine FROM machine_trials WHERE machine LIKE ?',
+  ).bind(prefix + '%').all();
+  let best = null;
+  for (const row of rows.results || []) {
+    const win = parseEmbeddedTrialWindowMachineKey(row.machine);
+    if (!win?.first || !win?.last) continue;
+    if (!best || win.first < best.first) best = win;
+  }
+  return best;
+}
+
 async function fetchEmbeddedTrialWindowForDevice(env, productId, dkey) {
-  const prefix = embeddedTrialWindowDevicePrefix(productId, dkey);
-  const row = await env.DB.prepare(
-    'SELECT machine FROM machine_trials WHERE machine LIKE ? LIMIT 1',
-  ).bind(prefix + '%').first();
-  return row ? parseEmbeddedTrialWindowMachineKey(row.machine) : null;
+  return fetchEarliestEmbeddedTrialWindowByPrefix(env, embeddedTrialWindowDevicePrefix(productId, dkey));
 }
 
 async function fetchEmbeddedTrialWindowForMachine(env, productId, machineHash) {
   if (!machineHash) return null;
-  const prefix = embeddedTrialWindowMachinePrefix(productId, machineHash);
+  return fetchEarliestEmbeddedTrialWindowByPrefix(env, embeddedTrialWindowMachinePrefix(productId, machineHash));
+}
+
+async function resolveMachineHashForDevice(env, productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
   const row = await env.DB.prepare(
-    'SELECT machine FROM machine_trials WHERE machine LIKE ? LIMIT 1',
-  ).bind(prefix + '%').first();
-  return row ? parseEmbeddedTrialWindowMachineKey(row.machine) : null;
+    `SELECT machine FROM licence_requests
+     WHERE device_key = ? AND product = ? AND machine IS NOT NULL AND machine != ''
+     ORDER BY updated_at DESC LIMIT 1`,
+  ).bind(dkey, product).first();
+  return normalizeMachineHash(row?.machine);
+}
+
+/** Earliest stored etw window for this product on machine (any device) then on device. */
+async function canonicalTrialWindow(env, productId, dkey, machineHash) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (machineHash) {
+    const mach = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
+    if (mach) return mach;
+  }
+  return fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+}
+
+function isExpiredPaidLicenceRequest(req, env) {
+  if (!req) return false;
+  if (req.status !== 'delivered' && req.status !== 'issued') return false;
+  const tier = String(req.licence_tier ?? '').trim().toLowerCase();
+  const kind = String(req.kind ?? '').trim().toLowerCase();
+  if (tier === 'permanent' || kind === 'permanent') return false;
+  if (tier === 'trial' || kind === 'trial') return false;
+  const isPaid = tier === 'paid' || kind === 'monthly' || kind === 'paid';
+  if (!isPaid && tier !== '') return false;
+  const until = String(req.licence_expiry || '').trim();
+  if (!until) return false;
+  return trialWindowEnded(until, env);
+}
+
+/** Move d:/h: locks from an expired paid issue to a new trial request when no trial window exists yet. */
+async function transferExpiredPaidLocksToTrial(env, requestId, productId, dkey, machineHash, t) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await canonicalTrialWindow(env, product, dkey, machineHash)) return;
+  for (const lock of onlineLockKeys(product, dkey, machineHash)) {
+    const row = await trialLockRow(env, lock);
+    if (!row || row.request_id === requestId) continue;
+    const owner = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(row.request_id).first();
+    if (!isExpiredPaidLicenceRequest(owner, env)) continue;
+    await env.DB.prepare(
+      'UPDATE machine_trials SET request_id = ?, at = ? WHERE machine = ? AND request_id = ?',
+    ).bind(requestId, t, lock, row.request_id).run();
+  }
 }
 
 /** Immutable first trial window for device+product (survives paid/permanent upgrades). */
 async function persistTrialWindowMarker(env, productId, dkey, machineHash, first, last, requestId, t) {
-  const firstIso = String(first || '').trim();
-  const lastIso = String(last || '').trim();
+  let firstIso = String(first || '').trim();
+  let lastIso = String(last || '').trim();
   if (!firstIso || !lastIso || !dkey) return;
-  const devKey = embeddedTrialWindowDeviceKey(productId, dkey, firstIso, lastIso);
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (machineHash) {
+    const existingMach = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
+    if (existingMach) {
+      firstIso = existingMach.first;
+      lastIso = existingMach.last;
+    }
+  }
+  const devKey = embeddedTrialWindowDeviceKey(product, dkey, firstIso, lastIso);
   await env.DB.prepare(
     'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
   ).bind(devKey, requestId, t).run();
   if (machineHash) {
-    const machKey = embeddedTrialWindowMachineKey(productId, machineHash, firstIso, lastIso);
+    const existingMach = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
+    if (existingMach) return;
+    const machKey = embeddedTrialWindowMachineKey(product, machineHash, firstIso, lastIso);
     await env.DB.prepare(
       'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
     ).bind(machKey, requestId, t).run();
@@ -737,13 +801,19 @@ function trialInclusiveDays(env) {
 }
 
 /** Original trial window for force re-issue (same first/last days, no extension). */
-export async function originalTrialWindow(env, productId, device) {
+export async function originalTrialWindow(env, productId, device, machineHashOpt = null) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
   const knownTerm = await currentTerm(env, productId, device);
   const strongActive = isActiveStrongTerm(knownTerm, env);
   if (strongActive) return null;
 
   const dkey = deviceKey(device);
+  const machineHash = machineHashOpt || await resolveMachineHashForDevice(env, product, dkey);
+
+  if (machineHash) {
+    const machEmbedded = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
+    if (machEmbedded) return machEmbedded;
+  }
 
   const embedded = await fetchEmbeddedTrialWindowForDevice(env, product, dkey);
   if (embedded) return embedded;
@@ -798,9 +868,11 @@ function freshTrialWindowFromToday(env) {
   return { first, last };
 }
 
-async function trialSignOptions(env, grant, reissue, productId, device) {
+async function trialSignOptions(env, grant, reissue, productId, device, machineHash = null) {
   if (grant.grant !== 'trial') return {};
-  const win = await originalTrialWindow(env, productId, device);
+  const dkey = deviceKey(device);
+  const mh = machineHash || await resolveMachineHashForDevice(env, productId, dkey);
+  const win = await originalTrialWindow(env, productId, device, mh);
   if (win) {
     if (trialWindowEnded(win.last, env)) throw new Error('trial_expired');
     return { trialFirstDay: win.first, trialLastDay: win.last };
@@ -1099,16 +1171,19 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, reiss
   const stmts = [];
   if (isTrialGrant && replace) {
     await upsertOnlineLocks(env, requestId, productId, dkey, machineHash, t);
-  } else if (isTrialGrant && reissue) {
-    const devWin = await fetchEmbeddedTrialWindowForDevice(env, productId, dkey);
-    const machWin = machineHash
-      ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
-      : null;
-    const prior = devWin || machWin;
-    if (prior && !trialWindowEnded(prior.last, env)) {
+  } else if (isTrialGrant) {
+    const prior = await canonicalTrialWindow(env, productId, dkey, machineHash);
+    if (prior && !trialWindowEnded(prior.last, env) && (reissue || replace)) {
       await upsertOnlineLocks(env, requestId, productId, dkey, machineHash, t);
+    } else if (!prior) {
+      await transferExpiredPaidLocksToTrial(env, requestId, productId, dkey, machineHash, t);
     }
-  } else if (isTrialGrant || !replace) {
+    for (const lock of onlineLockKeys(productId, dkey, machineHash)) {
+      stmts.push(
+        env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
+      );
+    }
+  } else if (!replace) {
     for (const lock of onlineLockKeys(productId, dkey, machineHash)) {
       stmts.push(
         env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
@@ -1261,18 +1336,14 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   }
 
   if (grant.grant === 'trial' && reissue) {
-    const devWin = await fetchEmbeddedTrialWindowForDevice(env, productId, dkey);
-    const machWin = machineHash
-      ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
-      : null;
-    const prior = devWin || machWin;
+    const prior = await canonicalTrialWindow(env, productId, dkey, machineHash);
     if (prior && trialWindowEnded(prior.last, env)) throw new Error('trial_expired');
   }
 
   const t = now();
   let signed;
   try {
-    const signOpts = await trialSignOptions(env, grant, reissue, productId, row.device);
+    const signOpts = await trialSignOptions(env, grant, reissue, productId, row.device, machineHash);
     signed = await signGrant(env, keys, grant, row, signOpts);
   } catch (e) {
     if (e?.message === 'bad_device_code') {
@@ -1386,7 +1457,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const grantRow = { product: productId, device };
   let signed;
   try {
-    const signOpts = await trialSignOptions(env, grant, reissue, productId, device);
+    const signOpts = await trialSignOptions(env, grant, reissue, productId, device, null);
     signed = await signGrant(env, keys, grant, grantRow, signOpts);
   } catch (e) {
     if (e?.message === 'no_signing_key') throw e;

@@ -712,8 +712,10 @@ export async function handleLicence(request, env, url) {
     // A fresh random client nonce is the recovery capability after a lost HTTP response.
     // Re-derive its HMAC poll token only for the identical request, never for a
     // different device, product, machine or licence kind reusing the same nonce.
+    // The app's version is metadata, not part of the request identity: it can
+    // change during an update between the first send and a lost-response retry.
     const existing = await env.DB.prepare(
-      'SELECT id, poll_token_hash, status, reason, product, kind, device_key, machine, shop, ref, version FROM licence_requests WHERE nonce = ?',
+      'SELECT id, poll_token_hash, status, reason, product, kind, device_key, machine, shop, ref FROM licence_requests WHERE nonce = ?',
     ).bind(body.nonce).first();
     if (existing) {
       if (existing.poll_token_hash !== pollHash

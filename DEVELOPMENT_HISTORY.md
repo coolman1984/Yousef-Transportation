@@ -10,8 +10,8 @@
 ## Lost-activation replay + D1 customer query budget (2026-10-14)
 
 **Scope:** Owner-requested fixes for Codex review findings on PR #37 (P1 lost HTTP response blocks licence request; P2 customer list exceeds D1 Free's 50 SQL queries near 25 rows). Branch `fix/replay-recovery-batch-customers-20261014` from updated `main`.
-**Fix:** Validate replay matches all persisted request identifiers/identity fields before recovering the same HMAC-derived poll token; keep request id, so no duplicate owner notification or trial window. Office client keeps original nonce and backs off safely if a legacy hub omits the recovery token (never generates a colliding nonce). Customers endpoint gathers existing grants in batches of up to 40 device keys and chooses the strongest term in memory, preserving per-product isolation and offline IDs.
-**Validation:** Regression tests added for lost response, identity mismatch, refusal reasons, and a 200-customer D1 query-budget scenario. GitHub CI must pass; no live deployment/real activation or clean Windows customer acceptance claimed.
+**Fix:** Validate replay matches all persisted request identity fields (excluding app version metadata, which may change after an upgrade) before recovering the same HMAC-derived poll token; keep request id, so no duplicate owner notification or trial window. Office client keeps original nonce and backs off safely if a legacy hub omits the recovery token (never generates a colliding nonce). Customers endpoint gathers existing grants in batches of up to 40 device keys and chooses the strongest term in memory, preserving per-product isolation and offline IDs.
+**Validation:** Regression tests added for lost response, identity mismatch, version upgrade during retry (Codex review PR #38), refusal reasons, and a 200-customer D1 query-budget scenario. GitHub CI must pass; no live deployment/real activation or clean Windows customer acceptance claimed.
 **Next:** Review CI, require independent review, and deploy the updated hub and office client together only after explicit owner release approval. No automated deployment/merges.
 
 ## Apps-Factory hub-template hardening back-port (2026-10-14)

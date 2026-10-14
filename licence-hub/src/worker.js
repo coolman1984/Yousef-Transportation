@@ -1,8 +1,7 @@
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
-  REASON_PAID_IN_STUDIO, ownerCapabilities,
+  REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, licencePathname,
 } from './licence-api.js';
-import { importSigningKey } from './afcodes.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
   destroySession, loginLimited, csrfOk,
@@ -36,13 +35,6 @@ async function fetchOwnerAsset(env, request, url) {
   return withSecurityHeaders(res);
 }
 
-async function loadSigningKeys(env) {
-  const keys = { trialKey: null, paidKey: null };
-  if (env.LICENCE_SIGNING_KEY) keys.trialKey = await importSigningKey(env.LICENCE_SIGNING_KEY);
-  if (env.PAID_SIGNING_KEY) keys.paidKey = await importSigningKey(env.PAID_SIGNING_KEY);
-  return keys;
-}
-
 async function ownerApi(request, env, url, session) {
   const path = url.pathname.replace(/^\/owner\/api/, '') || '/';
 
@@ -55,19 +47,19 @@ async function ownerApi(request, env, url, session) {
   if (path === '/issued' && request.method === 'GET') {
     const id = url.searchParams.get('id') || '';
     if (!id) return json({ error: 'id' }, 400);
-    const row = await env.DB.prepare('SELECT id, code, status, device FROM licence_requests WHERE id = ?').bind(id).first();
+    const row = await env.DB.prepare('SELECT id, code, status, device, product, licence_tier FROM licence_requests WHERE id = ?').bind(id).first();
     if (!row || row.status !== 'issued' || !row.code) return json({ error: 'not_found' }, 404);
     return json({ ok: true, code: row.code, device: row.device });
   }
   if (path === '/undelivered' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      "SELECT id, shop, device, code, updated_at FROM licence_requests WHERE status = 'issued' AND code IS NOT NULL ORDER BY updated_at DESC LIMIT 50",
+      "SELECT id, shop, device, code, product, licence_tier, updated_at FROM licence_requests WHERE status = 'issued' AND code IS NOT NULL ORDER BY updated_at DESC LIMIT 50",
     ).all();
     return json({ items: rows.results || [] });
   }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      "SELECT r.id, r.kind, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
+      "SELECT r.id, r.kind, r.product, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
     ).all();
     return json({ items: rows.results || [] });
   }
@@ -90,7 +82,8 @@ async function ownerApi(request, env, url, session) {
   if (!csrfOk(session, request, body)) return json({ error: 'csrf' }, 403);
 
   if (path === '/approve') {
-    const keys = await loadSigningKeys(env);
+    const reqRow = await env.DB.prepare('SELECT product FROM licence_requests WHERE id = ?').bind(body.id || '').first();
+    const keys = await loadSigningKeys(env, reqRow?.product || 'trip-orders');
     try {
       const signed = await approveRequest(env, body.id, keys, {
         force: body.force === true,
@@ -107,6 +100,7 @@ async function ownerApi(request, env, url, session) {
     } catch (e) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
+      if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
       throw e;
     }
   }
@@ -118,9 +112,11 @@ async function ownerApi(request, env, url, session) {
     const device = String(body.device || '').trim();
     const shop = String(body.shop || '').trim();
     if (!device) return json({ error: 'device' }, 400);
-    const keys = await loadSigningKeys(env);
+    const product = String(body.product || 'trip-orders').trim() || 'trip-orders';
+    if (!products(env).has(product)) return json({ error: 'product' }, 400);
+    const keys = await loadSigningKeys(env, product);
     try {
-      const signed = await issueOfflineCustomer(env, keys, device, shop, 'trip-orders', {
+      const signed = await issueOfflineCustomer(env, keys, device, shop, product, {
         force: body.force === true,
         grant: body.grant,
         preset: body.preset,
@@ -132,8 +128,12 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device' }, 400);
       if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
+      if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
       throw e;
     }
+  }
+  if (path === '/products' && request.method === 'GET') {
+    return json({ products: [...products(env)] });
   }
   return json({ error: 'not_found' }, 404);
 }
@@ -204,8 +204,11 @@ export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     try {
-      if (url.pathname.startsWith('/licence/')) {
-        const res = await handleLicence(request, env, url);
+      const licencePath = licencePathname(url.pathname);
+      if (licencePath.startsWith('/licence/')) {
+        const licUrl = new URL(url);
+        licUrl.pathname = licencePath;
+        const res = await handleLicence(request, env, licUrl);
         if (res) {
           Object.entries(HEADERS).forEach(([k, v]) => res.headers.set(k, v));
           return res;

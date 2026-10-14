@@ -1,5 +1,11 @@
 -- Licence hub (D1): online activation requests and owner-approved customers.
 -- Poll tokens are stored hashed; signing keys never touch the database.
+-- Fresh installs: apply this file only. Legacy column adds: see migrations/README.md.
+
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id         TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS rate (
   key    TEXT NOT NULL,

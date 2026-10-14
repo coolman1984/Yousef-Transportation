@@ -1,5 +1,7 @@
 // AF licence codes — byte-compatible with server/afcodes.py (verify in Trip Orders with the matching public key).
-import { calendarDateInTz, addCalendarDays, DEFAULT_CALENDAR_TZ } from './calendar.js';
+import { calendarDateInTz, addCalendarDays, addCalendarMonths, DEFAULT_CALENDAR_TZ } from './calendar.js';
+
+export { addCalendarMonths };
 
 const ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
 const DOMAIN = new TextEncoder().encode('AF-LICENCE-CODE/1');
@@ -201,11 +203,6 @@ export async function issuePermanentCode(privateKey, productId, device, when = n
     product: productId,
     device: group(normalize(device), 5),
   };
-}
-
-export function addCalendarMonths(iso, months) {
-  const [y, m, d] = iso.split('-').map(Number);
-  return new Date(Date.UTC(y, m - 1 + months, d)).toISOString().slice(0, 10);
 }
 
 export function paidPresetLastDay(preset, when = new Date(), timeZone = DEFAULT_CALENDAR_TZ) {

@@ -1,0 +1,2 @@
+-- Legacy databases missing product on licence_requests (fresh schema.sql already has it).
+-- Prefer: node scripts/apply-migrations.mjs (guarded). This file is for wrangler one-shot upgrades.

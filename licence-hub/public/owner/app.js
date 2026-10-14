@@ -1,5 +1,26 @@
 'use strict';
 
+const CALENDAR_TZ = 'Africa/Cairo';
+
+function calendarTodayCairo() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: CALENDAR_TZ });
+}
+
+function daysInMonth(year, month1to12) {
+  return new Date(Date.UTC(year, month1to12, 0)).getUTCDate();
+}
+
+function addCalendarMonths(iso, months) {
+  const [y, m, d] = iso.split('-').map(Number);
+  let year = y;
+  let month = m - 1 + months;
+  year += Math.floor(month / 12);
+  month = ((month % 12) + 12) % 12;
+  const last = daysInMonth(year, month + 1);
+  const day = Math.min(d, last);
+  return `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 async function api(path, opts) {
   const r = await fetch('/owner/api' + path, { credentials: 'same-origin', ...opts });
   if (r.status === 401) { location.href = '/owner/login.html'; return null; }
@@ -8,6 +29,13 @@ async function api(path, opts) {
 
 let csrf = '';
 let paidAvailable = false;
+let productFilter = '';
+
+export function productLabelAr(productId) {
+  if (productId === 'trip-orders') return 'طلبات الرحلات (يوسف)';
+  if (productId === 'al-store') return 'المتجر';
+  return productId;
+}
 
 async function session() {
   const s = await api('/session');
@@ -32,14 +60,15 @@ function kindLabelAr(kind) {
   return kind;
 }
 
-function tierPickerHtml(disabledPaid, customDate) {
+export function tierPickerHtml(disabledPaid, customDate, requestId) {
+  const tierName = 'tier-' + (requestId || 'offline');
   const paidOff = disabledPaid ? ' disabled' : '';
   const paidMsg = disabledPaid
     ? '<p class="err">إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY في Cloudflare.</p>' : '';
   return paidMsg + '<fieldset class="tier-pick" data-tier-form>' +
     '<legend>نوع الترخيص</legend>' +
-    '<label class="tier-opt"><input type="radio" name="tier" value="trial" checked> تجربة ١٤ يوماً</label>' +
-    '<label class="tier-opt"><input type="radio" name="tier" value="paid"' + paidOff + '> مدفوع حتى تاريخ</label>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="trial" checked> تجربة ١٤ يوماً</label>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="paid"' + paidOff + '> مدفوع حتى تاريخ</label>' +
     '<div class="tier-paid" data-paid-opts hidden>' +
     '<div class="row wrap">' +
     '<button type="button" class="btn sm" data-preset="1m">شهر</button>' +
@@ -49,15 +78,22 @@ function tierPickerHtml(disabledPaid, customDate) {
     '</div>' +
     '<div class="field"><label>تاريخ الانتهاء</label><input type="date" data-paid-until dir="ltr" value="' + escape(customDate || '') + '"></div>' +
     '</div>' +
-    '<label class="tier-opt"><input type="radio" name="tier" value="permanent"' + paidOff + '> دائم</label>' +
+    '<label class="tier-opt"><input type="radio" name="' + escape(tierName) + '" value="permanent"' + paidOff + '> دائم</label>' +
     '</fieldset>';
+}
+
+export function presetPaidUntil(preset) {
+  const months = { '1m': 1, '3m': 3, '6m': 6, '1y': 12 }[preset];
+  if (!months) return '';
+  return addCalendarMonths(calendarTodayCairo(), months);
 }
 
 function wireTierForm(root) {
   const form = root.querySelector('[data-tier-form]');
   if (!form) return;
   const paidBox = form.querySelector('[data-paid-opts]');
-  form.querySelectorAll('input[name="tier"]').forEach((radio) => {
+  const tierRadios = form.querySelectorAll('input[type="radio"][value="trial"], input[type="radio"][value="paid"], input[type="radio"][value="permanent"]');
+  tierRadios.forEach((radio) => {
     radio.addEventListener('change', () => {
       if (paidBox) paidBox.hidden = form.querySelector('input[value="paid"]:checked') == null;
     });
@@ -65,10 +101,7 @@ function wireTierForm(root) {
   form.querySelectorAll('[data-preset]').forEach((btn) => {
     btn.addEventListener('click', () => {
       const preset = btn.getAttribute('data-preset');
-      const months = { '1m': 1, '3m': 3, '6m': 6, '1y': 12 }[preset];
-      const d = new Date();
-      d.setUTCMonth(d.getUTCMonth() + months);
-      const iso = d.toISOString().slice(0, 10);
+      const iso = presetPaidUntil(preset);
       const inp = form.querySelector('[data-paid-until]');
       if (inp) inp.value = iso;
       const paidRadio = form.querySelector('input[value="paid"]');
@@ -78,10 +111,10 @@ function wireTierForm(root) {
   });
 }
 
-function readGrant(root) {
+export function readGrant(root) {
   const form = root.querySelector('[data-tier-form]');
   if (!form) return { grant: 'trial' };
-  const tier = form.querySelector('input[name="tier"]:checked');
+  const tier = form.querySelector('input[type="radio"]:checked');
   const val = tier ? tier.value : 'trial';
   if (val === 'permanent') return { grant: 'permanent' };
   if (val === 'paid') {
@@ -117,7 +150,8 @@ export async function loadUndelivered(host) {
   data.items.forEach((item) => {
     const li = document.createElement('li');
     const when = new Date(item.updated_at * 1000).toLocaleString('ar-EG');
-    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted" dir="ltr">' + escape(item.device) + '</div><div class="muted">' + when + '</div></div>';
+    const prod = productLabelAr(item.product || 'trip-orders');
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(prod) + '</div><div class="muted" dir="ltr">' + escape(item.device) + '</div><div class="muted">' + when + '</div></div>';
     const btn = document.createElement('button');
     btn.className = 'btn primary';
     btn.type = 'button';
@@ -128,25 +162,56 @@ export async function loadUndelivered(host) {
   });
 }
 
+function productFilterHtml(items) {
+  const ids = [...new Set(items.map((i) => i.product || 'trip-orders'))];
+  if (ids.length < 2) return '';
+  let opts = '<option value="">كل المنتجات</option>';
+  ids.forEach((id) => {
+    opts += '<option value="' + escape(id) + '">' + escape(productLabelAr(id)) + '</option>';
+  });
+  return '<div class="field"><label for="product-filter">المنتج</label><select id="product-filter" data-product-filter>' + opts + '</select></div>';
+}
+
 export async function loadPending(host) {
   await session();
   await loadUndelivered(host);
   const data = await api('/pending');
   if (!data) return;
   const ul = host.querySelector('[data-pending]');
+  const filterSlot = host.querySelector('[data-product-filter-slot]');
+  if (filterSlot) {
+    filterSlot.innerHTML = productFilterHtml(data.items);
+    const sel = filterSlot.querySelector('[data-product-filter]');
+    if (sel) {
+      sel.value = productFilter;
+      sel.addEventListener('change', () => {
+        productFilter = sel.value;
+        renderPendingList(host, data.items.filter((i) => !productFilter || (i.product || 'trip-orders') === productFilter));
+      });
+    }
+  }
+  const filtered = productFilter
+    ? data.items.filter((i) => (i.product || 'trip-orders') === productFilter)
+    : data.items;
+  renderPendingList(host, filtered);
+}
+
+function renderPendingList(host, items) {
+  const ul = host.querySelector('[data-pending]');
   ul.innerHTML = '';
-  if (!data.items.length) {
+  if (!items.length) {
     ul.innerHTML = '<li class="muted">لا توجد طلبات معلّقة.</li>';
     return;
   }
   const disablePaid = !paidAvailable;
-  data.items.forEach((item) => {
+  items.forEach((item) => {
     const li = document.createElement('li');
     const when = new Date(item.created_at * 1000).toLocaleString('ar-EG');
     const kindLabel = kindLabelAr(item.kind);
+    const prod = productLabelAr(item.product || 'trip-orders');
     const usedNote = item.has_customer ? '<div class="err">هذا الجهاز لديه عميل مسجّل — استخدم «إعادة إصدار» إن فُقد الكود.</div>' : '';
-    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(kindLabel) + ' · <span dir="ltr">' + escape(item.device) + '</span></div>' + usedNote + '<div class="muted">' + when + '</div></div>';
-    li.innerHTML += tierPickerHtml(disablePaid);
+    li.innerHTML = '<div><strong>' + escape(item.shop || '—') + '</strong><div class="muted">' + escape(prod) + ' · ' + escape(kindLabel) + ' · <span dir="ltr">' + escape(item.device) + '</span></div>' + usedNote + '<div class="muted">' + when + '</div></div>';
+    li.innerHTML += tierPickerHtml(disablePaid, '', item.id);
     wireTierForm(li);
     const row = document.createElement('div');
     row.className = 'row';
@@ -217,11 +282,13 @@ export function wireOffline(form, out, tierHost) {
     out.hidden = true;
     const device = form.device.value.trim();
     const shop = form.shop.value.trim();
+    const productEl = form.querySelector('[name="product"]');
+    const product = productEl ? productEl.value : 'trip-orders';
     const grant = readGrant(tierHost || form.closest('.card') || document);
     const data = await api('/offline', {
       method: 'POST',
       headers: headers(),
-      body: JSON.stringify({ device, shop, csrf, ...grant }),
+      body: JSON.stringify({ device, shop, product, csrf, ...grant }),
     });
     if (!data || !data.ok) {
       out.textContent = data && data.error === 'paid_key_missing'
@@ -240,8 +307,16 @@ export function wireOffline(form, out, tierHost) {
 export function mountOfflineTier(host) {
   const slot = host.querySelector('[data-tier-slot]');
   if (!slot) return;
-  session().then(() => {
-    slot.innerHTML = tierPickerHtml(!paidAvailable);
+  session().then(async () => {
+    const products = await api('/products');
+    let productField = '';
+    if (products && products.products && products.products.length) {
+      const opts = products.products.map((p) =>
+        '<option value="' + escape(p) + '"' + (p === 'trip-orders' ? ' selected' : '') + '>' + escape(productLabelAr(p)) + '</option>',
+      ).join('');
+      productField = '<div class="field"><label for="product">المنتج</label><select id="product" name="product">' + opts + '</select></div>';
+    }
+    slot.innerHTML = productField + tierPickerHtml(!paidAvailable, '', 'offline');
     wireTierForm(slot);
   });
 }

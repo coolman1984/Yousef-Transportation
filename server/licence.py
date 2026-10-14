@@ -250,12 +250,14 @@ class Licence:
             return False
         pinned = (self.a.kv(HUB_URL_PIN_KEY) or '').strip().rstrip('/')
         current = (self.hub() or '').strip().rstrip('/')
-        if sealed and pinned and current and pinned != current and hub_date < sealed:
+        if sealed and pinned and current and pinned != current:
             return False
         noted = self._note_hub_calendar_day(day, recover_clock=recover_clock)
         if noted:
-            self._seal_hub_day(hub_date)
-            if current:
+            stored = self._hub_calendar_max_day()
+            if stored:
+                self._seal_hub_day(stored)
+            if current and not pinned:
                 self.a.kv(HUB_URL_PIN_KEY, current)
         return noted
 

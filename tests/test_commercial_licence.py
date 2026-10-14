@@ -1600,6 +1600,47 @@ class PaidClockStateTamperTest(unittest.TestCase):
                 self.assertNotIn(b'\r\n', blob2)
                 self.assertEqual(blob2, payload2 + b'\n' + mac2)
 
+    def test_far_future_signed_hub_seals_capped_day_not_uncapped(self):
+        import afcodes
+        from datetime import date as date_cls
+        first = date_cls.today()
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        far = (first + timedelta(days=30)).isoformat()
+        capped = (first + timedelta(days=licence.HUB_CALENDAR_MAX_JUMP_DAYS)).isoformat()
+        with tempfile.TemporaryDirectory() as d:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                payload = _sign_hub_calendar_day(far, pem)
+                noted = l._accept_network_hub_calendar(payload)
+                self.assertEqual(noted, 'partial')
+                sealed = l._read_sealed_hub_day()
+                self.assertIsNotNone(sealed)
+                self.assertEqual(sealed.isoformat(), capped)
+                self.assertNotEqual(sealed.isoformat(), far)
+
+    def test_hub_url_pin_rejects_calendar_from_different_hub_url(self):
+        import afcodes
+        from datetime import date as date_cls
+        first = date_cls.today()
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        hub_a = 'https://hub-a.example'
+        hub_b = 'https://hub-b.example'
+        with tempfile.TemporaryDirectory() as d:
+            holder = _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem)
+            with holder as l:
+                l.a.values['licence_hub_url'] = hub_a
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                day1 = (first + timedelta(days=1)).isoformat()
+                self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(day1, pem)))
+                self.assertEqual(l.a.kv(licence.HUB_URL_PIN_KEY), hub_a)
+                l.a.values['licence_hub_url'] = hub_b
+                day2 = (first + timedelta(days=2)).isoformat()
+                self.assertFalse(l._accept_network_hub_calendar(_sign_hub_calendar_day(day2, pem)))
+                l.a.values['licence_hub_url'] = hub_a
+                self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(day2, pem)))
+
     def test_repaste_paid_code_does_not_replace_missing_clock_file(self):
         import licence_state
         import afcodes

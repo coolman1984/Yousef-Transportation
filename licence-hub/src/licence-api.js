@@ -2,7 +2,7 @@ import {
   issueTrialCode, issuePaidUntilCode, issuePermanentCode, paidPresetLastDay, normalize, importSigningKey,
 } from './afcodes.js';
 import { hex } from './auth.js';
-import { calendarDateInTz } from './calendar.js';
+import { calendarDateInTz, isValidCalendarIso } from './calendar.js';
 import { signHubCalendar } from './hub-time.js';
 
 const enc = new TextEncoder();
@@ -21,10 +21,11 @@ const TIME_MAX_IPS = 5000;
 const timeIps = new Map();
 let timeWindow;
 
-const REQUIRED = ['product', 'kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
+const REQUIRED = ['kind', 'device', 'machine', 'nonce', 'shop', 'ref', 'version'];
 export const REASON_PAID_IN_STUDIO = 'paid_in_licence_studio';
 export const REASON_PAID_KEY_MISSING = 'paid_signing_key_missing';
-const HUB_TIME_KID = 'trial-hub';
+const HUB_TIME_KID_TRIAL = 'trial-hub';
+const HUB_TIME_KID_PAID = 'paid';
 
 const MAX_DEVICE = 32;
 const MAX_MACHINE = 128;
@@ -80,8 +81,27 @@ function timeLimited(ip) {
   return false;
 }
 
-function products(env) {
-  return new Set(String(env.LICENCE_PRODUCTS || 'trip-orders').split(',').map((s) => s.trim()).filter(Boolean));
+export function products(env) {
+  return new Set(String(env.LICENCE_PRODUCTS || 'trip-orders,al-store').split(',').map((s) => s.trim()).filter(Boolean));
+}
+
+export function productEnvSuffix(productId) {
+  return String(productId || 'trip-orders').trim().toUpperCase().replace(/-/g, '_');
+}
+
+export function signingKeyForProduct(env, baseName, productId) {
+  const specific = env[`${baseName}_${productEnvSuffix(productId)}`];
+  if (specific) return specific;
+  return env[baseName] || null;
+}
+
+export async function loadSigningKeys(env, productId = 'trip-orders') {
+  const keys = { trialKey: null, paidKey: null };
+  const trialPem = signingKeyForProduct(env, 'LICENCE_SIGNING_KEY', productId);
+  const paidPem = signingKeyForProduct(env, 'PAID_SIGNING_KEY', productId);
+  if (trialPem) keys.trialKey = await importSigningKey(trialPem);
+  if (paidPem) keys.paidKey = await importSigningKey(paidPem);
+  return keys;
 }
 
 function pendingTtl(env) {
@@ -182,18 +202,25 @@ function hubCalendarDay(env) {
   return calendarDateInTz(new Date(), tz).iso;
 }
 
-function signingPemFromEnv(env) {
-  const desc = Object.getOwnPropertyDescriptor(env, 'LICENCE_SIGNING_KEY');
-  if (desc && 'value' in desc && desc.value) return desc.value;
+export function hubTimeSigningMaterial(env) {
+  const hasTrial = 'LICENCE_SIGNING_KEY' in env;
+  const hasPaid = 'PAID_SIGNING_KEY' in env;
+  if (!hasTrial && !hasPaid) return null;
+  const trialPem = hasTrial ? (env.LICENCE_SIGNING_KEY || null) : null;
+  const paidPem = hasPaid ? (env.PAID_SIGNING_KEY || null) : null;
+  if (trialPem) return { pem: trialPem, kid: HUB_TIME_KID_TRIAL };
+  if (paidPem) return { pem: paidPem, kid: HUB_TIME_KID_PAID };
   return null;
 }
 
-async function hubCalendarSigned(env) {
+export async function hubCalendarSigned(env) {
   const day = hubCalendarDay(env);
-  const pem = signingPemFromEnv(env);
-  if (!pem) return { calendar_day: day };
-  const key = await importSigningKey(pem);
-  return signHubCalendar(key, HUB_TIME_KID, day);
+  const material = hubTimeSigningMaterial(env);
+  const serverTime = now();
+  if (!material) return { calendar_day: day, serverTime };
+  const key = await importSigningKey(material.pem);
+  const signed = await signHubCalendar(key, material.kid, day);
+  return { ...signed, serverTime };
 }
 
 export function parseOwnerGrant(body = {}) {
@@ -210,10 +237,19 @@ export function parseOwnerGrant(body = {}) {
         throw new Error('bad_preset');
       }
     }
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(until)) throw new Error('bad_paid_until');
+    if (!isValidCalendarIso(until)) throw new Error('bad_paid_until');
     return { grant: 'paid', paid_until: until };
   }
   throw new Error('bad_grant');
+}
+
+export function storedGrantMatches(row, grant) {
+  const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
+  const expiry = String(row.licence_expiry || '').trim();
+  if (grant.grant === 'trial') return tier === 'trial' || tier === '';
+  if (grant.grant === 'permanent') return tier === 'permanent';
+  if (grant.grant === 'paid') return tier === 'paid' && expiry === grant.paid_until;
+  return false;
 }
 
 function tierMeta(grant, signed) {
@@ -232,9 +268,19 @@ async function locksOwnedByRequest(env, dkey, machineHash, requestId) {
   return true;
 }
 
+export function licencePathname(pathname) {
+  let p = pathname;
+  for (const prefix of ['/api', '/licence-hub']) {
+    if (p === prefix) p = '/';
+    else if (p.startsWith(prefix + '/')) p = p.slice(prefix.length);
+  }
+  return p;
+}
+
 export async function handleLicence(request, env, url) {
   const ip = request.headers.get('CF-Connecting-IP') || 'local';
-  if (url.pathname === '/licence/time' && request.method === 'GET') {
+  const path = licencePathname(url.pathname);
+  if ((path === '/licence/time' || path === '/licence/clock') && request.method === 'GET') {
     if (timeLimited(ip)) {
       return json({ error: 'rate' }, 429, { 'Retry-After': String(WINDOW - now() % WINDOW) });
     }
@@ -247,12 +293,16 @@ export async function handleLicence(request, env, url) {
   await migrateLegacyTrialLocks(env);
   await expireStalePending(env);
 
-  if (url.pathname === '/licence/request' && request.method === 'POST') {
+  if (path === '/licence/request' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'json' }, 400); }
     for (const f of REQUIRED) {
       if (typeof body[f] !== 'string') return json({ field: f }, 400);
     }
+    const product = typeof body.product === 'string' && body.product.trim()
+      ? body.product.trim()
+      : 'trip-orders';
+    body.product = product;
     if (body.device.length > MAX_DEVICE || body.machine.length > MAX_MACHINE || body.nonce.length > MAX_NONCE) {
       return json({ field: 'device' }, 400);
     }
@@ -314,7 +364,7 @@ export async function handleLicence(request, env, url) {
     return json({ id, poll_token: poll, status: 'pending' });
   }
 
-  if (url.pathname === '/licence/status' && request.method === 'GET') {
+  if (path === '/licence/status' && request.method === 'GET') {
     const id = url.searchParams.get('id') || '';
     const auth = request.headers.get('Authorization') || '';
     const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
@@ -344,7 +394,7 @@ export async function handleLicence(request, env, url) {
     return json({ status: row.status, ...cal });
   }
 
-  if (url.pathname === '/licence/ack' && request.method === 'POST') {
+  if (path === '/licence/ack' && request.method === 'POST') {
     let body;
     try { body = await request.json(); } catch { return json({ error: 'json' }, 400); }
     const id = body.id || '';
@@ -365,7 +415,7 @@ async function notifyOwner(env, body) {
   const token = env.TELEGRAM_BOT_TOKEN;
   const chat = env.TELEGRAM_CHAT_ID;
   if (!token || !chat) return;
-  const text = `طلب ترخيص جديد\n${body.kind} · ${body.shop || '—'}\nجهاز: ${body.device}`;
+  const text = `طلب ترخيص جديد\n${body.product || 'trip-orders'} · ${body.kind} · ${body.shop || '—'}\nجهاز: ${body.device}`;
   try {
     await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST',
@@ -494,11 +544,17 @@ export async function approveRequest(env, requestId, keys, options = {}) {
 
   if (row.status === 'issued' && row.code) {
     if (await locksOwnedByRequest(env, dkey, machineHash, requestId)) {
-      await ensureCustomerRecord(env, row, signedFromRow(row), now());
-      return signedFromRow(row);
+      if (!force && storedGrantMatches(row, grant)) {
+        await ensureCustomerRecord(env, row, signedFromRow(row), now());
+        return signedFromRow(row);
+      }
+      await env.DB.prepare(
+        'UPDATE licence_requests SET code = NULL, status = ?, licence_tier = ?, licence_expiry = ?, updated_at = ? WHERE id = ?',
+      ).bind('approved', '', null, now(), requestId).run();
+    } else {
+      await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, updated_at = ? WHERE id = ?')
+        .bind('approved', now(), requestId).run();
     }
-    await env.DB.prepare('UPDATE licence_requests SET code = NULL, status = ?, updated_at = ? WHERE id = ?')
-      .bind('approved', now(), requestId).run();
   }
 
   if (grant.grant === 'trial' && !force && (await trialUsedOnline(env, dkey, machineHash))) {
@@ -549,8 +605,13 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   if (existing?.code && existing.status === 'issued') {
     const claim = await trialLockRow(env, lock);
     if (claim && claim.request_id === requestId) {
-      await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
-      return signedFromRow(existing);
+      if (!force && storedGrantMatches(existing, grant)) {
+        await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
+        return signedFromRow(existing);
+      }
+      await env.DB.prepare(
+        'UPDATE licence_requests SET code = NULL, status = ?, licence_tier = ?, licence_expiry = ?, updated_at = ? WHERE id = ?',
+      ).bind('pending', '', null, now(), requestId).run();
     }
   }
   let ownsLock = false;
@@ -682,6 +743,6 @@ export async function purgeStaleCodes(env) {
   const cutoff = now() - days * 86400;
   await expireStalePending(env);
   await env.DB.prepare(
-    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued')",
+    "UPDATE licence_requests SET code = NULL WHERE code IS NOT NULL AND updated_at < ? AND status IN ('delivered', 'issued') AND (licence_tier = '' OR licence_tier = 'trial' OR kind = 'trial')",
   ).bind(cutoff).run();
 }

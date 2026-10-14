@@ -57,7 +57,6 @@ test('public calendar limits each IP to 120 requests per ten minutes without D1 
   const e = {
     get DB() { assert.fail('time must not use D1'); },
     get SESSION_SECRET() { assert.fail('time must not read session secrets'); },
-    get LICENCE_SIGNING_KEY() { assert.fail('time must not read signing secrets'); },
   };
   const request = (ip, suffix = '') => new Request('https://hub.test/licence/time' + suffix, {
     headers: { 'CF-Connecting-IP': ip, 'X-Forwarded-For': crypto.randomUUID() },

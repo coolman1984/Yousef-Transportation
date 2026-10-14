@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review fixes — hub seal, re-issue, multi-product (2026-10-14)
+
+**What/why:** Address REV-owner1 (P1–Low): capped hub-day sealing in office; hub clock signing via plain env keys (trial then paid kid); grant-aware re-issue; trial-only code purge; D1 migration docs/guard; owner tier radios per card; Cairo month clamp; hub URL pin; multi-product `trip-orders` + `al-store`, route prefixes, `/licence/clock`.
+**Checks:** `cd licence-hub && timeout 120 npm test` (61 pass); `cd tests && timeout 300 python3 -m unittest test_commercial_licence test_licence_hub_signer` (65 pass).
+**Next:** Owner runs guarded migrations before deploy; set `LICENCE_PRODUCTS` and optional per-product keys on Cloudflare.
+
 ## Owner panel paid hub licences (2026-10-14)
 
 **What/why:** Single owner panel issues trial, paid-until-date, and permanent codes (`PAID_SIGNING_KEY` kid `paid`); signed hub calendar time; office trusts `paid` keys, warns on corrupt clock file, seals hub day against hub URL rollback; CI workflow_dispatch optional trial-hub and paid public keys.

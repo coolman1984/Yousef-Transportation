@@ -65,13 +65,18 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/customers' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      `SELECT c.shop, c.device, c.kind, c.first_day, c.last_day, c.created_at,
-        COALESCE(
-          (SELECT r.product FROM licence_requests r WHERE r.device = c.device AND r.status = 'issued' ORDER BY r.updated_at DESC LIMIT 1),
-          'trip-orders'
-        ) AS product
-       FROM customers c ORDER BY c.created_at DESC LIMIT 200`,
-    ).all();
+      `SELECT shop, device, product, kind, first_day, last_day, licence_tier, licence_expiry, created_at, updated_at
+       FROM (
+         SELECT r.shop, r.device, r.product,
+           COALESCE(NULLIF(r.licence_tier, ''), r.kind) AS kind,
+           r.code AS serial, '' AS first_day, COALESCE(r.licence_expiry, '') AS last_day,
+           r.licence_tier, r.licence_expiry, r.created_at, r.updated_at,
+           ROW_NUMBER() OVER (PARTITION BY r.device_key, r.product ORDER BY r.updated_at DESC) AS rn
+         FROM licence_requests r
+         WHERE r.status IN ('issued', 'delivered') AND r.code IS NOT NULL
+       ) WHERE rn = 1
+       ORDER BY updated_at DESC LIMIT 200`,
+    ).bind().all();
     const items = (rows.results || []).map((r) => {
       let daysLeft = null;
       if (r.last_day) {
@@ -135,6 +140,7 @@ async function ownerApi(request, env, url, session) {
       return json({ ok: true, code: signed.code, device: signed.device });
     } catch (e) {
       if (e?.message === 'already_used') return json({ error: 'already_used' }, 400);
+      if (e?.message === 'grant_conflict') return json({ error: 'grant_conflict' }, 409);
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device' }, 400);
       if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);

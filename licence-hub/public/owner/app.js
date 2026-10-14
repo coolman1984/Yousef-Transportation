@@ -32,6 +32,12 @@ let paidAvailable = false;
 let productCapabilities = {};
 let productFilter = '';
 
+/** Reissue confirm: cancel must not POST approve (regression-tested). */
+export function approveAfterReissueConfirm(hasCustomer, userConfirmed) {
+  if (hasCustomer && !userConfirmed) return { abort: true, force: false };
+  return { abort: false, force: Boolean(hasCustomer && userConfirmed) };
+}
+
 export function productLabelAr(productId) {
   if (productId === 'trip-orders') return 'طلبات الرحلات (يوسف)';
   if (productId === 'al-store') return 'المتجر';
@@ -233,7 +239,12 @@ function renderPendingList(host, items) {
     ok.addEventListener('click', async () => {
       ok.disabled = true;
       const grant = readGrant(li);
-      const force = item.has_customer && confirm('إعادة إصدار لهذا الجهاز؟ (فقدان الكود فقط)');
+      const opts = approveAfterReissueConfirm(item.has_customer, item.has_customer && confirm('إعادة إصدار لهذا الجهاز؟ (فقدان الكود فقط)'));
+      if (opts.abort) {
+        ok.disabled = false;
+        return;
+      }
+      const force = opts.force;
       const res = await api('/approve', {
         method: 'POST',
         headers: headers(),

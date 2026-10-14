@@ -723,3 +723,82 @@ test('offline manual activation is keyed per product and device', async () => {
   assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
   assert.equal(await trialUsedForOfflineProduct(e, 'al-store', dkey), true);
 });
+
+test('paid online request after issued trial upgrades without force and keeps trial lock', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const trialKeys = await signingKeys(30);
+  const paidKeys = await signingKeys(30, 31);
+  const trialReq = await postRequest(e, body({ nonce: 'trial-then-paid' }));
+  const trialCode = await approveRequest(e, trialReq.data.id, trialKeys);
+  assert.ok(trialCode?.code);
+  const trialLock = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.equal(trialLock.request_id, trialReq.data.id);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid-after-trial', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-paid', '', '', '', 'pending', 3, 3).run();
+  const paidOut = await approveRequest(e, 'paid-after-trial', paidKeys, { grant: 'paid', paid_until: '2028-06-01' });
+  assert.ok(paidOut?.code);
+  assert.notEqual(paidOut.code, trialCode.code);
+  const paidRow = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('paid-after-trial').first();
+  assert.equal(paidRow.status, 'issued');
+  assert.equal(paidRow.reason, '');
+  const lockAfter = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
+    .bind(deviceLockKey(dkey)).first();
+  assert.ok(lockAfter);
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+  const retryTrial = await postRequest(e, body({ nonce: 'trial-blocked' }));
+  assert.equal(retryTrial.data.status, 'refused');
+  assert.equal(retryTrial.data.reason, 'already_used');
+});
+
+test('owner force reissue keeps one-trial lock so a second online trial is refused', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const first = await postRequest(e, body({ nonce: 'force-keep-1' }));
+  await approveRequest(e, first.data.id, await signingKeys(32));
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('lost-keep', 'hx2', 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n-lost2', '', '', '', 'pending', 4, 4).run();
+  const forced = await approveRequest(e, 'lost-keep', await signingKeys(33), { force: true });
+  assert.ok(forced?.code);
+  assert.equal(await trialUsedForDevice(e, dkey), true);
+  const retry = await postRequest(e, body({ nonce: 'force-keep-2' }));
+  assert.equal(retry.data.reason, 'already_used');
+});
+
+test('legacy d: and offline: device rows block offline trip-orders trial', async () => {
+  const e = env();
+  const device = 'ABCDE-FGHJK';
+  const dkey = deviceKey(device);
+  const t = 1;
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(dkey), 'legacy-off', t).run();
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`offline:${dkey}`, 'legacy-off', t).run();
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+});
+
+test('offline lock race does not return success with a different grant code', async () => {
+  const e = env();
+  const keys = await signingKeys(40, 41);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  const lock = `od:trip-orders:${dkey}`;
+  const t = 5;
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(requestId, 'offline', 'trip-orders', 'trial', device, dkey, '', 'offline-x', 'S', '', '', 'issued', 'WINNER-CODE', 'trial', '', t, t).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(lock, 'other-request', t).run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'S', 'trip-orders', { grant: 'paid', paid_until: '2028-01-01' }),
+    /grant_conflict|already_used/,
+  );
+});

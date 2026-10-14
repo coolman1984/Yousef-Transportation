@@ -141,6 +141,15 @@ export function offlineRequestId(productId, dkey) {
   return `offline:${product}:${dkey}`;
 }
 
+/** Pre–multi-product offline request id and lock row (trip-orders trial only). */
+export function legacyOfflineRequestId(dkey) {
+  return `offline:${dkey}`;
+}
+
+export function legacyOfflineLockKey(dkey) {
+  return legacyOfflineRequestId(dkey);
+}
+
 /** Offline trial lock is per product + device so multiple products can share one device code. */
 export function offlineDeviceLockKey(productId, dkey) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
@@ -197,8 +206,15 @@ export async function trialUsedForDevice(env, deviceKeyNorm) {
 }
 
 export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm) {
-  const row = await trialLockRow(env, offlineDeviceLockKey(productId, deviceKeyNorm));
-  return Boolean(row);
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await trialLockRow(env, offlineDeviceLockKey(product, deviceKeyNorm))) return true;
+  if (product !== 'trip-orders') return false;
+  if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
+  if (await trialLockRow(env, legacyOfflineLockKey(deviceKeyNorm))) return true;
+  const legacyReq = await env.DB.prepare(
+    "SELECT id FROM licence_requests WHERE id = ? AND status IN ('issued', 'delivered')",
+  ).bind(legacyOfflineRequestId(deviceKeyNorm)).first();
+  return Boolean(legacyReq);
 }
 
 /** Online path: refuse when device code or stable machine hash was already used. */
@@ -465,15 +481,21 @@ function signedFromRow(row, signed = null) {
   };
 }
 
-async function clearTrialLocks(env, dkey, machineHash) {
-  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
-  if (machineHash) await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(machineLockKey(machineHash)).run();
-  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
+async function upsertDeviceLocks(env, requestId, dkey, machineHash, t) {
+  const locks = [deviceLockKey(dkey)];
+  if (machineHash) locks.push(machineLockKey(machineHash));
+  for (const lock of locks) {
+    await env.DB.prepare(
+      'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id, at = excluded.at',
+    ).bind(lock, requestId, t).run();
+  }
 }
 
-async function clearOfflineTrialLocks(env, productId, dkey) {
-  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(offlineDeviceLockKey(productId, dkey)).run();
-  await clearTrialLocks(env, dkey, null);
+async function reassignOfflineProductLock(env, productId, dkey, requestId, t) {
+  const lock = offlineDeviceLockKey(productId, dkey);
+  await env.DB.prepare(
+    'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id, at = excluded.at',
+  ).bind(lock, requestId, t).run();
 }
 
 async function waitForIssuedOffline(env, requestId, attempts = 30) {
@@ -494,14 +516,25 @@ async function ensureCustomerRecord(env, row, signed, t) {
 }
 
 async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, meta = {}) {
-  if (force) await clearTrialLocks(env, dkey, machineHash);
+  const grantKind = meta.grantKind || 'trial';
+  const isTrialGrant = grantKind === 'trial';
+  const deviceTrialUsed = await trialUsedForDevice(env, dkey);
+  const paidUpgrade = !isTrialGrant && deviceTrialUsed;
 
   const locks = [deviceLockKey(dkey)];
   if (machineHash) locks.push(machineLockKey(machineHash));
 
-  const stmts = locks.map((lock) =>
-    env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
-  );
+  const stmts = [];
+  if ((force && isTrialGrant) || paidUpgrade) {
+    await upsertDeviceLocks(env, requestId, dkey, machineHash, t);
+  } else {
+    for (const lock of locks) {
+      stmts.push(
+        env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING').bind(lock, requestId, t),
+      );
+    }
+  }
+
   let issueSql =
     'UPDATE licence_requests SET status = ?, stage = ?, code = ?, updated_at = ? WHERE id = ? AND code IS NULL AND status NOT IN (?, ?) AND EXISTS (SELECT 1 FROM machine_trials WHERE machine = ? AND request_id = ?)';
   const issueBinds = ['issued', 'approved', signed.code, t, requestId, 'refused', 'delivered', deviceLockKey(dkey), requestId];
@@ -523,8 +556,9 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   stmts.push(env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId));
+  const issueStmtIndex = stmts.length - 4;
   const results = await env.DB.batch(stmts);
-  const issued = results[locks.length]?.meta?.changes > 0;
+  const issued = results[issueStmtIndex]?.meta?.changes > 0;
   if (!issued) {
     const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (existing?.code && existing.status === 'issued') {
@@ -611,7 +645,7 @@ export async function approveRequest(env, requestId, keys, options = {}) {
 
   const meta = tierMeta(grant, signed);
   const outcome = await claimAndIssue(env, requestId, dkey, machineHash, signed, t, force, {
-    shop: row.shop, kind: meta.kind, tier: meta.tier, expiry: meta.expiry,
+    shop: row.shop, kind: meta.kind, tier: meta.tier, expiry: meta.expiry, grantKind: grant.grant,
   });
   if (!outcome.ok) return null;
   return outcome.signed || signed;
@@ -658,7 +692,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     else throw new Error('already_used');
   }
   const t = now();
-  if (force) await clearOfflineTrialLocks(env, productId, dkey);
+  if (force && grant.grant === 'trial') await reassignOfflineProductLock(env, productId, dkey, requestId, t);
 
   const offlineKind = grant.grant === 'permanent' ? 'permanent' : grant.grant === 'paid' ? 'monthly' : 'trial';
   await env.DB.prepare(
@@ -673,6 +707,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
       if (claim?.request_id === requestId) {
         const row = await waitForIssuedOffline(env, requestId);
         if (row) {
+          if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
           await ensureCustomerRecord(env, row, signedFromRow(row), t);
           return signedFromRow(row);
         }
@@ -680,6 +715,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
       } else {
         const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
         if (row?.code && row.status === 'issued') {
+          if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
           await ensureCustomerRecord(env, row, signedFromRow(row), t);
           return signedFromRow(row);
         }
@@ -693,6 +729,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   if (!claim || claim.request_id !== requestId) {
     const row = await waitForIssuedOffline(env, requestId);
     if (row) {
+      if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
       await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }
@@ -732,6 +769,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     if (!issued) {
       const row = await waitForIssuedOffline(env, requestId);
       if (row) {
+        if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
         await ensureCustomerRecord(env, row, signedFromRow(row), t);
         return signedFromRow(row);
       }
@@ -740,6 +778,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   } catch (e) {
     const row = await waitForIssuedOffline(env, requestId);
     if (row) {
+      if (!storedGrantMatches(row, grant, productId)) throw new Error('grant_conflict');
       await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }

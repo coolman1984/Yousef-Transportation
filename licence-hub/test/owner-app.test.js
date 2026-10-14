@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier } from '../public/owner/app.js';
+import {
+  showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier, approveAfterReissueConfirm,
+} from '../public/owner/app.js';
 
 function panelEl() {
   const listeners = {};
@@ -16,6 +18,12 @@ function panelEl() {
     listeners,
   };
 }
+
+test('approveAfterReissueConfirm aborts when owner cancels reissue confirm', () => {
+  assert.deepEqual(approveAfterReissueConfirm(true, false), { abort: true, force: false });
+  assert.deepEqual(approveAfterReissueConfirm(true, true), { abort: false, force: true });
+  assert.deepEqual(approveAfterReissueConfirm(false, false), { abort: false, force: false });
+});
 
 test('issued code panel is outside the pending list and stays after refresh', () => {
   const pending = { innerHTML: '<li>old</li>' };

@@ -128,6 +128,22 @@ test('GET /owner/api/capabilities returns per-product paid flags', async () => {
   assert.equal(data.products['al-store'].paid_available, true);
 });
 
+test('GET /owner/api/customers lists one row per device and product', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders,al-store' });
+  const device = 'ABCD2EFGH3';
+  const dkey = deviceKey(device);
+  const t = 10;
+  for (const [id, product] of [['c1', 'trip-orders'], ['c2', 'al-store']]) {
+    await e.DB.prepare(
+      'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind(id, 'h' + id, product, 'trial', device, dkey, 'a'.repeat(64), 'n' + id, 'Shop', '', '', 'issued', 'CODE-' + product, 'trial', t, t + 1).run();
+  }
+  const res = await ownerFetch(e, '/owner/api/customers');
+  const data = await res.json();
+  const products = (data.items || []).filter((i) => i.device === device).map((i) => i.product).sort();
+  assert.deepEqual(products, ['al-store', 'trip-orders']);
+});
+
 test('owner offline API signs with the product sent in the body', async () => {
   const e = env({
     LICENCE_PRODUCTS: 'trip-orders,al-store',

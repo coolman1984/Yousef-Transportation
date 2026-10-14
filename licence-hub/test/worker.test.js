@@ -185,6 +185,41 @@ test('GET /owner/api/customers lists one row per device and product', async () =
   assert.deepEqual(products, ['al-store', 'trip-orders']);
 });
 
+test('customer dashboard serves 200 records within D1 Free 50-query cap', async () => {
+  const e = env();
+  const count = 200;
+  for (let n = 0; n < count; n++) {
+    const device = 'ABCDEF' + String(n).padStart(4, '0');
+    const product = n % 2 === 0 ? 'trip-orders' : 'al-store';
+    await e.DB.prepare(
+      'INSERT INTO customers(id, product, shop, device, kind, licence_tier, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+    ).bind('customer-' + n, product, 'Shop', device, 'trial', 'trial', 1000 + n).run();
+    const tier = n === 199 ? 'permanent' : (n % 3 === 0 ? 'paid' : 'trial');
+    await e.DB.prepare(
+      'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).bind('grant-' + n, 'hash-' + n, product, tier === 'paid' ? 'monthly' : tier,
+      device, deviceKey(device), 'a'.repeat(64), 'nonce-' + n, 'Shop', '', '',
+      'issued', tier, tier === 'paid' ? '2027-12-31' : '', 1000 + n, 1000 + n).run();
+  }
+  const db = e.DB;
+  let queries = 0;
+  e.DB = {
+    prepare(sql) {
+      queries++;
+      if (queries > 50) throw Error('D1 Free query budget exceeded');
+      return db.prepare(sql);
+    },
+  };
+  const res = await ownerFetch(e, '/owner/api/customers');
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.items.length, count);
+  assert.ok(queries < 20, `queries: ${queries}`);
+  assert.equal(data.items.find((x) => x.device === 'ABCDEF0199')?.licence_tier, 'permanent');
+  assert.equal(data.items.find((x) => x.device === 'ABCDEF0000')?.licence_tier, 'paid');
+  assert.equal(data.items.find((x) => x.device === 'ABCDEF0000')?.licence_expiry, '2027-12-31');
+});
+
 test('owner offline API signs with the product sent in the body', async () => {
   const e = env({
     LICENCE_PRODUCTS: 'trip-orders,al-store',

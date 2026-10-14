@@ -929,9 +929,9 @@ class Licence:
         text = str(override if override is not None else self.shop_name() or '').strip()
         return (text or str(self.shop_name() or '').strip())[:60]
 
-    def body(self, kind, ref='', nonce='preview', shop=None):
+    def body(self, kind, ref='', nonce='preview', shop=None, version=None):
         return {'product': PRODUCT_ID, 'kind': kind, 'device': self.device(), 'machine': self.machine_tag(), 'nonce': nonce,
-                'shop': self._shop(shop), 'ref': str(ref or '')[:60], 'version': VERSION}
+                'shop': self._shop(shop), 'ref': str(ref or '')[:60], 'version': (version or VERSION)}
 
     def preview(self, kind, ref=''):
         """Exactly what a request would send, for the person to read before pressing the button."""
@@ -1001,7 +1001,8 @@ class Licence:
                 raise LookupError('have_licence')
             self._state({'status': 'sending', 'kind': kind, 'nonce': str(uuid.uuid4()), 'ref': str(ref or '').strip()[:60],
                          'shop': self._shop(shop), 'id': None,
-                         'poll_token': None, 'created_at': iso(), 'by': by, 'tries': 0, 'error': '', 'reason': ''})
+                         'poll_token': None, 'created_at': iso(), 'by': by, 'tries': 0, 'error': '', 'reason': '',
+                         'version': VERSION})
         return self.public()
 
     def clear(self):
@@ -1034,14 +1035,20 @@ class Licence:
             try:
                 if not st.get('id'):
                     code, d = self._call('POST', url + '/licence/request',
-                                          self.body(st['kind'], st.get('ref', ''), st['nonce'], shop=st.get('shop')))
+                                          self.body(st['kind'], st.get('ref', ''), st['nonce'], shop=st.get('shop'),
+                                                    version=st.get('version', VERSION)))
                     if code in (429, 503):
                         self._failed(st, 'busy')
                     elif code == 400:
                         st.update(status='failed', error='refused_input:' + str(d.get('field', '')))
                     elif d.get('replay') and not d.get('poll_token'):
-                        st['nonce'] = str(uuid.uuid4())              # the first answer was lost: a new request id makes a new request
-                        self._soon(st, 5)
+                        # Older hubs cannot recover a lost reply. Keep the same nonce:
+                        # changing it would collide with the pending request for up to an hour.
+                        st['tries'] = st.get('tries', 0) + 1
+                        st.update(status='waiting', error='recovery_unavailable')
+                        self._soon(st, BACKOFF[min(st['tries'] - 1, len(BACKOFF) - 1)])
+                    elif code != 200 or not d.get('id') or not d.get('poll_token'):
+                        self._failed(st, f'http_{code}' if code != 200 else 'response_incomplete')
                     else:
                         st.update(id=d.get('id'), poll_token=d.get('poll_token'), status='waiting', error='', tries=0, reason=d.get('reason', ''))
                         if d.get('status') == 'refused':

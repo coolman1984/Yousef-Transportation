@@ -92,15 +92,79 @@ test('monthly and permanent requests enter pending for owner approval', async ()
   }
 });
 
-test('nonce replay does not return the poll token again', async () => {
+test('lost response: exact nonce replay recovers original token without another request', async () => {
+  const e = env();
+  e.PENDING_TTL_SEC = '3600';
+  const payload = body();
+  const first = await postRequest(e, payload);
+  const replay = await postRequest(e, payload);
+  assert.equal(replay.res.status, 200);
+  assert.equal(replay.data.replay, true);
+  assert.equal(replay.data.id, first.data.id);
+  assert.equal(replay.data.poll_token, first.data.poll_token);
+  const status = await getStatus(e, replay.data.id, replay.data.poll_token);
+  assert.equal(status.data.status, 'pending');
+  const rows = await e.DB.prepare('SELECT id FROM licence_requests WHERE device_key = ?').bind(deviceKey(payload.device)).all();
+  assert.equal(rows.results.length, 1);
+});
+
+test('replay is refused for any mismatched identity even when nonce is known', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  const original = body();
+  await postRequest(e, original);
+  for (const changes of [
+    { device: 'ABCDE-FGHJK' },
+    { machine: MACHINE_B },
+    { product: 'al-store' },
+    { kind: 'monthly' },
+    { shop: 'Different shop' },
+    { ref: 'different-ref' },
+  ]) {
+    const { res, data } = await postRequest(e, { ...original, ...changes });
+    assert.equal(res.status, 401, JSON.stringify(changes));
+    assert.equal(data.poll_token, undefined);
+  }
+});
+
+test('replay accepts a newer app version for the same nonce', async () => {
   const e = env();
   const payload = body();
   const first = await postRequest(e, payload);
-  const second = await postRequest(e, payload);
-  assert.equal(second.data.replay, true);
-  assert.equal(second.data.id, first.data.id);
-  assert.equal(second.data.status, first.data.status);
-  assert.equal(second.data.poll_token, undefined);
+  const replay = await postRequest(e, { ...payload, version: '9.9.9-after-update' });
+  assert.equal(replay.res.status, 200);
+  assert.equal(replay.data.replay, true);
+  assert.equal(replay.data.id, first.data.id);
+  assert.equal(replay.data.poll_token, first.data.poll_token);
+});
+
+test('request recovery still works if app upgraded before retry', async () => {
+  const e = env();
+  const original = body({ version: '1.0.0' });
+  const first = await postRequest(e, original);
+  const retry = await postRequest(e, { ...original, version: '2.3.0' });
+  assert.equal(retry.res.status, 200);
+  assert.equal(retry.data.replay, true);
+  assert.equal(retry.data.id, first.data.id);
+  assert.equal(retry.data.poll_token, first.data.poll_token);
+  const status = await getStatus(e, retry.data.id, retry.data.poll_token);
+  assert.equal(status.data.status, 'pending');
+  const rows = await e.DB.prepare('SELECT id, version FROM licence_requests WHERE nonce = ?')
+    .bind(original.nonce).all();
+  assert.equal(rows.results.length, 1);
+  assert.equal(rows.results[0].version, '1.0.0', 'original metadata remains intact');
+});
+
+test('replay on refused request retains the refusal reason without creating duplicates', async () => {
+  const e = env();
+  const payload = body();
+  const first = await postRequest(e, payload);
+  await e.DB.prepare("UPDATE licence_requests SET status = 'refused', reason = 'already_used' WHERE id = ?")
+    .bind(first.data.id).run();
+  const replay = await postRequest(e, payload);
+  assert.equal(replay.data.id, first.data.id);
+  assert.equal(replay.data.poll_token, first.data.poll_token);
+  assert.equal(replay.data.reason, 'already_used');
 });
 
 test('request accepts missing ref and stores only a fingerprint', async () => {

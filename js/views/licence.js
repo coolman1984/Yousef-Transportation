@@ -51,12 +51,16 @@
         var typed = el ? el.value.trim() : '';
         return typed || draftShop || defaultShop;
       }
+      function transientError(e) {
+        return /^(offline|http_|busy|token|relay_off|recovery_unavailable)/.test(e || '');
+      }
       function line(q) {
-        var wait = q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && /^(offline|http_|busy|token|relay_off)/.test(q.error || ''));
+        var wait = q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && transientError(q.error));
         var cls = 'busy', icon = 'clock', text = '';
         if (!q.available) { cls = ''; icon = 'info'; text = TO.t('lic.req.off'); }
         else if (q.status === 'sending') text = TO.t('lic.req.sending');
         else if (q.status === 'waiting' && !q.error) text = TO.t(q.stage === 'approved' ? 'lic.req.approved' : 'lic.req.sentWaiting');
+        else if (q.error === 'recovery_unavailable') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.recoveryUnavailable'); }
         else if (wait) { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.offline', { when: q.next_try || '' }); }
         else if (q.status === 'failed') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.codeBad'); }
         else if (q.status === 'refused') { cls = 'bad'; icon = 'x'; text = reasonText(q.reason); }
@@ -66,7 +70,7 @@
         return { wait: wait, html: text ? '<div class="lic-line ' + cls + '" role="status">' + TO.icon(icon) + '<span>' + TO.esc(text) + '</span></div>' : '' };
       }
       function requestOpen(q) {
-        return q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && /^(offline|http_|busy|token|relay_off)/.test(q.error || ''));
+        return q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && transientError(q.error));
       }
       function draw(lic) {
         var codeEl = host.querySelector('#lic-code');

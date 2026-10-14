@@ -1,6 +1,19 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV38 replay recovery + version on retry (2026-10-14)
+
+**What/why:** Independent review (REV38-1): legacy hub replay without `poll_token` must not show “code refused” or offer a new request that rotates the nonce; office stays in waiting/backoff with `recovery_unavailable` and the licence screen explains that in Arabic. After an app update, replay must not 401 on version — office stores `version` at `begin()` and the hub ignores version on nonce replay (device/product/machine/shop/ref still enforced).
+**Checks:** `cd licence-hub && timeout 300 npm test` (138 pass); `cd tests && timeout 900 python3 -m unittest test_commercial_licence test_licence_hub_signer` (69 pass).
+**Next:** Merge with PR #38 after CI; deploy hub + office together.
+
+## Lost-activation replay + D1 customer query budget (2026-10-14)
+
+**Scope:** Owner-requested fixes for Codex review findings on PR #37 (P1 lost HTTP response blocks licence request; P2 customer list exceeds D1 Free's 50 SQL queries near 25 rows). Branch `fix/replay-recovery-batch-customers-20261014` from updated `main`.
+**Fix:** Validate replay matches all persisted request identity fields (excluding app version metadata, which may change after an upgrade) before recovering the same HMAC-derived poll token; keep request id, so no duplicate owner notification or trial window. Office client keeps original nonce and backs off safely if a legacy hub omits the recovery token (never generates a colliding nonce). Customers endpoint gathers existing grants in batches of up to 40 device keys and chooses the strongest term in memory, preserving per-product isolation and offline IDs.
+**Validation:** Regression tests added for lost response, identity mismatch, version upgrade during retry (Codex review PR #38), refusal reasons, and a 200-customer D1 query-budget scenario. GitHub CI must pass; no live deployment/real activation or clean Windows customer acceptance claimed.
+**Next:** Review CI, require independent review, and deploy the updated hub and office client together only after explicit owner release approval. No automated deployment/merges.
+
 ## Apps-Factory hub-template hardening back-port (2026-10-14)
 
 **What/why:** Sync `licence-hub/` with Apps-Factory `templates/licence-hub` (4f34038 + REV69/REV74/comb reviews): trial purge delivered-only; reissue vs `confirm_downgrade`; original trial window re-sign; sign-before-write batch; optional hashed `ref`; shop phone blanking; hub time v2; overlapping approve keeps winner locks; nonce replay without poll token; customer list strongest term; owner reissue/downgrade flows. Kept Yousef `wrangler.toml` (`trip-orders-licence-hub`, D1 `trip-orders-licence`, `LICENCE_DEFAULT_PRODUCT`, Arabic `LICENCE_PRODUCT_LABELS`, `customers.product` default `trip-orders`). No new D1 migration (payment ref still uses existing `ref` column as fingerprint).

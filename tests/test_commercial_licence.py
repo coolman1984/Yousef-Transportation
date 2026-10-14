@@ -1660,6 +1660,47 @@ class PaidClockStateTamperTest(unittest.TestCase):
                 l.a.values['licence_hub_url'] = hub_a
                 self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(day2, pem)))
 
+    def test_legacy_hub_replay_without_poll_token_keeps_nonce_waiting(self):
+        with tempfile.TemporaryDirectory() as d:
+            with _CommercialLicence(d) as l:
+                l.a.kv('licence_hub_url', 'https://hub.test')
+                l.begin('trial')
+                st = l._state()
+                nonce = st['nonce']
+                with patch.object(l, '_call', return_value=(200, {'replay': True, 'id': 'req-old'})):
+                    l.step(force=True)
+                pub = l.public()
+                self.assertEqual(pub['status'], 'waiting')
+                self.assertEqual(pub['error'], 'recovery_unavailable')
+                self.assertEqual(l._state()['nonce'], nonce)
+                with patch.object(l, '_call', return_value=(200, {'id': 'req-old', 'poll_token': 'tok', 'status': 'pending'})) as call:
+                    l.step(force=True)
+                self.assertEqual(call.call_args[0][2]['nonce'], nonce)
+                self.assertEqual(l._state()['poll_token'], 'tok')
+
+    def test_online_request_replays_with_version_saved_at_begin(self):
+        with tempfile.TemporaryDirectory() as d:
+            with _CommercialLicence(d) as l:
+                l.a.kv('licence_hub_url', 'https://hub.test')
+                with patch.object(licence, 'VERSION', '1.0.0-old'):
+                    l.begin('trial')
+                st = l._state()
+                nonce = st['nonce']
+                self.assertEqual(st['version'], '1.0.0-old')
+                bodies = []
+
+                def capture_post(method, url, body=None, token=None):
+                    if method == 'POST':
+                        bodies.append(dict(body))
+                    return 200, {'id': 'req-1', 'poll_token': 'tok', 'status': 'pending'}
+
+                with patch.object(licence, 'VERSION', '2.0.0-new'), patch.object(l, '_call', side_effect=capture_post):
+                    l.step(force=True)
+                    l.step(force=True)
+                self.assertEqual(len(bodies), 1)
+                self.assertEqual(bodies[0]['version'], '1.0.0-old')
+                self.assertEqual(bodies[0]['nonce'], nonce)
+
     def test_repaste_paid_code_does_not_replace_missing_clock_file(self):
         import licence_state
         import afcodes

@@ -227,11 +227,30 @@ export async function trialUsedForDevice(env, deviceKeyNorm) {
   return Boolean(row);
 }
 
-export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm) {
+/** Device-level trial locks for one product (offline od: plus online pd:/d:). */
+export function productTrialDeviceLocks(productId, deviceKeyNorm) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
-  if (await trialLockRow(env, offlineDeviceLockKey(product, deviceKeyNorm))) return true;
+  return [offlineDeviceLockKey(product, deviceKeyNorm), onlineDeviceLockKey(product, deviceKeyNorm)];
+}
+
+/** Machine-level trial locks for one product (online ph:/h:). */
+export function productTrialMachineLocks(productId, machineHash) {
+  if (!machineHash) return [];
+  return [onlineMachineLockKey(productId, machineHash)];
+}
+
+async function anyTrialLockUsed(env, lockIds) {
+  for (const lock of lockIds) {
+    if (await trialLockRow(env, lock)) return true;
+  }
+  return false;
+}
+
+export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, machineHash = null) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
+  if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   if (product !== 'trip-orders') return false;
-  if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
   if (await trialLockRow(env, legacyOfflineLockKey(deviceKeyNorm))) return true;
   const legacyReq = await env.DB.prepare(
     "SELECT id FROM licence_requests WHERE id = ? AND status IN ('issued', 'delivered')",
@@ -239,11 +258,11 @@ export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm) 
   return Boolean(legacyReq);
 }
 
-/** Online path: refuse when this product's device or machine trial lock was already used. */
+/** Online path: refuse when this product's trial lock was used on any channel. */
 export async function trialUsedOnline(env, productId, deviceKeyNorm, machineHash) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
-  if (await trialLockRow(env, onlineDeviceLockKey(product, deviceKeyNorm))) return true;
-  if (machineHash && (await trialLockRow(env, onlineMachineLockKey(product, machineHash)))) return true;
+  if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
+  if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   return false;
 }
 
@@ -287,7 +306,7 @@ export async function hubCalendarSigned(env) {
   return { ...signed, serverTime };
 }
 
-export function parseOwnerGrant(body = {}) {
+export function parseOwnerGrant(body = {}, env = {}) {
   const grant = String(body.grant || body.tier || 'trial').trim().toLowerCase();
   if (grant === 'trial' || grant === '14d') return { grant: 'trial' };
   if (grant === 'permanent' || grant === 'perm') return { grant: 'permanent' };
@@ -296,8 +315,10 @@ export function parseOwnerGrant(body = {}) {
     let until = String(body.paid_until || body.until || '').trim();
     if (preset && !until) {
       try {
-        until = paidPresetLastDay(preset);
-      } catch {
+        const tz = env.LICENCE_CALENDAR_TZ || 'Africa/Cairo';
+        until = paidPresetLastDay(preset, new Date(), tz);
+      } catch (e) {
+        if (e?.message === 'date_out_of_range') throw e;
         throw new Error('bad_preset');
       }
     }
@@ -739,8 +760,9 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   const force = options.force === true;
   let grant;
   try {
-    grant = parseOwnerGrant(options);
-  } catch {
+    grant = parseOwnerGrant(options, env);
+  } catch (e) {
+    if (e?.message === 'date_out_of_range') throw e;
     throw new Error('bad_grant');
   }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
@@ -791,7 +813,8 @@ export async function approveRequest(env, requestId, keys, options = {}) {
     throw e;
   }
   if (signed?.refused) {
-    await refuseRequest(env, requestId, signed.reason || REASON_PAID_KEY_MISSING);
+    if (signed.reason === REASON_PAID_KEY_MISSING) return signed;
+    await refuseRequest(env, requestId, signed.reason || REASON_PAID_IN_STUDIO);
     return signed;
   }
 
@@ -813,8 +836,9 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const force = options.force === true;
   let grant;
   try {
-    grant = parseOwnerGrant(options);
-  } catch {
+    grant = parseOwnerGrant(options, env);
+  } catch (e) {
+    if (e?.message === 'date_out_of_range') throw e;
     throw new Error('bad_grant');
   }
   const dkey = deviceKey(device);

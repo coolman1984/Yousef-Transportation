@@ -49,7 +49,8 @@ export function downgradeConfirmMessageAr(current) {
   return `الترخيص الحالي: ${label}. تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟`;
 }
 
-export function defaultTierSelection(requestKind) {
+export function defaultTierSelection(requestKind, paidAvailable = true) {
+  if (!paidAvailable) return { tier: 'trial' };
   if (requestKind === 'permanent') return { tier: 'permanent' };
   if (requestKind === 'monthly') return { tier: 'paid', paidUntil: presetPaidUntil('1m') };
   return { tier: 'trial' };
@@ -106,7 +107,7 @@ function kindLabelAr(kind) {
 
 export function tierPickerHtml(disabledPaid, customDate, requestId, requestKind) {
   const tierName = 'tier-' + (requestId || 'offline');
-  const sel = defaultTierSelection(requestKind);
+  const sel = defaultTierSelection(requestKind, !disabledPaid);
   const paidOff = disabledPaid ? ' disabled' : '';
   const paidMsg = disabledPaid
     ? '<p class="err">إصدار المدفوع غير متاح — أضف PAID_SIGNING_KEY في Cloudflare.</p>' : '';
@@ -296,7 +297,7 @@ function renderPendingList(host, items) {
           body: JSON.stringify(approveBody()),
         });
       }
-      if (res && res.message === 'paid_key_missing') {
+      if (res && (res.error === 'paid_key_missing' || res.message === 'paid_key_missing')) {
         alert('إصدار المدفوع غير متاح على الخادم — راجع PAID_SIGNING_KEY.');
         ok.disabled = false;
         return;

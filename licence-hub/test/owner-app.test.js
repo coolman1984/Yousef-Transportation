@@ -59,6 +59,13 @@ test('tier picker preselects grant from request kind', () => {
   assert.deepEqual(defaultTierSelection('monthly').tier, 'paid');
 });
 
+test('tier picker falls back to trial when paid radios are disabled', () => {
+  const monthly = tierPickerHtml(true, '', 'req-m', 'monthly');
+  assert.match(monthly, /value="trial"[^>]*checked/);
+  assert.doesNotMatch(monthly, /value="paid"[^>]*checked/);
+  assert.deepEqual(defaultTierSelection('monthly', false).tier, 'trial');
+});
+
 test('customerTierLabelAr shows trial paid and permanent', () => {
   assert.equal(customerTierLabelAr({ licence_tier: 'trial' }), 'تجربة');
   assert.equal(customerTierLabelAr({ licence_tier: 'paid', licence_expiry: '2028-01-15' }), 'مدفوع حتى 2028-01-15');

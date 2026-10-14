@@ -5,7 +5,7 @@ import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
   deviceKey, deviceLockKey, onlineDeviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice,
-  trialUsedOnline, REASON_PAID_IN_STUDIO,
+  trialUsedOnline, REASON_PAID_IN_STUDIO, REASON_PAID_KEY_MISSING, offlineDeviceLockKey,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
   currentTerm,
@@ -1044,4 +1044,54 @@ test('paid upgrade keeps trip-orders trial lock for in-flight status poll', asyn
   const statusBody = await statusRes.json();
   assert.equal(statusBody.status, 'issued');
   assert.ok(statusBody.code);
+});
+
+test('al-store offline trial blocks online trial on same device', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 94));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  await issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' });
+  assert.ok(await e.DB.prepare('SELECT 1 FROM machine_trials WHERE machine = ?')
+    .bind(offlineDeviceLockKey('al-store', dkey)).first());
+  assert.equal(await trialUsedOnline(e, 'al-store', dkey, MACHINE_A), true);
+  const online = await postRequest(e, body({ nonce: 'al-off-then-on', product: 'al-store' }));
+  assert.equal(online.data.status, 'refused');
+  assert.equal(online.data.reason, 'already_used');
+});
+
+test('al-store online trial blocks offline trial on same device', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 95));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const alReq = await postRequest(e, body({ nonce: 'al-on-then-off', product: 'al-store' }));
+  const keysAl = await loadSigningKeys(e, 'al-store');
+  await approveRequest(e, alReq.data.id, keysAl);
+  assert.ok(await e.DB.prepare('SELECT 1 FROM machine_trials WHERE machine = ?')
+    .bind(onlineDeviceLockKey('al-store', dkey)).first());
+  assert.equal(await trialUsedForOfflineProduct(e, 'al-store', dkey), true);
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' }),
+    /already_used/,
+  );
+});
+
+test('approve paid without PAID_SIGNING_KEY keeps pending request', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(96);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('paid-miss', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-pm', 'Shop', '', '', 'pending', 1, 1).run();
+  const out = await approveRequest(e, 'paid-miss', keys, { grant: 'paid', paid_until: '2028-06-01' });
+  assert.equal(out.refused, true);
+  assert.equal(out.reason, REASON_PAID_KEY_MISSING);
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('paid-miss').first();
+  assert.equal(row.status, 'pending');
+  assert.notEqual(row.reason, REASON_PAID_KEY_MISSING);
 });

@@ -59,7 +59,7 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      "SELECT r.id, r.kind, r.product, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
+      "SELECT r.id, r.kind, r.product, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device AND c.product = r.product WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
     ).all();
     return json({ items: rows.results || [] });
   }
@@ -77,7 +77,7 @@ async function ownerApi(request, env, url, session) {
            ROW_NUMBER() OVER (PARTITION BY device_key, product ORDER BY updated_at DESC) AS rn
          FROM licence_requests
          WHERE status IN ('issued', 'delivered')
-       ) r ON r.device = c.device AND r.rn = 1
+       ) r ON r.device = c.device AND r.product = c.product AND r.rn = 1
        ORDER BY r.updated_at DESC LIMIT 200`,
     ).bind().all();
     const items = (rows.results || []).map((r) => {

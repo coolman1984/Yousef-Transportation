@@ -18,6 +18,7 @@ node scripts/apply-migrations.mjs --local /path/to/d1.sqlite
 # Production (wrangler one-shot; 0001/0002 are not re-run-safe on schema that already has columns):
 npx wrangler d1 execute <database> --remote --file=migrations/0001_licence_tier_expiry.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0002_product_column.sql
+npx wrangler d1 execute <database> --remote --file=migrations/0003_customers_product.sql
 ```
 
 `scripts/apply-migrations.mjs` skips `ALTER` when `pragma_table_info` shows the column already exists (safe to re-run).

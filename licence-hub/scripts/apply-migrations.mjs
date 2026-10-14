@@ -34,6 +34,11 @@ function ensureMigrationsTable(db) {
 );`);
 }
 
+function indexExists(db, name) {
+  const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name);
+  return Boolean(row);
+}
+
 function addColumnIfMissing(db, migrationId, table, column, ddl) {
   if (migrationApplied(db, migrationId)) return;
   if (columnExists(db, table, column)) {
@@ -41,6 +46,18 @@ function addColumnIfMissing(db, migrationId, table, column, ddl) {
     return;
   }
   db.exec(ddl);
+  markApplied(db, migrationId);
+}
+
+function applyCustomersProductMigration(db) {
+  const migrationId = '0003_customers_product';
+  if (migrationApplied(db, migrationId)) return;
+  if (!columnExists(db, 'customers', 'product')) {
+    db.exec("ALTER TABLE customers ADD COLUMN product TEXT NOT NULL DEFAULT 'trip-orders';");
+  }
+  if (!indexExists(db, 'customers_product_device')) {
+    db.exec('CREATE UNIQUE INDEX customers_product_device ON customers(product, device);');
+  }
   markApplied(db, migrationId);
 }
 
@@ -63,6 +80,7 @@ export function applyMigrations(db) {
     'product',
     "ALTER TABLE licence_requests ADD COLUMN product TEXT NOT NULL DEFAULT 'trip-orders';",
   );
+  applyCustomersProductMigration(db);
 }
 
 const cliArgs = process.argv.slice(2).filter((a) => a !== '--local');

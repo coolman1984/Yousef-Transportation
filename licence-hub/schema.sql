@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS machine_trials (
 
 CREATE TABLE IF NOT EXISTS customers (
   id         TEXT PRIMARY KEY,
+  product    TEXT NOT NULL DEFAULT 'trip-orders',
   shop       TEXT NOT NULL,
   device     TEXT NOT NULL,
   kind       TEXT NOT NULL,
@@ -56,6 +57,7 @@ CREATE TABLE IF NOT EXISTS customers (
   licence_expiry TEXT,
   created_at INTEGER NOT NULL
 );
+CREATE UNIQUE INDEX IF NOT EXISTS customers_product_device ON customers(product, device);
 
 CREATE TABLE IF NOT EXISTS owner_sessions (
   id         TEXT PRIMARY KEY,

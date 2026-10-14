@@ -14,6 +14,10 @@ test('fresh schema.sql needs no 0001 migration', () => {
   const cols = db.prepare("PRAGMA table_info(licence_requests)").all().map((r) => r.name);
   assert.ok(cols.includes('licence_tier'));
   assert.ok(cols.includes('product'));
+  const custCols = db.prepare('PRAGMA table_info(customers)').all().map((r) => r.name);
+  assert.ok(custCols.includes('product'));
+  const idx = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'customers_product_device'").get();
+  assert.ok(idx);
 });
 
 test('0002_product_column.sql contains ALTER for wrangler one-shot', () => {

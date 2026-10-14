@@ -133,9 +133,11 @@ test('GET /owner/api/customers lists one row per device and product', async () =
   const device = 'ABCD2EFGH3';
   const dkey = deviceKey(device);
   const t = 10;
-  await e.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, licence_tier, created_at) VALUES(?, ?, ?, ?, ?, ?)',
-  ).bind('cust-1', 'Shop', device, 'trial', 'trial', t).run();
+  for (const [cid, product] of [['cust-to', 'trip-orders'], ['cust-al', 'al-store']]) {
+    await e.DB.prepare(
+      'INSERT INTO customers(id, product, shop, device, kind, licence_tier, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+    ).bind(cid, product, 'Shop', device, 'trial', 'trial', t).run();
+  }
   for (const [id, product] of [['c1', 'trip-orders'], ['c2', 'al-store']]) {
     await e.DB.prepare(
       'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',

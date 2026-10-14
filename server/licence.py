@@ -1040,8 +1040,11 @@ class Licence:
                     elif code == 400:
                         st.update(status='failed', error='refused_input:' + str(d.get('field', '')))
                     elif d.get('replay') and not d.get('poll_token'):
-                        st['nonce'] = str(uuid.uuid4())              # the first answer was lost: a new request id makes a new request
-                        self._soon(st, 5)
+                        # Older hubs cannot recover a lost reply. Keep the same nonce:
+                        # changing it would collide with the pending request for up to an hour.
+                        self._failed(st, 'recovery_unavailable')
+                    elif code != 200 or not d.get('id') or not d.get('poll_token'):
+                        self._failed(st, f'http_{code}' if code != 200 else 'response_incomplete')
                     else:
                         st.update(id=d.get('id'), poll_token=d.get('poll_token'), status='waiting', error='', tries=0, reason=d.get('reason', ''))
                         if d.get('status') == 'refused':

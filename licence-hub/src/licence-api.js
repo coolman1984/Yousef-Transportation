@@ -719,8 +719,7 @@ export async function handleLicence(request, env, url) {
       if (existing.poll_token_hash !== pollHash
           || existing.product !== body.product || existing.kind !== body.kind
           || existing.device_key !== dkey || existing.machine !== body.machine
-          || existing.shop !== shopStored || existing.ref !== refStored
-          || existing.version !== body.version.slice(0, 40)) return json({}, 401);
+          || existing.shop !== shopStored || existing.ref !== refStored) return json({}, 401);
       // The original request and its persisted id are reused: no extra licence
       // request, new trial window or owner notification is created on a replay.
       return json({

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV38 replay recovery + version on retry (2026-10-14)
+
+**What/why:** Independent review (REV38-1): legacy hub replay without `poll_token` must not show “code refused” or offer a new request that rotates the nonce; office stays in waiting/backoff with `recovery_unavailable` and the licence screen explains that in Arabic. After an app update, replay must not 401 on version — office stores `version` at `begin()` and the hub ignores version on nonce replay (device/product/machine/shop/ref still enforced).
+**Checks:** `cd licence-hub && timeout 300 npm test` (138 pass); `cd tests && timeout 900 python3 -m unittest test_commercial_licence test_licence_hub_signer` (69 pass).
+**Next:** Merge with PR #38 after CI; deploy hub + office together.
+
 ## Lost-activation replay + D1 customer query budget (2026-10-14)
 
 **Scope:** Owner-requested fixes for Codex review findings on PR #37 (P1 lost HTTP response blocks licence request; P2 customer list exceeds D1 Free's 50 SQL queries near 25 rows). Branch `fix/replay-recovery-batch-customers-20261014` from updated `main`.

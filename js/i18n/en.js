@@ -235,6 +235,7 @@
     'lic.req.waiting': 'The company has your request. The code arrives here by itself.',
     'lic.req.approved': 'Approved. The code is on its way.',
     'lic.req.offline': 'No connection now. Trying again at {when}.',
+    'lic.req.recoveryUnavailable': 'The company server is still processing your request. We keep trying with the same request number.',
     'lic.req.codeBad': 'A code arrived but this PC refused it. Use the manual way.',
     'lic.req.closedManual': 'You pasted a code. The request is closed.',
     'lic.req.closed': 'The request ended. You can ask again.',

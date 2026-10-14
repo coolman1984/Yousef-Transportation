@@ -120,12 +120,22 @@ test('replay is refused for any mismatched identity even when nonce is known', a
     { kind: 'monthly' },
     { shop: 'Different shop' },
     { ref: 'different-ref' },
-    { version: '2.0' },
   ]) {
     const { res, data } = await postRequest(e, { ...original, ...changes });
     assert.equal(res.status, 401, JSON.stringify(changes));
     assert.equal(data.poll_token, undefined);
   }
+});
+
+test('replay accepts a newer app version for the same nonce', async () => {
+  const e = env();
+  const payload = body();
+  const first = await postRequest(e, payload);
+  const replay = await postRequest(e, { ...payload, version: '9.9.9-after-update' });
+  assert.equal(replay.res.status, 200);
+  assert.equal(replay.data.replay, true);
+  assert.equal(replay.data.id, first.data.id);
+  assert.equal(replay.data.poll_token, first.data.poll_token);
 });
 
 test('replay on refused request retains the refusal reason without creating duplicates', async () => {

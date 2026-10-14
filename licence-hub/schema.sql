@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS machine_trials (
   at         INTEGER NOT NULL
 );
 
+-- customers.product DEFAULT '' on raw schema.sql apply; legacy migrations use __DEFAULT_PRODUCT__ (substituted by scripts/apply-migrations.mjs).
 CREATE TABLE IF NOT EXISTS customers (
   id         TEXT PRIMARY KEY,
   product    TEXT NOT NULL DEFAULT 'trip-orders',

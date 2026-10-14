@@ -8,7 +8,8 @@ import {
   trialUsedOnline, REASON_PAID_IN_STUDIO, REASON_PAID_KEY_MISSING, offlineDeviceLockKey,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
-  currentTerm,
+  currentTerm, defaultProduct, ownerProductsPayload, blankLongDigitRuns, refFingerprint,
+  originalTrialWindow, isActiveStrongTerm,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -91,14 +92,66 @@ test('monthly and permanent requests enter pending for owner approval', async ()
   }
 });
 
-test('nonce replay returns the same poll token', async () => {
+test('nonce replay does not return the poll token again', async () => {
   const e = env();
   const payload = body();
   const first = await postRequest(e, payload);
   const second = await postRequest(e, payload);
   assert.equal(second.data.replay, true);
-  assert.equal(second.data.poll_token, first.data.poll_token);
   assert.equal(second.data.id, first.data.id);
+  assert.equal(second.data.status, first.data.status);
+  assert.equal(second.data.poll_token, undefined);
+});
+
+test('request accepts missing ref and stores only a fingerprint', async () => {
+  const e = env();
+  const payload = body();
+  delete payload.ref;
+  const { res, data } = await postRequest(e, payload);
+  assert.equal(res.status, 200);
+  assert.equal(data.status, 'pending');
+  const row = await e.DB.prepare('SELECT ref FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.ref, '');
+});
+
+test('shop long digit runs are blanked before storage', async () => {
+  const e = env();
+  const { data } = await postRequest(e, body({ shop: 'متجر 0123456789', ref: 'pay-ref-1' }));
+  const row = await e.DB.prepare('SELECT shop, ref FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.shop, 'متجر ');
+  const fp = await refFingerprint('pay-ref-1');
+  assert.equal(row.ref, fp);
+  assert.notEqual(row.ref, 'pay-ref-1');
+});
+
+test('blankLongDigitRuns leaves short digit runs', () => {
+  assert.equal(blankLongDigitRuns('123456'), '123456');
+  assert.equal(blankLongDigitRuns('call 1234567 now'), 'call  now');
+});
+
+test('blankLongDigitRuns strips spaced and dashed phone-like runs', () => {
+  assert.equal(blankLongDigitRuns('010 1234 5678'), '');
+  assert.equal(blankLongDigitRuns('010-1234-5678'), '');
+  assert.equal(blankLongDigitRuns('shop (010) 123-4567'), 'shop ');
+});
+
+test('blankLongDigitRuns normalizes Arabic-Indic digit runs', () => {
+  assert.equal(blankLongDigitRuns('٠١٠١٢٣٤٥٦٧٨'), '');
+  assert.equal(blankLongDigitRuns('shop ۰۱۰۱۲۳۴۵۶۷'), 'shop ');
+});
+
+test('offline issuance blanks phone-like shop on customers row', async () => {
+  const e = env();
+  const keys = await signingKeys(91);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  await issueOfflineCustomer(e, keys, device, '010 1234 5678', 'trip-orders');
+  const req = await e.DB.prepare('SELECT shop FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  const cust = await e.DB.prepare('SELECT shop FROM customers WHERE device = ? AND product = ?')
+    .bind(device, 'trip-orders').first();
+  assert.equal(req.shop, '—');
+  assert.equal(cust.shop, '—');
 });
 
 test('losing concurrent approval never exposes issued code on status poll', async () => {
@@ -226,6 +279,10 @@ test('time returns signed hub calendar day without database access', async () =>
     assert.equal(res.headers.get('Cache-Control'), 'no-store');
     assert.equal(data.kid, 'trial-hub');
     assert.ok(data.sig);
+    assert.ok(data.sig2);
+    assert.equal(typeof data.server_time, 'number');
+    assert.equal(data.serverTime, data.server_time);
+    assert.equal(data.signed, true);
     assert.ok([before, after].includes(data.calendar_day));
   }
 });
@@ -241,10 +298,38 @@ test('ack clears stored activation code', async () => {
     headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + poll },
     body: JSON.stringify({ id: data.id }),
   });
-  await handleLicence(ackReq, e, new URL(ackReq.url));
+  const ackRes = await handleLicence(ackReq, e, new URL(ackReq.url));
+  assert.equal(ackRes.status, 200);
   const row = await e.DB.prepare('SELECT code, status FROM licence_requests WHERE id = ?').bind(data.id).first();
   assert.equal(row.code, null);
   assert.equal(row.status, 'delivered');
+});
+
+test('ack on pending request returns 409 and leaves row unchanged', async () => {
+  const e = env();
+  const { data } = await postRequest(e, body({ nonce: 'ack-pending' }));
+  const ackReq = new Request('https://hub.test/licence/ack', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + data.poll_token },
+    body: JSON.stringify({ id: data.id }),
+  });
+  const ackRes = await handleLicence(ackReq, e, new URL(ackReq.url));
+  assert.equal(ackRes.status, 409);
+  const row = await e.DB.prepare('SELECT code, status FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.status, 'pending');
+  assert.equal(row.code, null);
+});
+
+test('licence routes return 503 when LICENCE_PRODUCTS is unset', async () => {
+  const e = env();
+  delete e.LICENCE_PRODUCTS;
+  const req = new Request('https://hub.test/licence/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body({ nonce: 'no-products' })),
+  });
+  const res = await handleLicence(req, e, new URL(req.url));
+  assert.equal(res.status, 503);
 });
 
 test('owner force reissue replaces device trial lock', async () => {
@@ -278,15 +363,20 @@ test('issued row without machine lock is not returned until claim is repaired', 
   assert.equal(lock.request_id, data.id);
 });
 
-test('purgeStaleCodes blanks old issued rows', async () => {
+test('purgeStaleCodes blanks old delivered trial rows but keeps issued', async () => {
   const e = env();
   const old = Math.floor(Date.now() / 1000) - 20 * 86400;
   await e.DB.prepare(
     'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind('old', 'h', 'trip-orders', 'trial', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'delivered', 'CODE-OLD', old, old).run();
+  ).bind('old-del', 'h', 'trip-orders', 'trial', '7KD2M-QX9TP', deviceKey('7KD2M-QX9TP'), MACHINE_A, 'n', '', '', '', 'delivered', 'CODE-OLD', old, old).run();
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('old-iss', 'h2', 'trip-orders', 'trial', 'ABCDE-FGHJK', deviceKey('ABCDE-FGHJK'), MACHINE_B, 'n2', '', '', '', 'issued', 'CODE-KEEP', old, old).run();
   await purgeStaleCodes(e);
-  const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('old').first();
-  assert.equal(row.code, null);
+  const delivered = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('old-del').first();
+  const issued = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?').bind('old-iss').first();
+  assert.equal(delivered.code, null);
+  assert.equal(issued.code, 'CODE-KEEP');
 });
 
 test('approve retry returns the same code', async () => {
@@ -503,6 +593,147 @@ test('concurrent approval of the same request keeps device locks and one code', 
   assert.ok(locks.length >= 1);
   const cust = (await e.DB.prepare('SELECT id FROM customers').bind().all()).results || [];
   assert.equal(cust.length, 1);
+  const st = await getStatus(e, data.id, data.poll_token);
+  assert.equal(st.data.status, 'issued');
+  assert.equal(st.data.code, a.code);
+});
+
+test('owner force reissue on delivered row mints code without granting a second trial', async () => {
+  const e = env();
+  const keys = await signingKeys(61);
+  const { data } = await postRequest(e, body({ nonce: 'delivered-reissue' }));
+  const firstSign = await approveRequest(e, data.id, keys);
+  await e.DB.prepare("UPDATE licence_requests SET status = 'delivered', code = NULL WHERE id = ?").bind(data.id).run();
+  assert.equal(await approveRequest(e, data.id, keys), null);
+  const forced = await approveRequest(e, data.id, keys, { force: true });
+  assert.ok(forced?.code);
+  assert.equal(forced.first_day, firstSign.first_day);
+  assert.equal(forced.last_day, firstSign.last_day);
+  const retry = await postRequest(e, body({ nonce: 'delivered-reissue-2' }));
+  assert.equal(retry.data.reason, 'already_used');
+});
+
+test('owner force trial reissue refuses when trial window ended', async () => {
+  const e = env();
+  const keys = await signingKeys(63);
+  const { data } = await postRequest(e, body({ nonce: 'force-expired-1' }));
+  await approveRequest(e, data.id, keys);
+  await e.DB.prepare(
+    "UPDATE customers SET first_day = '2020-01-01', last_day = '2020-01-14', licence_expiry = '2020-01-14'",
+  ).bind().run();
+  await e.DB.prepare(
+    "UPDATE licence_requests SET licence_expiry = '2020-01-14', status = 'delivered', code = NULL WHERE id = ?",
+  ).bind(data.id).run();
+  await assert.rejects(() => approveRequest(e, data.id, keys, { force: true }), /trial_expired/);
+});
+
+test('originalTrialWindow ignores paid customer row with blank licence_tier', async () => {
+  const e = env();
+  const device = 'ABCDE-FGHJK';
+  const dkey = deviceKey(device);
+  const t = 1;
+  await e.DB.prepare(
+    `INSERT INTO customers (id, device, product, shop, first_day, last_day, licence_expiry, kind, licence_tier, created_at)
+     VALUES ('cust-paid-blank', ?, 'trip-orders', 'S', '2026-01-01', '2026-01-14', '2026-01-14', 'monthly', '', ?)`,
+  ).bind(device, t).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests (
+       id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+       status, licence_tier, licence_expiry, created_at, updated_at
+     ) VALUES (?, 'h', 'trip-orders', 'trial', ?, ?, 'm', 'n-trial-win', '', '', '', 'delivered', '', '2026-02-01', ?, ?)`,
+  ).bind('req-trial-win', device, dkey, t, t).run();
+  const win = await originalTrialWindow(e, 'trip-orders', device);
+  assert.equal(win.first, '2026-01-19');
+  assert.equal(win.last, '2026-02-01');
+});
+
+test('originalTrialWindow ignores delivered monthly request with blank licence_tier', async () => {
+  const e = env();
+  const device = 'LMNOP-QRSTV';
+  const dkey = deviceKey(device);
+  const t = 1;
+  await e.DB.prepare(
+    `INSERT INTO licence_requests (
+       id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+       status, licence_tier, licence_expiry, created_at, updated_at
+     ) VALUES (?, 'h', 'trip-orders', 'monthly', ?, ?, 'm', 'n-monthly', '', '', '', 'delivered', '', '2026-03-01', ?, ?)`,
+  ).bind('req-monthly-blank', device, dkey, t, t).run();
+  assert.equal(await originalTrialWindow(e, 'trip-orders', device), null);
+});
+
+test('comb6: paid until 2027-10-14 blocks forced trial reissue online and offline', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(80, 81);
+  const paidUntil = '2027-10-14';
+  const trialReq = await postRequest(e, body({ nonce: 'comb6-online' }));
+  await approveRequest(e, trialReq.data.id, keys);
+  const paidOnTrial = await approveRequest(e, trialReq.data.id, keys, { grant: 'paid', paid_until: paidUntil });
+  assert.ok(paidOnTrial?.code);
+  const trialRow = await e.DB.prepare(
+    'SELECT kind, licence_tier, licence_expiry, code FROM licence_requests WHERE id = ?',
+  ).bind(trialReq.data.id).first();
+  assert.equal(trialRow.kind, 'monthly');
+  assert.equal(trialRow.licence_tier, 'paid');
+  assert.equal(trialRow.licence_expiry, paidUntil);
+  assert.equal(await originalTrialWindow(e, 'trip-orders', device), null);
+  await e.DB.prepare(
+    "UPDATE licence_requests SET status = 'delivered', code = NULL WHERE id = ?",
+  ).bind(trialReq.data.id).run();
+  await assert.rejects(
+    () => approveRequest(e, trialReq.data.id, keys, { grant: 'trial', force: true }),
+    (err) => err.message === 'downgrade_forbidden' && err.current?.until === paidUntil,
+  );
+  const afterOnline = await e.DB.prepare(
+    'SELECT licence_tier, licence_expiry, code FROM licence_requests WHERE id = ?',
+  ).bind(trialReq.data.id).first();
+  assert.equal(afterOnline.licence_tier, 'paid');
+  assert.equal(afterOnline.licence_expiry, paidUntil);
+  assert.equal(afterOnline.code, null);
+  assert.deepEqual(await currentTerm(e, 'trip-orders', device), { tier: 'paid', until: paidUntil });
+
+  const offlineKeys = await signingKeys(82, 83);
+  const offDevice = 'ABCDE-FGHJK';
+  const offDkey = deviceKey(offDevice);
+  const offlinePaid = await issueOfflineCustomer(e, offlineKeys, offDevice, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: paidUntil,
+  });
+  assert.ok(offlinePaid.code);
+  await e.DB.prepare(
+    "UPDATE licence_requests SET status = 'delivered', kind = 'trial' WHERE id = ?",
+  ).bind(offlineRequestId('trip-orders', offDkey)).run();
+  assert.equal(await originalTrialWindow(e, 'trip-orders', offDevice), null);
+  await assert.rejects(
+    () => issueOfflineCustomer(e, offlineKeys, offDevice, 'Shop', 'trip-orders', { grant: 'trial', force: true }),
+    (err) => err.message === 'downgrade_forbidden' && err.current?.until === paidUntil,
+  );
+  const offRow = await e.DB.prepare('SELECT code, licence_tier FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', offDkey)).first();
+  assert.equal(offRow.licence_tier, 'paid');
+  assert.equal(offRow.code, offlinePaid.code);
+});
+
+test('trial upgraded on same online row sets kind monthly before delivered force trial', async () => {
+  const e = env();
+  const keys = await signingKeys(84, 85);
+  const { data } = await postRequest(e, body({ nonce: 'kind-sync' }));
+  await approveRequest(e, data.id, keys);
+  await approveRequest(e, data.id, keys, { grant: 'paid', paid_until: '2027-10-14' });
+  const row = await e.DB.prepare('SELECT kind, licence_tier FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.kind, 'monthly');
+  assert.equal(row.licence_tier, 'paid');
+});
+
+test('offline force trial reissue keeps original first and last days', async () => {
+  const e = env();
+  const keys = await signingKeys(64);
+  const device = 'ABCDE-FGHJK';
+  const first = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const second = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', force: true });
+  assert.equal(second.first_day, first.first_day);
+  assert.equal(second.last_day, first.last_day);
+  assert.notEqual(second.code, first.code);
 });
 
 test('separate offline queues on one database return the same issued code', async () => {
@@ -639,6 +870,26 @@ test('request without product defaults to trip-orders', async () => {
   assert.equal(row.product, 'trip-orders');
 });
 
+test('request without product uses LICENCE_DEFAULT_PRODUCT when set', async () => {
+  const e = env();
+  e.LICENCE_PRODUCTS = 'trip-orders,al-store';
+  e.LICENCE_DEFAULT_PRODUCT = 'al-store';
+  const payload = body();
+  delete payload.product;
+  const { data } = await postRequest(e, payload);
+  const row = await e.DB.prepare('SELECT product FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.product, 'al-store');
+});
+
+test('defaultProduct and ownerProductsPayload', () => {
+  const e = { LICENCE_PRODUCTS: 'a,b', LICENCE_DEFAULT_PRODUCT: 'b', LICENCE_PRODUCT_LABELS: '{"a":"أ"}' };
+  assert.equal(defaultProduct(e), 'b');
+  const payload = ownerProductsPayload(e);
+  assert.deepEqual(payload.products, ['a', 'b']);
+  assert.equal(payload.default_product, 'b');
+  assert.equal(payload.labels.a, 'أ');
+});
+
 test('licence routes accept /api and /licence-hub prefixes', async () => {
   const e = env();
   const req = new Request('https://hub.test/api/licence/status?id=x', {
@@ -678,10 +929,36 @@ test('hub calendar uses global signing keys only', async () => {
   assert.equal(hubTimeSigningMaterial(e), null);
   const out = await hubCalendarSigned(e);
   assert.equal(out.sig, undefined);
+  assert.equal(out.signed, false);
   e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 87));
   const signed = await hubCalendarSigned(e);
   assert.ok(signed.sig);
+  assert.ok(signed.sig2);
   assert.equal(signed.kid, 'trial-hub');
+  assert.equal(signed.signed, true);
+});
+
+test('hub time echoes nonce when client sends ?nonce=', async () => {
+  const pem = pemFromSeed(Buffer.alloc(32, 78));
+  const e = { LICENCE_SIGNING_KEY: pem };
+  const req = new Request('https://hub.test/licence/time?nonce=abc123_-');
+  const res = await handleLicence(req, e, new URL(req.url));
+  const data = await res.json();
+  assert.equal(data.nonce, 'abc123_-');
+  assert.ok(data.sig2);
+});
+
+test('hub time rejects invalid nonce query', async () => {
+  const pem = pemFromSeed(Buffer.alloc(32, 79));
+  const e = { LICENCE_SIGNING_KEY: pem };
+  const req = new Request('https://hub.test/licence/time?nonce=not!valid');
+  const res = await handleLicence(req, e, new URL(req.url));
+  assert.equal(res.status, 400);
+});
+
+test('ownerProductsPayload includes calendar_tz', () => {
+  const e = { LICENCE_PRODUCTS: 'a', LICENCE_CALENDAR_TZ: 'Europe/London' };
+  assert.equal(ownerProductsPayload(e).calendar_tz, 'Europe/London');
 });
 
 test('ownerCapabilities reflects per-product paid key', () => {
@@ -744,9 +1021,11 @@ test('paid online request after issued trial upgrades without force and keeps tr
   const paidOut = await approveRequest(e, 'paid-after-trial', paidKeys, { grant: 'paid', paid_until: '2028-06-01' });
   assert.ok(paidOut?.code);
   assert.notEqual(paidOut.code, trialCode.code);
-  const paidRow = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('paid-after-trial').first();
+  const paidRow = await e.DB.prepare('SELECT status, reason, kind, licence_tier FROM licence_requests WHERE id = ?').bind('paid-after-trial').first();
   assert.equal(paidRow.status, 'issued');
   assert.equal(paidRow.reason, '');
+  assert.equal(paidRow.kind, 'monthly');
+  assert.equal(paidRow.licence_tier, 'paid');
   const lockAfter = await e.DB.prepare('SELECT request_id FROM machine_trials WHERE machine = ?')
     .bind(deviceLockKey(dkey)).first();
   assert.ok(lockAfter);
@@ -860,7 +1139,7 @@ test('signing failure on offline reissue leaves stored paid code', async () => {
   const keysNoTrial = { trialKey: null, paidKey: keys.paidKey };
   await assert.rejects(
     () => issueOfflineCustomer(e, keysNoTrial, device, 'Shop', 'trip-orders', { grant: 'trial', force: true }),
-    /no_signing_key/,
+    /downgrade_forbidden/,
   );
   const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?')
     .bind(offlineRequestId('trip-orders', dkey)).first();
@@ -910,6 +1189,38 @@ test('online delivered row blocks shorter monthly approve without force', async 
   );
   const pending = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('monthly-new').first();
   assert.equal(pending.status, 'pending');
+});
+
+test('comb7: permanent customer pending monthly with reissue blocks downgrade until confirm_downgrade', async () => {
+  const e = env();
+  e.PAID_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 91));
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(88, 89);
+  const paidUntil = '2026-11-14';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'permanent' });
+  assert.deepEqual(await currentTerm(e, 'trip-orders', device), { tier: 'permanent', until: '' });
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('monthly-pending-comb7', 'hp-c7', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-c7', 'Shop', '', '', 'pending', 20, 20).run();
+  const grant = { grant: 'paid', paid_until: paidUntil };
+  await assert.rejects(
+    () => approveRequest(e, 'monthly-pending-comb7', keys, { ...grant, reissue: true }),
+    (err) => err.message === 'downgrade' && err.current?.tier === 'permanent',
+  );
+  await assert.rejects(
+    () => approveRequest(e, 'monthly-pending-comb7', keys, { ...grant, force: true }),
+    (err) => err.message === 'downgrade',
+  );
+  const pending = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('monthly-pending-comb7').first();
+  assert.equal(pending.status, 'pending');
+  const signed = await approveRequest(e, 'monthly-pending-comb7', keys, {
+    ...grant,
+    reissue: true,
+    confirm_downgrade: true,
+  });
+  assert.ok(signed?.code);
+  assert.deepEqual(await currentTerm(e, 'trip-orders', device), { tier: 'permanent', until: '' });
 });
 
 test('offline manual compares online delivered paid for same product', async () => {
@@ -1094,4 +1405,58 @@ test('approve paid without PAID_SIGNING_KEY keeps pending request', async () => 
   const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind('paid-miss').first();
   assert.equal(row.status, 'pending');
   assert.notEqual(row.reason, REASON_PAID_KEY_MISSING);
+});
+
+test('comb8: paid term with empty expiry is not an active strong term', () => {
+  const e = env();
+  assert.equal(isActiveStrongTerm({ tier: 'paid', until: '' }, e), false);
+  assert.equal(isActiveStrongTerm({ tier: 'paid', until: 'not-a-date' }, e), false);
+  assert.equal(isActiveStrongTerm({ tier: 'paid', until: '2099-12-31' }, e), true);
+});
+
+test('comb8: offline paid signing failure does not persist monthly kind on request row', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  const keys = await signingKeys(97, 98);
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '1999-01-01' }),
+    /paid_until_before_first/,
+  );
+  const row = await e.DB.prepare('SELECT kind, licence_tier, status FROM licence_requests WHERE id = ?').bind(requestId).first();
+  assert.ok(!row);
+  const e2 = env();
+  const device2 = 'ABCDE-FGHJK';
+  const requestId2 = offlineRequestId('trip-orders', deviceKey(device2));
+  e2.PAID_SIGNING_KEY = undefined;
+  const keysNoPaid = await signingKeys(100);
+  await assert.rejects(
+    () => issueOfflineCustomer(e2, keysNoPaid, device2, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2028-06-01' }),
+    /paid_signing_key_missing/,
+  );
+  const row2 = await e2.DB.prepare('SELECT kind, licence_tier, status FROM licence_requests WHERE id = ?').bind(requestId2).first();
+  assert.ok(!row2);
+});
+
+test('comb8: failed paid offline issue on delivered trial does not block trial reissue', async () => {
+  const e = env();
+  const device = 'LMNOP-QRSTV';
+  const dkey = deviceKey(device);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  const keys = await signingKeys(101, 102);
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  assert.ok(trial.code);
+  await e.DB.prepare("UPDATE licence_requests SET status = 'delivered', code = NULL WHERE id = ?").bind(requestId).run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+      grant: 'paid', paid_until: '1999-01-01', reissue: true, confirm_downgrade: true,
+    }),
+    /paid_until_before_first/,
+  );
+  const row = await e.DB.prepare('SELECT kind, licence_tier FROM licence_requests WHERE id = ?').bind(requestId).first();
+  assert.equal(row.kind, 'trial');
+  assert.notEqual(row.kind, 'monthly');
+  const again = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true });
+  assert.ok(again.code);
 });

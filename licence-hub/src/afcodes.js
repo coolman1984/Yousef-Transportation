@@ -63,6 +63,29 @@ function dayNumFromIso(iso) {
   return n;
 }
 
+const TRIAL_WINDOW_MIN_DAYS = 1;
+const TRIAL_WINDOW_MAX_DAYS = 14;
+
+function inclusiveCalendarDays(firstIso, lastIso) {
+  const [y1, m1, d1] = firstIso.split('-').map(Number);
+  const [y2, m2, d2] = lastIso.split('-').map(Number);
+  const diff = Math.floor((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000);
+  return diff + 1;
+}
+
+function clampTrialWindowDays(firstIso, lastIso) {
+  let last = lastIso;
+  let span = inclusiveCalendarDays(firstIso, last);
+  if (span > TRIAL_WINDOW_MAX_DAYS) {
+    last = addCalendarDays(firstIso, TRIAL_WINDOW_MAX_DAYS);
+    span = TRIAL_WINDOW_MAX_DAYS;
+  }
+  if (span < TRIAL_WINDOW_MIN_DAYS) {
+    last = firstIso;
+  }
+  return { firstIso, lastIso: last };
+}
+
 function packPayload(fields) {
   const buf = new ArrayBuffer(PAYLOAD_LEN);
   const view = new DataView(buf);
@@ -153,6 +176,30 @@ export async function issueTrialCode(privateKey, productId, device, days = 14, w
   const firstIso = issuedIso;
   const lastIso = addCalendarDays(firstIso, days);
   return issueEditionCode(privateKey, productId, device, EDITION_TRIAL, firstIso, lastIso, when, timeZone);
+}
+
+/** Re-sign a trial for the same inclusive calendar window (owner force re-issue). */
+export async function issueTrialWindowCode(
+  privateKey,
+  productId,
+  device,
+  firstIso,
+  lastIso,
+  when = new Date(),
+  timeZone = DEFAULT_CALENDAR_TZ,
+) {
+  if (lastIso < firstIso) throw new Error('trial_window_invalid');
+  const clamped = clampTrialWindowDays(firstIso, lastIso);
+  return issueEditionCode(
+    privateKey,
+    productId,
+    device,
+    EDITION_TRIAL,
+    clamped.firstIso,
+    clamped.lastIso,
+    when,
+    timeZone,
+  );
 }
 
 /** Paid subscription until inclusive `lastDayIso` (edition standard, bound to device). */

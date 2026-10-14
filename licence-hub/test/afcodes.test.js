@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { issueTrialCode, importSigningKey, codeCharLength, normalize, group } from '../src/afcodes.js';
+import {
+  issueTrialCode, issueTrialWindowCode, importSigningKey, codeCharLength, normalize, group,
+} from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
 import { createPrivateKey } from 'node:crypto';
 
@@ -39,4 +41,28 @@ test('trial first day uses Africa/Cairo calendar', async () => {
   assert.equal(calendarDateInTz(when, 'Africa/Cairo').iso, '2026-10-14');
   const signed = await issueTrialCode(privateKey, 'trip-orders', device, 14, when, 'Africa/Cairo');
   assert.equal(signed.first_day, '2026-10-14');
+});
+
+test('issueTrialWindowCode clamps inclusive window to 14 days', async () => {
+  const seed = Buffer.alloc(32, 13);
+  const pem = pemFromSeed(seed);
+  const privateKey = await importSigningKey(pem);
+  const device = group(normalize('7KD2MQX9TP'), 5);
+  const signed = await issueTrialWindowCode(
+    privateKey, 'trip-orders', device, '2026-01-01', '2026-02-15',
+  );
+  assert.equal(signed.first_day, '2026-01-01');
+  assert.equal(signed.last_day, '2026-01-14');
+});
+
+test('issueTrialWindowCode keeps single-day window', async () => {
+  const seed = Buffer.alloc(32, 14);
+  const pem = pemFromSeed(seed);
+  const privateKey = await importSigningKey(pem);
+  const device = group(normalize('7KD2MQX9TP'), 5);
+  const signed = await issueTrialWindowCode(
+    privateKey, 'trip-orders', device, '2026-05-10', '2026-05-10',
+  );
+  assert.equal(signed.first_day, '2026-05-10');
+  assert.equal(signed.last_day, '2026-05-10');
 });

@@ -94,7 +94,8 @@ test('public calendar limits each IP to 120 requests per ten minutes without D1 
     assert.equal(res.status, 200);
     const body = await res.json();
     assert.ok(body.calendar_day);
-    assert.ok('kid' in body || !('sig' in body));
+    assert.equal(body.signed, false);
+    assert.equal(body.kid, undefined);
   }
   const blocked = await worker.fetch(request('192.0.2.1', '?retry=1'), e);
   assert.equal(blocked.status, 429);
@@ -110,11 +111,22 @@ test('public calendar limits each IP to 120 requests per ten minutes without D1 
 });
 
 test('GET /owner/api/products is allowed before POST-only gate', async () => {
-  const e = env({ LICENCE_PRODUCTS: 'trip-orders,al-store' });
+  const e = env({
+    LICENCE_PRODUCTS: 'trip-orders,al-store',
+    LICENCE_PRODUCT_LABELS: '{"trip-orders":"طلبات الرحلات","al-store":"المتجر"}',
+  });
   const res = await ownerFetch(e, '/owner/api/products');
   assert.equal(res.status, 200);
   const data = await res.json();
   assert.deepEqual([...data.products].sort(), ['al-store', 'trip-orders']);
+  assert.equal(data.default_product, 'trip-orders');
+  assert.equal(data.labels['trip-orders'], 'طلبات الرحلات');
+});
+
+test('GET /owner/api/products honors LICENCE_DEFAULT_PRODUCT', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders,al-store', LICENCE_DEFAULT_PRODUCT: 'al-store' });
+  const data = await (await ownerFetch(e, '/owner/api/products')).json();
+  assert.equal(data.default_product, 'al-store');
 });
 
 test('GET /owner/api/capabilities returns per-product paid flags', async () => {
@@ -126,6 +138,30 @@ test('GET /owner/api/capabilities returns per-product paid flags', async () => {
   const data = await res.json();
   assert.equal(data.products['trip-orders'].paid_available, false);
   assert.equal(data.products['al-store'].paid_available, true);
+});
+
+test('GET /owner/api/customers shows strongest currentTerm not newest issued row', async () => {
+  const e = env({ PAID_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 94)) });
+  const device = 'ABCD2EFGH3';
+  const dkey = deviceKey(device);
+  const t = 10;
+  await e.DB.prepare(
+    'INSERT INTO customers(id, product, shop, device, kind, licence_tier, licence_expiry, created_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('cust-perm', 'trip-orders', 'Shop', device, 'permanent', 'permanent', '', t).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, code, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind('perm-old', 'hp1', 'trip-orders', 'permanent', device, dkey, 'a'.repeat(64), 'n1', 'Shop', '', '', 'delivered', 'PERM-CODE', 'permanent', '', t, t).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, code, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind('paid-newer', 'hp2', 'trip-orders', 'monthly', device, dkey, 'a'.repeat(64), 'n2', 'Shop', '', '', 'issued', 'PAID-CODE', 'paid', '2026-11-14', t + 5, t + 50).run();
+  const res = await ownerFetch(e, '/owner/api/customers');
+  const data = await res.json();
+  const row = (data.items || []).find((i) => i.device === device && i.product === 'trip-orders');
+  assert.equal(row.licence_tier, 'permanent');
 });
 
 test('GET /owner/api/customers lists one row per device and product', async () => {

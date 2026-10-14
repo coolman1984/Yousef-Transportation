@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Apps-Factory hub-template hardening back-port (2026-10-14)
+
+**What/why:** Sync `licence-hub/` with Apps-Factory `templates/licence-hub` (4f34038 + REV69/REV74/comb reviews): trial purge delivered-only; reissue vs `confirm_downgrade`; original trial window re-sign; sign-before-write batch; optional hashed `ref`; shop phone blanking; hub time v2; overlapping approve keeps winner locks; nonce replay without poll token; customer list strongest term; owner reissue/downgrade flows. Kept Yousef `wrangler.toml` (`trip-orders-licence-hub`, D1 `trip-orders-licence`, `LICENCE_DEFAULT_PRODUCT`, Arabic `LICENCE_PRODUCT_LABELS`, `customers.product` default `trip-orders`). No new D1 migration (payment ref still uses existing `ref` column as fingerprint).
+**Checks:** `cd licence-hub && timeout 300 npm test` (134 pass); `cd tests && timeout 900 python3 -m unittest` (473 pass, 40 skipped).
+**Next:** Owner deploy worker; legacy D1: `node scripts/apply-migrations.mjs --default-product trip-orders` on export if 0001–0003 not yet applied.
+
 ## Canonical trial-only key compare in afcodes (2026-10-14)
 
 **What/why:** Vendored `server/afcodes.py` matches Apps-Factory: trial-hub enforcement compares decoded 32-byte Ed25519 keys (padded/url or std base64 aliases); malformed `trial_only_keys` entries are skipped; `trial_key_days` vs `trial_key_grace` split when span alone exceeds 14 vs grace pushes total past 14.

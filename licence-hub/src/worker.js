@@ -65,17 +65,20 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/customers' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      `SELECT shop, device, product, kind, first_day, last_day, licence_tier, licence_expiry, created_at, updated_at
-       FROM (
-         SELECT r.shop, r.device, r.product,
-           COALESCE(NULLIF(r.licence_tier, ''), r.kind) AS kind,
-           r.code AS serial, '' AS first_day, COALESCE(r.licence_expiry, '') AS last_day,
-           r.licence_tier, r.licence_expiry, r.created_at, r.updated_at,
-           ROW_NUMBER() OVER (PARTITION BY r.device_key, r.product ORDER BY r.updated_at DESC) AS rn
-         FROM licence_requests r
-         WHERE r.status IN ('issued', 'delivered') AND r.code IS NOT NULL
-       ) WHERE rn = 1
-       ORDER BY updated_at DESC LIMIT 200`,
+      `SELECT c.shop, r.device, r.product,
+         COALESCE(NULLIF(r.licence_tier, ''), NULLIF(c.licence_tier, ''), r.kind, c.kind) AS kind,
+         COALESCE(r.licence_expiry, c.licence_expiry, c.last_day, '') AS last_day,
+         COALESCE(NULLIF(r.licence_tier, ''), NULLIF(c.licence_tier, ''), r.kind, c.kind) AS licence_tier,
+         COALESCE(r.licence_expiry, c.licence_expiry) AS licence_expiry,
+         c.created_at, r.updated_at
+       FROM customers c
+       INNER JOIN (
+         SELECT shop, device, device_key, product, kind, licence_tier, licence_expiry, updated_at,
+           ROW_NUMBER() OVER (PARTITION BY device_key, product ORDER BY updated_at DESC) AS rn
+         FROM licence_requests
+         WHERE status IN ('issued', 'delivered')
+       ) r ON r.device = c.device AND r.rn = 1
+       ORDER BY r.updated_at DESC LIMIT 200`,
     ).bind().all();
     const items = (rows.results || []).map((r) => {
       let daysLeft = null;
@@ -116,7 +119,9 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
-      if (e?.message === 'downgrade') return json({ error: 'downgrade' }, 409);
+      if (e?.message === 'downgrade') {
+        return json({ error: 'downgrade', current: e.current || undefined }, 409);
+      }
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
@@ -147,7 +152,9 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
-      if (e?.message === 'downgrade') return json({ error: 'downgrade' }, 409);
+      if (e?.message === 'downgrade') {
+        return json({ error: 'downgrade', current: e.current || undefined }, 409);
+      }
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }

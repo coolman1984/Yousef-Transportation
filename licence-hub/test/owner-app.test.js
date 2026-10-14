@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier, approveAfterReissueConfirm,
-  defaultTierSelection, customerTierLabelAr,
+  defaultTierSelection, customerTierLabelAr, downgradeConfirmMessageAr,
 } from '../public/owner/app.js';
 
 function panelEl() {
@@ -22,8 +22,14 @@ function panelEl() {
 
 test('approveAfterReissueConfirm aborts when owner cancels reissue confirm', () => {
   assert.deepEqual(approveAfterReissueConfirm(true, false), { abort: true, force: false });
-  assert.deepEqual(approveAfterReissueConfirm(true, true), { abort: false, force: true });
+  assert.deepEqual(approveAfterReissueConfirm(true, true), { abort: false, force: false });
   assert.deepEqual(approveAfterReissueConfirm(false, false), { abort: false, force: false });
+});
+
+test('downgradeConfirmMessageAr includes current paid term', () => {
+  const msg = downgradeConfirmMessageAr({ tier: 'paid', until: '2028-06-01' });
+  assert.match(msg, /2028-06-01/);
+  assert.match(msg, /الترخيص الحالي/);
 });
 
 test('issued code panel is outside the pending list and stays after refresh', () => {

@@ -7,6 +7,7 @@ import {
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
+  currentTerm,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -863,6 +864,70 @@ test('signing failure on offline reissue leaves stored paid code', async () => {
   const row = await e.DB.prepare('SELECT code FROM licence_requests WHERE id = ?')
     .bind(offlineRequestId('trip-orders', dkey)).first();
   assert.equal(row.code, paid.code);
+});
+
+test('currentTerm keeps paid term after ack clears stored code', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(70, 71);
+  const paid = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'paid', paid_until: '2028-06-01',
+  });
+  assert.ok(paid.code);
+  const requestId = offlineRequestId('trip-orders', dkey);
+  await e.DB.prepare(
+    'UPDATE licence_requests SET status = ?, code = NULL, updated_at = ? WHERE id = ?',
+  ).bind('delivered', 99, requestId).run();
+  const term = await currentTerm(e, 'trip-orders', device);
+  assert.deepEqual(term, { tier: 'paid', until: '2028-06-01' });
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2027-01-01' }),
+    (err) => err.message === 'downgrade' && err.current?.tier === 'paid',
+  );
+});
+
+test('online delivered row blocks shorter monthly approve without force', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(72, 73);
+  await e.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, licence_tier, licence_expiry, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+  ).bind('c-del', 'Shop', device, 'monthly', 'paid', '2028-06-01', 1).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, code, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)`,
+  ).bind('delivered-online', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-del', 'Shop', '', '', 'delivered', 'paid', '2028-06-01', 5, 5).run();
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('monthly-new', 'hp2', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-new', 'Shop', '', '', 'pending', 6, 6).run();
+  await assert.rejects(
+    () => approveRequest(e, 'monthly-new', keys, { grant: 'paid', paid_until: '2027-01-01' }),
+    (err) => err.message === 'downgrade' && err.current?.until === '2028-06-01',
+  );
+  const pending = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('monthly-new').first();
+  assert.equal(pending.status, 'pending');
+});
+
+test('offline manual compares online delivered paid for same product', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const keys = await signingKeys(74, 75);
+  await e.DB.prepare(
+    'INSERT INTO customers(id, shop, device, kind, licence_tier, licence_expiry, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+  ).bind('c-on', 'Shop', device, 'monthly', 'paid', '2028-12-01', 1).run();
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, licence_tier, licence_expiry, created_at, updated_at)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).bind('online-paid', 'hp', 'trip-orders', 'monthly', device, dkey, MACHINE_A, 'n-on', 'Shop', '', '', 'delivered', 'paid', '2028-12-01', 2, 2).run();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: '2027-06-01' }),
+    /downgrade/,
+  );
 });
 
 test('offline lock race does not return success with a different grant code', async () => {

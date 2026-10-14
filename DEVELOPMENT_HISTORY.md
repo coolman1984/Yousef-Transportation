@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-owner6 hub downgrade and customers (2026-10-14)
+
+**What/why:** `currentTerm` merges customers + issued/delivered rows (code may be cleared after ack); all issue paths return 409 `downgrade` with `current` unless `force`; reissue confirm no longer sends `force`; customers list joins `customers` with latest grant row per device+product.
+**Checks:** `cd licence-hub && timeout 120 npm test` (88 pass); `cd gateway && node --test test/gateway.test.js`; `cd tests && timeout 600 python3 -m unittest` (398 pass, 40 skipped).
+**Next:** Owner deploy hub worker; no D1 migration.
+
 ## REV-owner5 hub fixes (2026-10-14)
 
 **What/why:** Block licence downgrades unless `force`; sign new codes before replacing stored rows (503 on missing key); pending cards preselect request kind; `d:` trial lock only for trip-orders; customer list shows tier; CI workflow_dispatch validates optional hub public keys.

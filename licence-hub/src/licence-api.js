@@ -312,8 +312,9 @@ export function grantStrengthFromGrant(grant) {
 
 /** True when a new grant would replace a stored code with a weaker or shorter paid term. */
 export function wouldDowngradeGrant(existingRow, grant) {
-  if (!existingRow?.code) return false;
+  if (!existingRow) return false;
   const cur = grantStrengthFromRow(existingRow);
+  if (!cur.level) return false;
   const next = grantStrengthFromGrant(grant);
   if (next.level < cur.level) return true;
   if (cur.level === 2 && next.level === 2 && cur.paidUntil && next.paidUntil && next.paidUntil < cur.paidUntil) {
@@ -322,10 +323,87 @@ export function wouldDowngradeGrant(existingRow, grant) {
   return false;
 }
 
+export function termFromRow(row) {
+  if (!row) return null;
+  const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
+  if (!tier) return null;
+  const paidLike = tier === 'paid' || tier === 'monthly';
+  const until = paidLike ? String(row.licence_expiry ?? row.last_day ?? '').trim() : '';
+  return { tier: tier === 'monthly' ? 'paid' : tier, until };
+}
+
+export function pickStrongerTerm(a, b) {
+  if (!a) return b;
+  if (!b) return a;
+  const cur = grantStrengthFromRow({ licence_tier: a.tier, licence_expiry: a.until });
+  const other = grantStrengthFromRow({ licence_tier: b.tier, licence_expiry: b.until });
+  if (other.level > cur.level) return b;
+  if (cur.level > other.level) return a;
+  if (cur.level === 2 && other.level === 2 && other.paidUntil > cur.paidUntil) return b;
+  return a;
+}
+
+/** Strongest known grant for product+device from customers and issued/delivered rows (code may be cleared after ack). */
+export async function currentTerm(env, productId, device) {
+  const dkey = deviceKey(device);
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  const offlineId = offlineRequestId(product, dkey);
+  let best = null;
+
+  const cust = await env.DB.prepare(
+    'SELECT licence_tier, licence_expiry, kind, last_day FROM customers WHERE device = ?',
+  ).bind(device).first();
+  best = pickStrongerTerm(best, termFromRow(cust));
+
+  const rows = await env.DB.prepare(
+    `SELECT licence_tier, licence_expiry, kind FROM licence_requests
+     WHERE device_key = ? AND status IN ('issued', 'delivered') AND (product = ? OR id = ?)`,
+  ).bind(dkey, product, offlineId).all();
+  for (const row of rows.results || []) {
+    best = pickStrongerTerm(best, termFromRow(row));
+  }
+  return best;
+}
+
+export function wouldDowngradeTerm(term, grant) {
+  if (!term?.tier) return false;
+  const cur = grantStrengthFromRow({ licence_tier: term.tier, licence_expiry: term.until });
+  const next = grantStrengthFromGrant(grant);
+  if (next.level < cur.level) return true;
+  if (cur.level === 2 && next.level === 2 && cur.paidUntil && next.paidUntil && next.paidUntil < cur.paidUntil) {
+    return true;
+  }
+  return false;
+}
+
+export function downgradeError(term) {
+  const e = new Error('downgrade');
+  e.current = { tier: term.tier, until: term.until || '' };
+  return e;
+}
+
 async function latestIssuedForDeviceProduct(env, productId, dkey) {
   return env.DB.prepare(
-    "SELECT * FROM licence_requests WHERE product = ? AND device_key = ? AND status IN ('issued', 'delivered') AND code IS NOT NULL ORDER BY updated_at DESC LIMIT 1",
+    "SELECT * FROM licence_requests WHERE product = ? AND device_key = ? AND status IN ('issued', 'delivered') ORDER BY updated_at DESC LIMIT 1",
   ).bind(String(productId || 'trip-orders').trim() || 'trip-orders', dkey).first();
+}
+
+function customerUpsertStmts(env, shop, signed, meta, t, requestId) {
+  const device = signed.device;
+  const shopTrim = shop.slice(0, 60) || '—';
+  const expiry = meta.expiry || null;
+  return [
+    env.DB.prepare(
+      `UPDATE customers SET shop = ?, kind = ?, serial = ?, first_day = ?, last_day = ?, licence_tier = ?, licence_expiry = ?
+       WHERE device = ? AND EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)`,
+    ).bind(shopTrim, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, expiry, device, requestId, signed.code),
+    env.DB.prepare(
+      `INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at)
+       SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+       WHERE NOT EXISTS (SELECT 1 FROM customers WHERE device = ?)
+         AND EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)`,
+    ).bind(crypto.randomUUID(), shopTrim, device, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, expiry, t, device, requestId, signed.code),
+  ];
 }
 
 function tierMeta(grant, signed) {
@@ -589,9 +667,7 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
     }
   }
   stmts.push(env.DB.prepare(issueSql).bind(...issueBinds));
-  stmts.push(env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop, signed.device, kind, signed.serial, signed.first_day, signed.last_day, tier, expiry, t, requestId, signed.code));
+  stmts.push(...customerUpsertStmts(env, shop, signed, { kind, tier, expiry }, t, requestId));
   if (!replace) {
     stmts.push(env.DB.prepare(
       'UPDATE licence_requests SET licence_tier = ?, licence_expiry = ? WHERE id = ? AND code = ?',
@@ -600,7 +676,7 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, force
   stmts.push(env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId));
-  const issueStmtIndex = replace ? stmts.length - 3 : stmts.length - 4;
+  const issueStmtIndex = replace ? stmts.length - 4 : stmts.length - 5;
   const results = await env.DB.batch(stmts);
   const issued = results[issueStmtIndex]?.meta?.changes > 0;
   if (!issued) {
@@ -653,8 +729,7 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   const machineHash = normalizeMachineHash(row.machine);
   const productId = String(row.product || 'trip-orders').trim() || 'trip-orders';
   const rowIssued = row.status === 'issued' && row.code ? row : null;
-  const latestIssued = await latestIssuedForDeviceProduct(env, productId, dkey);
-  const downgradeSource = rowIssued || latestIssued;
+  const knownTerm = await currentTerm(env, productId, row.device);
 
   let replaceMode = false;
   if (rowIssued) {
@@ -663,16 +738,16 @@ export async function approveRequest(env, requestId, keys, options = {}) {
       await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
-    if (!force && wouldDowngradeGrant(row, grant)) throw new Error('downgrade');
+    if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
     replaceMode = true;
-  } else if (latestIssued && !force && wouldDowngradeGrant(latestIssued, grant)) {
-    throw new Error('downgrade');
+  } else if (!force && knownTerm && wouldDowngradeTerm(knownTerm, grant)) {
+    throw downgradeError(knownTerm);
   }
 
   if (grant.grant === 'trial' && !force && (await trialUsedOnline(env, dkey, machineHash))) {
     const owns = await locksOwnedByRequest(env, dkey, machineHash, requestId);
     if (!owns) {
-      if (downgradeSource && wouldDowngradeGrant(downgradeSource, grant)) throw new Error('downgrade');
+      if (knownTerm && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
       await refuseRequest(env, requestId, 'already_used');
       return null;
     }
@@ -717,6 +792,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const dkey = deviceKey(device);
   const requestId = offlineRequestId(productId, dkey);
   const lock = offlineDeviceLockKey(productId, dkey);
+  const knownTerm = await currentTerm(env, productId, device);
   const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   let ownsLock = false;
   let replacingIssued = false;
@@ -727,10 +803,12 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
         await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
         return signedFromRow(existing);
       }
-      if (!force && wouldDowngradeGrant(existing, grant)) throw new Error('downgrade');
+      if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
       ownsLock = true;
       replacingIssued = true;
     }
+  } else if (!force && knownTerm && wouldDowngradeTerm(knownTerm, grant)) {
+    throw downgradeError(knownTerm);
   }
   if (grant.grant === 'trial' && !force && (await trialUsedForOfflineProduct(env, productId, dkey))) {
     const claim = await trialLockRow(env, lock);
@@ -751,7 +829,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
       await ensureCustomerRecord(env, row, signedFromRow(row), t);
       return signedFromRow(row);
     }
-    if (!force && wouldDowngradeGrant(row, grant)) throw new Error('downgrade');
+    if (!force && wouldDowngradeTerm(knownTerm, grant)) throw downgradeError(knownTerm);
     if (replacingIssued || force) {
       ownsLock = true;
       return false;
@@ -814,9 +892,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const issueBinds = replacing
     ? ['issued', signed.code, signed.device, t, meta.tier, meta.expiry || null, requestId, lock, requestId]
     : ['issued', signed.code, signed.device, t, requestId, lock, requestId];
-  const customerStmt = env.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, serial, first_day, last_day, licence_tier, licence_expiry, created_at) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code = ?)',
-  ).bind(crypto.randomUUID(), shop.slice(0, 60) || '—', signed.device, meta.kind, signed.serial, signed.first_day, signed.last_day, meta.tier, meta.expiry || null, t, requestId, signed.code);
+  const customerStmts = customerUpsertStmts(env, shop, signed, meta, t, requestId);
   const tierStmt = replacing
     ? null
     : env.DB.prepare(
@@ -827,7 +903,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   ).bind(requestId, requestId);
   const batchStmts = [
     env.DB.prepare(issueSql).bind(...issueBinds),
-    customerStmt,
+    ...customerStmts,
     cleanupStmt,
   ];
   if (tierStmt) batchStmts.splice(2, 0, tierStmt);

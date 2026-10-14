@@ -32,10 +32,21 @@ let paidAvailable = false;
 let productCapabilities = {};
 let productFilter = '';
 
-/** Reissue confirm: cancel must not POST approve (regression-tested). */
+/** Reissue confirm: cancel must not POST approve; force is only for explicit downgrade override (regression-tested). */
 export function approveAfterReissueConfirm(hasCustomer, userConfirmed) {
   if (hasCustomer && !userConfirmed) return { abort: true, force: false };
-  return { abort: false, force: Boolean(hasCustomer && userConfirmed) };
+  return { abort: false, force: false };
+}
+
+export function downgradeConfirmMessageAr(current) {
+  const tier = String(current?.tier || '').trim().toLowerCase();
+  let label = 'تجربة';
+  if (tier === 'permanent') label = 'دائم';
+  else if (tier === 'paid') {
+    const until = String(current?.until || '').trim();
+    label = until ? `مدفوع حتى ${until}` : 'مدفوع';
+  }
+  return `الترخيص الحالي: ${label}. تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟`;
 }
 
 export function defaultTierSelection(requestKind) {
@@ -274,7 +285,7 @@ function renderPendingList(host, items) {
         body: JSON.stringify(approveBody()),
       });
       if (res && res.error === 'downgrade' && !force) {
-        if (!confirm('تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟')) {
+        if (!confirm(downgradeConfirmMessageAr(res.current))) {
           ok.disabled = false;
           return;
         }
@@ -353,7 +364,7 @@ export function wireOffline(form, out, tierHost) {
       body: JSON.stringify(offlineBody(false)),
     });
     if (data && data.error === 'downgrade') {
-      if (!confirm('تحذير: هذا الإجراء يخفّض الترخيص (مدفوع أو دائم إلى تجربة أو مدة أقصر). هل تريد المتابعة؟')) {
+      if (!confirm(downgradeConfirmMessageAr(data.current))) {
         return;
       }
       data = await api('/offline', {

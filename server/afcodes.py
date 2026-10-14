@@ -24,6 +24,7 @@ file and *verify* with the standard library only (`ed25519_verify.py`). The priv
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import os
 import struct
@@ -106,9 +107,37 @@ def product_tag(product_id: str) -> bytes:
     return hashlib.sha256(b'AF-PRODUCT/1|' + product_id.encode('utf-8')).digest()[:4]
 
 
-def key_tag(public_b64: str) -> bytes:
-    raw = base64.urlsafe_b64decode(public_b64 + '=' * (-len(public_b64) % 4))
+def _decode_ed25519_public_b64(text: str) -> bytes:
+    """Raw 32-byte Ed25519 public key (urlsafe or standard base64, optional padding)."""
+    s = text.strip()
+    pad = '=' * (-len(s) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(s + pad)
+    except (binascii.Error, ValueError):
+        raw = base64.b64decode(s + pad)
+    if len(raw) != 32:
+        raise ValueError('bad_public_key_length')
+    return raw
+
+
+def _key_tag_raw(raw: bytes) -> bytes:
     return hashlib.sha256(raw).digest()[:2]
+
+
+def key_tag(public_b64: str) -> bytes:
+    return _key_tag_raw(_decode_ed25519_public_b64(public_b64))
+
+
+def _trial_only_raw_keys(trial_only_keys: frozenset[str] | None) -> frozenset[bytes]:
+    if not trial_only_keys:
+        return frozenset()
+    out: set[bytes] = set()
+    for k in trial_only_keys:
+        try:
+            out.add(_decode_ed25519_public_b64(k))
+        except ValueError:
+            continue
+    return frozenset(out)
 
 
 def _day(n: int) -> date:
@@ -188,19 +217,24 @@ def read_code(text: str, trusted_public_keys: list[str], product_id: str, device
     (version, ptag, edition, issued, first, last, grace, dtag, serial, seats, ktag) = struct.unpack(_LAYOUT, payload)
     if version != VERSION:
         return bad('unknown_version')
-    keys = {key_tag(k): k for k in trusted_public_keys}
+    keys: dict[bytes, bytes] = {}
+    for k in trusted_public_keys:
+        raw = _decode_ed25519_public_b64(k)
+        keys[_key_tag_raw(raw)] = raw
     if ktag not in keys:
         return bad('unknown_key')
-    public_b64 = keys[ktag]
-    public = base64.urlsafe_b64decode(public_b64 + '=' * (-len(public_b64) % 4))
+    public = keys[ktag]
     if not _ed_verify(public, DOMAIN + payload, signature):
         return bad('bad_signature')
-    if trial_only_keys and public_b64 in trial_only_keys:
+    trial_only_raw = _trial_only_raw_keys(trial_only_keys)
+    if trial_only_raw and public in trial_only_raw:
         if EDITIONS.get(edition) != 'trial':
             return bad('trial_key_edition')
         trial_span = (_day(last) - _day(first)).days + 1
-        if trial_span + grace > 14:
+        if trial_span > 14:
             return bad('trial_key_days')
+        if trial_span + int(grace) > 14:
+            return bad('trial_key_grace')
         if dtag == b'\0' * 6:
             return bad('trial_key_unbound')
     if ptag != product_tag(product_id):

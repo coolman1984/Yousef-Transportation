@@ -59,7 +59,7 @@ async function ownerApi(request, env, url, session) {
   }
   if (path === '/pending' && request.method === 'GET') {
     const rows = await env.DB.prepare(
-      "SELECT r.id, r.kind, r.product, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
+      "SELECT r.id, r.kind, r.product, r.shop, r.device, r.machine, r.version, r.created_at, CASE WHEN c.id IS NOT NULL THEN 1 ELSE 0 END AS has_customer FROM licence_requests r LEFT JOIN customers c ON c.device = r.device AND c.product = r.product WHERE r.status IN ('pending', 'approved') ORDER BY r.created_at ASC LIMIT 50",
     ).all();
     return json({ items: rows.results || [] });
   }
@@ -77,7 +77,7 @@ async function ownerApi(request, env, url, session) {
            ROW_NUMBER() OVER (PARTITION BY device_key, product ORDER BY updated_at DESC) AS rn
          FROM licence_requests
          WHERE status IN ('issued', 'delivered')
-       ) r ON r.device = c.device AND r.rn = 1
+       ) r ON r.device = c.device AND r.product = c.product AND r.rn = 1
        ORDER BY r.updated_at DESC LIMIT 200`,
     ).bind().all();
     const items = (rows.results || []).map((r) => {
@@ -111,13 +111,17 @@ async function ownerApi(request, env, url, session) {
       });
       if (!signed) return json({ error: 'not_found' }, 404);
       if (signed.refused) {
-        const msg = signed.reason === 'paid_signing_key_missing' ? 'paid_key_missing' : 'paid_in_studio';
+        if (signed.reason === 'paid_signing_key_missing') {
+          return json({ error: 'paid_key_missing' }, 503);
+        }
+        const msg = signed.reason === REASON_PAID_IN_STUDIO ? 'paid_in_studio' : signed.reason;
         return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: msg }, 400);
       }
       return json({ ok: true, code: signed.code });
     } catch (e) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device', message: e.message }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
+      if (e?.message === 'date_out_of_range') return json({ error: 'date_out_of_range' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
       if (e?.message === 'downgrade') {
         return json({ error: 'downgrade', current: e.current || undefined }, 409);
@@ -151,6 +155,7 @@ async function ownerApi(request, env, url, session) {
       if (e?.message === 'bad_device_code') return json({ error: 'bad_device' }, 400);
       if (e?.message === 'paid_signing_key_missing') return json({ error: 'paid_key_missing' }, 400);
       if (e?.message === 'bad_grant') return json({ error: 'bad_grant' }, 400);
+      if (e?.message === 'date_out_of_range') return json({ error: 'date_out_of_range' }, 400);
       if (e?.message === 'paid_until_before_first') return json({ error: 'bad_paid_until', message: e.message }, 400);
       if (e?.message === 'downgrade') {
         return json({ error: 'downgrade', current: e.current || undefined }, 409);

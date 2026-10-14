@@ -1,6 +1,18 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-iso1 + af-REV74 hub cross-channel locks (2026-10-14)
+
+**What/why:** Online/offline trial locks share `od:` + `pd:`/`ph:` (trip-orders still bridges via `d:`/`h:`); missing `PAID_SIGNING_KEY` on approve returns 503 `paid_key_missing` and leaves pending; owner tier picker defaults to trial when paid disabled; `0001` migrations per column + `0003` dedupe before unique index; `date_out_of_range` → 400; presets use `LICENCE_CALENDAR_TZ`; README documents sealed hub day replay guard + office regression test.
+**Checks:** `cd licence-hub && timeout 120 npm test` (99 pass); `cd tests && timeout 600 python3 -m unittest` (full suite).
+**Next:** Owner deploy hub worker; run `apply-migrations.mjs` on legacy D1 if needed.
+
+## REV-owner7 hub product isolation (2026-10-14)
+
+**What/why:** Customers keyed by `(product, device)` via migration `0003`; `currentTerm` and customer upserts filter by product; online locks use legacy `d:`/`h:` only for trip-orders and `pd:`/`ph:` for other products; `openRequestForDevice` and `trialUsedOnline` are per product; paid upgrade no longer steals trial locks; legacy migration skips `od:`/`pd:`/`ph:` rows.
+**Checks:** `cd licence-hub && timeout 120 npm test` (93 pass); `cd tests && timeout 600 python3 -m unittest` (full suite).
+**Next:** Owner apply `0003_customers_product.sql` on D1 before deploy.
+
 ## REV-owner6 hub downgrade and customers (2026-10-14)
 
 **What/why:** `currentTerm` merges customers + issued/delivered rows (code may be cleared after ack); all issue paths return 409 `downgrade` with `current` unless `force`; reissue confirm no longer sends `force`; customers list joins `customers` with latest grant row per device+product.

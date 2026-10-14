@@ -1600,6 +1600,25 @@ class PaidClockStateTamperTest(unittest.TestCase):
                 self.assertNotIn(b'\r\n', blob2)
                 self.assertEqual(blob2, payload2 + b'\n' + mac2)
 
+    def test_signed_hub_day_older_than_seal_is_rejected(self):
+        import afcodes
+        from datetime import date as date_cls
+        first = date_cls.today()
+        pem, public = TrialClockExpiryTest()._trial_keypair()
+        newer = (first + timedelta(days=5)).isoformat()
+        older = (first + timedelta(days=2)).isoformat()
+        with tempfile.TemporaryDirectory() as d:
+            with _CommercialLicence(d, release_keys=(public,), hub_sign_pem=pem) as l:
+                code = afcodes.issue_code(pem, licence.PRODUCT_ID, 'trial', first, 14, device=l.device())['code']
+                l.activate(code, manual=True)
+                self.assertTrue(l._accept_network_hub_calendar(_sign_hub_calendar_day(newer, pem)))
+                sealed = l._read_sealed_hub_day()
+                self.assertIsNotNone(sealed)
+                effective_before = l._effective_calendar_day()
+                self.assertFalse(l._accept_network_hub_calendar(_sign_hub_calendar_day(older, pem)))
+                self.assertEqual(l._effective_calendar_day(), effective_before)
+                self.assertEqual(l._read_sealed_hub_day(), sealed)
+
     def test_far_future_signed_hub_seals_capped_day_not_uncapped(self):
         import afcodes
         from datetime import date as date_cls

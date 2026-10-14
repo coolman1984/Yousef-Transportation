@@ -34,6 +34,11 @@ function ensureMigrationsTable(db) {
 );`);
 }
 
+function indexExists(db, name) {
+  const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?").get(name);
+  return Boolean(row);
+}
+
 function addColumnIfMissing(db, migrationId, table, column, ddl) {
   if (migrationApplied(db, migrationId)) return;
   if (columnExists(db, table, column)) {
@@ -44,17 +49,62 @@ function addColumnIfMissing(db, migrationId, table, column, ddl) {
   markApplied(db, migrationId);
 }
 
+function dedupeCustomersProductDevice(db) {
+  const dupes = db.prepare(
+    'SELECT product, device FROM customers GROUP BY product, device HAVING COUNT(*) > 1',
+  ).all();
+  for (const { product, device } of dupes) {
+    const rows = db.prepare(
+      'SELECT rowid FROM customers WHERE product = ? AND device = ? ORDER BY created_at DESC, rowid DESC',
+    ).all(product, device);
+    for (let i = 1; i < rows.length; i++) {
+      db.prepare('DELETE FROM customers WHERE rowid = ?').run(rows[i].rowid);
+    }
+  }
+}
+
+function applyCustomersProductMigration(db) {
+  const migrationId = '0003_customers_product';
+  if (migrationApplied(db, migrationId)) return;
+  if (!columnExists(db, 'customers', 'product')) {
+    db.exec("ALTER TABLE customers ADD COLUMN product TEXT NOT NULL DEFAULT 'trip-orders';");
+  }
+  dedupeCustomersProductDevice(db);
+  if (!indexExists(db, 'customers_product_device')) {
+    db.exec('CREATE UNIQUE INDEX customers_product_device ON customers(product, device);');
+  }
+  markApplied(db, migrationId);
+}
+
 export function applyMigrations(db) {
   ensureMigrationsTable(db);
   addColumnIfMissing(
     db,
-    '0001_licence_tier_expiry',
+    '0001_licence_requests_licence_tier',
     'licence_requests',
     'licence_tier',
-    "ALTER TABLE licence_requests ADD COLUMN licence_tier TEXT NOT NULL DEFAULT '';\n"
-      + 'ALTER TABLE licence_requests ADD COLUMN licence_expiry TEXT;\n'
-      + "ALTER TABLE customers ADD COLUMN licence_tier TEXT NOT NULL DEFAULT '';\n"
-      + 'ALTER TABLE customers ADD COLUMN licence_expiry TEXT;',
+    "ALTER TABLE licence_requests ADD COLUMN licence_tier TEXT NOT NULL DEFAULT '';",
+  );
+  addColumnIfMissing(
+    db,
+    '0001_licence_requests_licence_expiry',
+    'licence_requests',
+    'licence_expiry',
+    'ALTER TABLE licence_requests ADD COLUMN licence_expiry TEXT;',
+  );
+  addColumnIfMissing(
+    db,
+    '0001_customers_licence_tier',
+    'customers',
+    'licence_tier',
+    "ALTER TABLE customers ADD COLUMN licence_tier TEXT NOT NULL DEFAULT '';",
+  );
+  addColumnIfMissing(
+    db,
+    '0001_customers_licence_expiry',
+    'customers',
+    'licence_expiry',
+    'ALTER TABLE customers ADD COLUMN licence_expiry TEXT;',
   );
   addColumnIfMissing(
     db,
@@ -63,6 +113,7 @@ export function applyMigrations(db) {
     'product',
     "ALTER TABLE licence_requests ADD COLUMN product TEXT NOT NULL DEFAULT 'trip-orders';",
   );
+  applyCustomersProductMigration(db);
 }
 
 const cliArgs = process.argv.slice(2).filter((a) => a !== '--local');

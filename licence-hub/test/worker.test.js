@@ -133,9 +133,11 @@ test('GET /owner/api/customers lists one row per device and product', async () =
   const device = 'ABCD2EFGH3';
   const dkey = deviceKey(device);
   const t = 10;
-  await e.DB.prepare(
-    'INSERT INTO customers(id, shop, device, kind, licence_tier, created_at) VALUES(?, ?, ?, ?, ?, ?)',
-  ).bind('cust-1', 'Shop', device, 'trial', 'trial', t).run();
+  for (const [cid, product] of [['cust-to', 'trip-orders'], ['cust-al', 'al-store']]) {
+    await e.DB.prepare(
+      'INSERT INTO customers(id, product, shop, device, kind, licence_tier, created_at) VALUES(?, ?, ?, ?, ?, ?, ?)',
+    ).bind(cid, product, 'Shop', device, 'trial', 'trial', t).run();
+  }
   for (const [id, product] of [['c1', 'trip-orders'], ['c2', 'al-store']]) {
     await e.DB.prepare(
       'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -167,6 +169,23 @@ test('owner offline API signs with the product sent in the body', async () => {
   const row = await e.DB.prepare('SELECT product FROM licence_requests WHERE device_key = ? ORDER BY created_at DESC LIMIT 1')
     .bind(deviceKey('ABCD2EFGH3')).first();
   assert.equal(row.product, 'al-store');
+});
+
+test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending', async () => {
+  const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 97)) });
+  const device = 'ABCD2EFGH3';
+  const dkey = deviceKey(device);
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('req-paid-miss', 'h', 'trip-orders', 'monthly', device, dkey, 'a'.repeat(64), 'n', 'Shop', '', '', 'pending', 1, 1).run();
+  const res = await ownerFetch(e, '/owner/api/approve', {
+    method: 'POST',
+    body: { id: 'req-paid-miss', grant: 'paid', paid_until: '2028-06-01' },
+  });
+  assert.equal(res.status, 503);
+  assert.deepEqual(await res.json(), { error: 'paid_key_missing' });
+  const row = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('req-paid-miss').first();
+  assert.equal(row.status, 'pending');
 });
 
 test('calendar limiter bounds stored IPs and frees them at the next window', async (t) => {

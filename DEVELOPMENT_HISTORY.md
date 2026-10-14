@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Trial grants ledger PR A — schema, backfill, resolver (2026-10-15)
+
+**What/why:** Yousef #39 redesign part 1: D1 `trial_grants` insert-only ledger, `backfillTrialGrants` / `resolveTrial` / `linkedSubjects` / `trialGrantStatements` in `licence-hub/src/trial-grants.js`; `normalizeMachineHash` relocated (re-exported from `licence-api.js`). No call-site switch yet (PR B).
+**Checks:** `cd licence-hub && npm test` (155 pass).
+**Next:** PR B wires signing paths to `resolveTrial` + ledger batch writes; owner back up D1 then apply `0004_trial_grants.sql`.
+
 ## REV38 replay recovery + version on retry (2026-10-14)
 
 **What/why:** Independent review (REV38-1): legacy hub replay without `poll_token` must not show “code refused” or offer a new request that rotates the nonce; office stays in waiting/backoff with `recovery_unavailable` and the licence screen explains that in Arabic. After an app update, replay must not 401 on version — office stores `version` at `begin()` and the hub ignores version on nonce replay (device/product/machine/shop/ref still enforced).

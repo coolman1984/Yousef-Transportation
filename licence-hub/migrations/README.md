@@ -22,9 +22,10 @@ node scripts/apply-migrations.mjs [--default-product <id>] --local /path/to/d1.s
 npx wrangler d1 execute <database> --remote --file=migrations/0001_licence_tier_expiry.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0002_product_column.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0003_customers_product.sql
+npx wrangler d1 execute <database> --remote --file=migrations/0004_trial_grants.sql
 ```
 
-`scripts/apply-migrations.mjs` skips `ALTER` when `pragma_table_info` shows the column already exists (safe to re-run).
+`scripts/apply-migrations.mjs` skips `ALTER` when `pragma_table_info` shows the column already exists (safe to re-run). Migration `0004_trial_grants.sql` creates the insert-only `trial_grants` ledger — **back up D1 before applying** on production.
 
 ## Deploy order
 

@@ -18,6 +18,8 @@ test('fresh schema.sql needs no 0001 migration', () => {
   assert.ok(custCols.includes('product'));
   const idx = db.prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'customers_product_device'").get();
   assert.ok(idx);
+  const tg = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'trial_grants'").get();
+  assert.ok(tg);
 });
 
 test('0002_product_column.sql contains ALTER for wrangler one-shot', () => {

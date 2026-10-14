@@ -89,6 +89,12 @@ Poll every few seconds while `pending`; stop on `issued`, `refused`, or `expired
 2. Embed the product’s public key tag in sold builds (`TO_RELEASE_PUBLIC_KEYS`) or `licence_keys.txt` for contract installs.
 3. Optionally set `LICENCE_SIGNING_KEY_<PRODUCT>` / `PAID_SIGNING_KEY_<PRODUCT>` (uppercase, hyphens → underscores) to override the shared trial/paid keys for **codes** for that product only. Hub `/licence/time` still uses the global `LICENCE_SIGNING_KEY` / `PAID_SIGNING_KEY` pair.
 
+## Trial grants ledger (`trial_grants`)
+
+The `trial_grants` table is the authoritative, insert-only record of which device (`subject_kind = d`) or machine hash (`m`, always lowercased) has already received a trial window for a product. Application code uses `INSERT OR IGNORE` only; optional SQL triggers reject `UPDATE`/`DELETE`.
+
+**Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial locks and requests populate the ledger.
+
 ## Tests / الاختبارات
 
 ```bash

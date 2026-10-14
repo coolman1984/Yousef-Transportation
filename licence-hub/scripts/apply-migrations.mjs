@@ -192,7 +192,25 @@ export function applyMigrations(db, options = {}) {
   const productDdl = loadMigrationSql('0002_product_column.sql', defaultProduct).trim();
   addColumnIfMissing(db, '0002_product_column', 'licence_requests', 'product', productDdl);
   applyCustomersProductMigration(db, defaultProduct);
+  applyTrialGrantsMigration(db);
   return defaultProduct;
+}
+
+function tableExists(db, name) {
+  const row = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  return Boolean(row);
+}
+
+function applyTrialGrantsMigration(db) {
+  const migrationId = '0004_trial_grants';
+  if (migrationApplied(db, migrationId)) return;
+  if (tableExists(db, 'trial_grants')) {
+    markApplied(db, migrationId);
+    return;
+  }
+  const sql = readFileSync(join(root, 'migrations', '0004_trial_grants.sql'), 'utf8');
+  db.exec(sql);
+  markApplied(db, migrationId);
 }
 
 function parseCli(argv) {

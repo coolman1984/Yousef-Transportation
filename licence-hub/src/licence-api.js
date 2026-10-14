@@ -5,6 +5,9 @@ import {
 import { hex } from './auth.js';
 import { calendarDateInTz, isValidCalendarIso, shiftCalendarDays } from './calendar.js';
 import { signHubCalendar } from './hub-time.js';
+import { normalizeMachineHash } from './trial-grants.js';
+
+export { normalizeMachineHash };
 
 const enc = new TextEncoder();
 const now = () => Math.floor(Date.now() / 1000);
@@ -250,13 +253,6 @@ function onlineLockKeys(productId, dkey, machineHash) {
   const locks = [onlineDeviceLockKey(productId, dkey)];
   if (machineHash) locks.push(onlineMachineLockKey(productId, machineHash));
   return locks;
-}
-
-/** 64-hex SHA-256 machine tag from the office app, or null when malformed. */
-export function normalizeMachineHash(machine) {
-  const m = String(machine || '').toLowerCase();
-  if (!/^[0-9a-f]{64}$/.test(m)) return null;
-  return m;
 }
 
 async function trialLockRow(env, lockId) {

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Trial grants ledger PR A — review round 3 (2026-10-15)
+
+**What/why:** Close round-2 review on paid-replace lock backfill (ignore `lr.status`; monthly/paid + locks), skip `pending_timeout` expired rows, chunk D1 `IN` binds (≤90), drop `source_request` closure join (etw `source_request` null), `''` paid expiry vs `last_day`, expanded regression/matrix tests.
+**Checks:** `cd licence-hub && npm test` (681 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
 ## Trial grants ledger PR A — review round 2 (2026-10-15)
 
 **What/why:** Close P1/high review on `resolveTrial` / backfill: no unordered `LIMIT`; recursive SQL closure (256 cap, `link_limit`); `currentTerm`-style blocking on closure; `blocked_by` on existing ledger rows; backfill set-based with `kind=trial` paid-replace evidence; `apply-migrations` always runs `0004` triggers; `normalizeMachineHash` without trim; table-driven tests + regression probes.

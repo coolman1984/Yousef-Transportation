@@ -90,13 +90,14 @@ async function insertRequest(e, {
   expiry = '2026-06-14',
   product = PRODUCT,
   created_at = 100,
+  reason = null,
 }) {
   await e.DB.prepare(
     `INSERT INTO licence_requests(
       id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
-      status, licence_tier, licence_expiry, created_at, updated_at
-    ) VALUES(?, 'h', ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?)`,
-  ).bind(id, product, kind, device, dkey, machine, 'n-' + id, status, tier, expiry, created_at, created_at).run();
+      status, licence_tier, licence_expiry, reason, created_at, updated_at
+    ) VALUES(?, 'h', ?, ?, ?, ?, ?, ?, '', '', '', ?, ?, ?, ?, ?, ?)`,
+  ).bind(id, product, kind, device, dkey, machine, 'n-' + id, status, tier, expiry, reason ?? '', created_at, created_at).run();
 }
 
 test('normalizeMachineHash is lowercase 64-hex only (no trim)', () => {
@@ -134,51 +135,110 @@ test('trial_grants rejects update and delete', async () => {
 
 const priorSources = ['etw_d', 'etw_m', 'lock', 'request', 'customer'];
 const hashCases = ['lower', 'upper'];
-const rowStatuses = ['issued', 'delivered', 'expired', 'pending', 'refused'];
+const rowStatuses = ['issued', 'delivered', 'expired', 'expired_pending_timeout', 'pending', 'refused'];
 const paidStates = ['none', 'active_paid', 'expired_paid', 'active_permanent', 'pending_permanent', 'refused_permanent'];
 const linkShapes = ['same', 'peer', 'two_hop'];
 
-function priorSetup(source, e, rowStatus, lastDay = '2026-06-20') {
+function machineForHash(machine, hashCase) {
+  return hashCase === 'upper' ? machine.toUpperCase() : machine;
+}
+
+function priorTarget(linkShape, hashCase) {
+  if (linkShape === 'peer') {
+    return {
+      device: DEVICE_B,
+      dkey: DKEY_B,
+      machine: machineForHash(MACHINE_A, hashCase),
+    };
+  }
+  if (linkShape === 'two_hop') {
+    return {
+      device: DEVICE_C,
+      dkey: DKEY_C,
+      machine: machineForHash(MACHINE_M2, hashCase),
+    };
+  }
+  return {
+    device: DEVICE_A,
+    dkey: DKEY_A,
+    machine: machineForHash(MACHINE_A, hashCase),
+  };
+}
+
+function priorSetup(source, e, rowStatus, linkShape, hashCase, lastDay = '2026-06-20') {
   const { first, last } = trialWindow(lastDay);
+  const target = priorTarget(linkShape, hashCase);
+  const timeoutExpired = rowStatus === 'expired_pending_timeout';
+  const status = timeoutExpired ? 'expired' : rowStatus;
+  const expiry = timeoutExpired ? null : last;
+  const extra = timeoutExpired ? { tier: '', kind: 'trial', reason: 'pending_timeout' } : {};
   switch (source) {
     case 'etw_d':
       return e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
-        .bind(`etw|${PRODUCT}|d|${DKEY_A}`, `${first}|${last}`, 1).run()
+        .bind(`etw|${PRODUCT}|d|${target.dkey}`, `${first}|${last}`, 1).run()
         .then(() => backfillTrialGrants(e, PRODUCT));
     case 'etw_m':
       return e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
-        .bind(`etw|${PRODUCT}|m|${MACHINE_A}`, `${first}|${last}`, 1).run()
+        .bind(`etw|${PRODUCT}|m|${target.machine.toLowerCase()}`, `${first}|${last}`, 1).run()
         .then(() => backfillTrialGrants(e, PRODUCT))
         .then(() => insertRequest(e, {
-          id: 'etw-m-anchor', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A, status: rowStatus, expiry: last,
+          id: 'etw-m-anchor',
+          device: target.device,
+          dkey: target.dkey,
+          machine: target.machine,
+          status,
+          expiry,
+          ...extra,
         }));
     case 'lock':
-      return insertRequest(e, { id: 'lk', expiry: last, status: rowStatus }).then(() =>
+      return insertRequest(e, {
+        id: 'lk',
+        device: target.device,
+        dkey: target.dkey,
+        machine: target.machine,
+        expiry,
+        status,
+        ...extra,
+      }).then(() =>
         e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
-          .bind(machineLockKey(MACHINE_A), 'lk', 1).run(),
+          .bind(machineLockKey(target.machine.toLowerCase()), 'lk', 1).run(),
       ).then(() => backfillTrialGrants(e, PRODUCT));
     case 'request':
-      return insertRequest(e, { id: 'rq', expiry: last, status: rowStatus })
-        .then(() => backfillTrialGrants(e, PRODUCT));
+      return insertRequest(e, {
+        id: 'rq',
+        device: target.device,
+        dkey: target.dkey,
+        machine: target.machine,
+        expiry,
+        status,
+        ...extra,
+      }).then(() => backfillTrialGrants(e, PRODUCT));
     case 'customer':
       return e.DB.prepare(
         `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, created_at)
          VALUES(?, ?, '', ?, 'trial', ?, ?, 'trial', 1)`,
-      ).bind('c-mx', PRODUCT, DEVICE_A, first, last).run().then(() => backfillTrialGrants(e, PRODUCT));
+      ).bind('c-mx', PRODUCT, target.device, first, last).run().then(() => backfillTrialGrants(e, PRODUCT));
     default:
       return Promise.resolve();
   }
 }
 
 async function linkBridge(e, linkShape) {
+  const bridgeReq = {
+    kind: 'monthly',
+    tier: 'paid',
+    expiry: '2020-01-01',
+    status: 'delivered',
+  };
   if (linkShape === 'peer') {
-    await insertRequest(e, { id: 'bridge-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A });
+    await insertRequest(e, { id: 'bridge-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A, ...bridgeReq });
+    await insertRequest(e, { id: 'bridge-b', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_A, ...bridgeReq });
   }
   if (linkShape === 'two_hop') {
-    await insertRequest(e, { id: 'hop-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_M1 });
-    await insertRequest(e, { id: 'hop-b1', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_M1 });
-    await insertRequest(e, { id: 'hop-b2', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_M2 });
-    await insertRequest(e, { id: 'hop-c', device: DEVICE_C, dkey: DKEY_C, machine: MACHINE_M2 });
+    await insertRequest(e, { id: 'hop-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_M1, ...bridgeReq });
+    await insertRequest(e, { id: 'hop-b1', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_M1, ...bridgeReq });
+    await insertRequest(e, { id: 'hop-b2', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_M2, ...bridgeReq });
+    await insertRequest(e, { id: 'hop-c', device: DEVICE_C, dkey: DKEY_C, machine: MACHINE_M2, ...bridgeReq });
   }
 }
 
@@ -236,13 +296,17 @@ for (const prior of priorSources) {
           const pendingNoBlock = ['pending_permanent', 'refused_permanent'].includes(paidState);
           const expectExisting = ['etw_d', 'etw_m', 'customer'].includes(prior)
             || (['lock', 'request'].includes(prior) && ['issued', 'delivered', 'expired'].includes(rowStatus));
+          if (rowStatus === 'expired_pending_timeout') {
+            assert.ok(!expectExisting);
+          }
           test(`matrix: prior=${prior} hash=${hashCase} status=${rowStatus} paid=${paidState} link=${linkShape}`, async () => {
             const e = env();
-            await priorSetup(prior, e, rowStatus);
             await linkBridge(e, linkShape);
+            await priorSetup(prior, e, rowStatus, linkShape, hashCase);
             await paidSetup(e, paidState, linkShape);
-            const machines = hashCase === 'upper' ? [MACHINE_A_UPPER] : [MACHINE_A];
-            const resolveMachines = linkShape === 'same' ? machines : (linkShape === 'peer' ? [] : [MACHINE_M1]);
+            const resolveMachines = linkShape === 'same'
+              ? [machineForHash(MACHINE_A, hashCase)]
+              : (linkShape === 'peer' ? [] : [machineForHash(MACHINE_M1, hashCase)]);
             const result = await resolveTrial(e, PRODUCT, DEVICE_A, resolveMachines, { today: '2026-03-01' });
             if (!expectExisting) {
               if (blocks) {
@@ -424,25 +488,176 @@ test('regression: two-hop A-M1-B-M2-C grant on C only', async () => {
   assert.equal(r.last_day, win.last);
 });
 
-test('regression: overwritten trial backfills from kind=trial paid replace', async () => {
+test('regression: overwritten trial backfills from monthly paid replace (reviewer probe)', async () => {
   const e = env();
-  const { last } = trialWindow('2025-01-01');
+  const win = trialWindow('2025-01-01');
   await insertRequest(e, {
-    id: 'replaced', kind: 'trial', tier: 'paid', expiry: '2025-01-01', status: 'delivered',
+    id: 'replaced',
+    kind: 'monthly',
+    tier: 'paid',
+    expiry: '2025-01-01',
+    status: 'delivered',
+    created_at: 1_700_000_000,
   });
   await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
     .bind(deviceLockKey(DKEY_A), 'replaced', 1).run();
   await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
     .bind(machineLockKey(MACHINE_A), 'replaced', 1).run();
   await e.DB.prepare(
-    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, created_at)
-     VALUES('cp', ?, '', ?, 'paid', '2025-01-01', '2025-01-01', 'paid', 1)`,
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('cp', ?, '', ?, 'paid', '2025-01-01', '2025-01-01', 'paid', '2025-01-01', 1)`,
   ).bind(PRODUCT, DEVICE_A).run();
   const n = await backfillTrialGrants(e, PRODUCT);
   assert.ok(n >= 1);
   const r = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
   assert.equal(r.kind, 'existing');
+  assert.equal(r.first_day, win.first);
+  assert.equal(r.last_day, win.last);
   assert.equal(r.active, false);
+});
+
+test('regression: paid replace with future expiry blocks then existing after term', async () => {
+  const e = env();
+  const win = trialWindow('2026-12-31');
+  await insertRequest(e, {
+    id: 'replaced-future',
+    kind: 'monthly',
+    tier: 'paid',
+    expiry: '2026-12-31',
+    status: 'delivered',
+    created_at: 1_700_000_000,
+  });
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(DKEY_A), 'replaced-future', 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(machineLockKey(MACHINE_A), 'replaced-future', 1).run();
+  await backfillTrialGrants(e, PRODUCT);
+  const blocked = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-12-31' });
+  assert.equal(blocked.kind, 'existing');
+  assert.equal(blocked.first_day, win.first);
+  assert.equal(blocked.last_day, win.last);
+  assert.equal(blocked.active, true);
+  assert.equal(blocked.blocked_by, 'downgrade_forbidden');
+  const after = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2027-01-01' });
+  assert.equal(after.kind, 'existing');
+  assert.equal(after.first_day, win.first);
+  assert.equal(after.last_day, win.last);
+  assert.equal(after.active, false);
+  assert.equal(after.blocked_by, null);
+});
+
+test('regression: pending_timeout expired request does not backfill or resolve as trial', async () => {
+  const e = env();
+  const created = Math.floor(Date.parse('2026-03-01T12:00:00Z') / 1000);
+  await e.DB.prepare(
+    `INSERT INTO licence_requests(
+      id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+      status, licence_tier, licence_expiry, reason, created_at, updated_at
+    ) VALUES(?, 'h', ?, 'trial', ?, ?, ?, ?, '', '', '', 'expired', '', NULL, 'pending_timeout', ?, ?)`,
+  ).bind('to', PRODUCT, DEVICE_A, DKEY_A, MACHINE_A, 'n-to', created, created).run();
+  const n = await backfillTrialGrants(e, PRODUCT);
+  assert.equal(n, 0);
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
+  assert.equal(r.kind, 'eligible');
+});
+
+test('regression: etw grants with same window do not link unrelated devices', async () => {
+  const e = env();
+  const win = trialWindow('2026-01-01');
+  const etwKey = `${win.first}|${win.last}`;
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`etw|${PRODUCT}|d|${DKEY_A}`, etwKey, 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`etw|${PRODUCT}|d|${DKEY_B}`, etwKey, 1).run();
+  await backfillTrialGrants(e, PRODUCT);
+  await insertRequest(e, {
+    id: 'perm-b',
+    device: DEVICE_B,
+    dkey: DKEY_B,
+    machine: MACHINE_B,
+    kind: 'permanent',
+    tier: 'permanent',
+    expiry: '',
+  });
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [], { today: '2026-03-01' });
+  assert.equal(r.kind, 'existing');
+  assert.equal(r.blocked_by, null);
+});
+
+test('regression: D1 bind cap chunks earliestLedgerWindow (99 devices)', async () => {
+  const sharedMachine = 'f'.repeat(64);
+  let queries = 0;
+  const inner = newD1();
+  const DB = {
+    prepare(sql) {
+      const stmt = inner.prepare(sql);
+      return {
+        bind(...args) {
+          if (args.length > 100) {
+            throw new Error(`bind_limit_exceeded:${args.length}`);
+          }
+          const bound = stmt.bind(...args);
+          return {
+            async run() {
+              queries += 1;
+              return bound.run();
+            },
+            async first() {
+              queries += 1;
+              return bound.first();
+            },
+            async all() {
+              queries += 1;
+              return bound.all();
+            },
+          };
+        },
+      };
+    },
+    batch: (stmts) => inner.batch(stmts),
+  };
+  const e = { DB, TRIAL_DAYS: '14', LICENCE_CALENDAR_TZ: 'Africa/Cairo' };
+  for (let i = 0; i < 99; i++) {
+    const code = `D99${String(i).padStart(2, '0')}-AAAAA`;
+    const dk = deviceKey(code);
+    await insertRequest(e, {
+      id: `cap-${i}`,
+      device: code,
+      dkey: dk,
+      machine: sharedMachine,
+      expiry: '2026-01-01',
+    });
+  }
+  const { first, last } = trialWindow('2026-09-01');
+  await e.DB.prepare(
+    `INSERT INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at)
+     VALUES(?, 'd', ?, ?, ?, '2026-01-01')`,
+  ).bind(PRODUCT, DKEY_A, first, last).run();
+  await insertRequest(e, {
+    id: 'cap-anchor',
+    device: DEVICE_A,
+    dkey: DKEY_A,
+    machine: sharedMachine,
+    expiry: '2026-01-01',
+  });
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [sharedMachine], { today: '2026-03-01' });
+  assert.equal(r.kind, 'existing');
+  assert.equal(r.last_day, last);
+  assert.ok(queries > 1);
+});
+
+test('customer empty licence_expiry does not fall back to last_day for paid block', async () => {
+  const e = env();
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('ce', ?, '', ?, 'paid', '2025-01-01', '2026-12-31', 'paid', '', 1)`,
+  ).bind(PRODUCT, DEVICE_A).run();
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
+  assert.equal(r.kind, 'eligible');
+  await e.DB.prepare('UPDATE customers SET licence_expiry = NULL WHERE id = ?').bind('ce').run();
+  const blocked = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
+  assert.equal(blocked.kind, 'blocked');
+  assert.equal(blocked.reason, 'downgrade_forbidden');
 });
 
 test('backfill skips bad device rows', async () => {

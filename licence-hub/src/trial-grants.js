@@ -2,6 +2,8 @@ import { normalize } from './afcodes.js';
 import { calendarDateInTz, isValidCalendarIso, shiftCalendarDays } from './calendar.js';
 
 const LINK_CLOSURE_CAP = 256;
+const D1_STMT_BIND_MAX = 90;
+const RESOLVE_QUERY_BUDGET = 50;
 const ETW_PREFIX = 'etw|';
 
 /** 64-hex SHA-256 machine tag from the office app, or null when malformed. */
@@ -61,6 +63,18 @@ function pickEarlierWindow(a, b) {
   if (!b) return a;
   if (a.first !== b.first) return a.first < b.first ? a : b;
   return a.last <= b.last ? a : b;
+}
+
+function inChunkSize(reservedBinds) {
+  return Math.max(1, D1_STMT_BIND_MAX - reservedBinds);
+}
+
+/** @returns {{ ok: true } | { ok: false, reason: 'link_limit' }} */
+function spendQueryBudget(budget) {
+  if (!budget) return { ok: true };
+  budget.used += 1;
+  if (budget.used > RESOLVE_QUERY_BUDGET) return { ok: false, reason: 'link_limit' };
+  return { ok: true };
 }
 
 function rowIsTrialLike(row) {
@@ -125,6 +139,14 @@ function windowFromRequestRowForBackfill(row, env) {
   return best;
 }
 
+function customerTrialLastDay(row) {
+  const lastDay = String(row?.last_day ?? '').trim();
+  if (lastDay) return lastDay;
+  const exp = row?.licence_expiry;
+  if (exp === null || exp === undefined) return '';
+  return String(exp).trim();
+}
+
 function windowFromCustomerRow(row) {
   if (!row) return null;
   const kind = String(row?.kind ?? '').trim().toLowerCase();
@@ -132,10 +154,22 @@ function windowFromCustomerRow(row) {
   const trialCustomer = kind === 'trial' || licTier === 'trial' || (licTier === '' && kind === 'trial');
   if (!trialCustomer && !rowIsTrialLike(row)) return null;
   const first = String(row.first_day || '').trim();
-  const last = String(row.last_day || row.licence_expiry || '').trim();
+  const last = customerTrialLastDay(row);
   if (!first || !last || !isValidCalendarIso(first) || !isValidCalendarIso(last)) return null;
   if (first > last) return null;
   return { first, last, source: row.id || null };
+}
+
+function windowFromCustomerTrialSnapshot(row) {
+  if (!row) return null;
+  const first = String(row.cust_first_day || row.first_day || '').trim();
+  const last = String(row.cust_last_day || '').trim() || customerTrialLastDay({
+    last_day: row.cust_last_day,
+    licence_expiry: row.cust_licence_expiry,
+  });
+  if (!first || !last || !isValidCalendarIso(first) || !isValidCalendarIso(last)) return null;
+  if (first > last) return null;
+  return { first, last, source: row.cust_id || null };
 }
 
 function lockSubject(machine) {
@@ -159,12 +193,22 @@ function lockSubject(machine) {
   return null;
 }
 
+function paidUntilFromRow(row) {
+  const exp = row?.licence_expiry;
+  if (exp !== null && exp !== undefined) {
+    const trimmed = String(exp).trim();
+    if (trimmed === '') return '';
+    return trimmed;
+  }
+  return String(row?.last_day ?? '').trim();
+}
+
 function termFromRow(row) {
   if (!row) return null;
   const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
   if (!tier) return null;
   const paidLike = tier === 'paid' || tier === 'monthly';
-  const until = paidLike ? String(row.licence_expiry ?? row.last_day ?? '').trim() : '';
+  const until = paidLike ? paidUntilFromRow(row) : '';
   return { tier: tier === 'monthly' ? 'paid' : tier, until };
 }
 
@@ -204,6 +248,28 @@ function recordSubject(map, product, kind, subject, window, source) {
   map.set(key, next);
 }
 
+function requestIsTrialGrantSource(row) {
+  const status = String(row?.status ?? '').trim().toLowerCase();
+  const reason = String(row?.reason ?? '').trim().toLowerCase();
+  if (status === 'expired' && reason === 'pending_timeout') return false;
+  if (!['issued', 'delivered', 'expired'].includes(status)) return false;
+
+  const last = String(row?.licence_expiry ?? '').trim();
+  const hasExpiry = last !== '' && isValidCalendarIso(last);
+
+  if (rowIsTrialLike(row)) {
+    if (status === 'expired' && !hasExpiry) return false;
+    return true;
+  }
+  const kind = String(row?.kind ?? '').trim().toLowerCase();
+  if (kind === 'trial') {
+    if (status === 'expired' && !hasExpiry) return false;
+    return hasExpiry || ['issued', 'delivered'].includes(status);
+  }
+  return false;
+}
+
+/** Trial window for a d:/h: lock row (trial was consumed on this device/machine). */
 function trialWindowFromLockRow(row, env) {
   const lockMachine = row.machine;
   const requestId = row.request_id;
@@ -217,16 +283,58 @@ function trialWindowFromLockRow(row, env) {
       product: etw.product,
       kind: etw.kind,
       subject: etw.kind === 'm' ? etw.subject.toLowerCase() : etw.subject,
-      source: requestId,
+      source: null,
     };
   }
-  if (!row.id) return null;
-  const status = String(row.status || '').trim().toLowerCase();
-  if (!['issued', 'delivered', 'expired'].includes(status)) return null;
-  const win = windowFromRequestRowForBackfill(row, env);
-  if (!win) return null;
   const subj = lockSubject(lockMachine);
   if (!subj) return null;
+  if (row.id) {
+    const status = String(row?.status ?? '').trim().toLowerCase();
+    const reason = String(row?.reason ?? '').trim().toLowerCase();
+    if (status === 'expired' && reason === 'pending_timeout') return null;
+    if (!['issued', 'delivered', 'expired'].includes(status)) return null;
+  } else if (!row?.id) {
+    return null;
+  }
+  const rowCandidates = [];
+  const fromReq = windowFromRequestRowForBackfill(row, env);
+  if (fromReq) rowCandidates.push(fromReq);
+  const kind = String(row?.kind ?? '').trim().toLowerCase();
+  const tier = String(row?.licence_tier ?? '').trim().toLowerCase();
+  const last = String(row?.licence_expiry ?? '').trim();
+  if (last && isValidCalendarIso(last) && (kind === 'monthly' || tier === 'paid' || kind === 'trial')) {
+    const inclusive = trialInclusiveDays(env);
+    rowCandidates.push({
+      first: shiftCalendarDays(last, -(inclusive - 1)),
+      last,
+      source: row.id || null,
+    });
+  }
+  const custWin = windowFromCustomerTrialSnapshot(row);
+  if (custWin) rowCandidates.push({ ...custWin, source: custWin.source || row.id || null });
+  let win = null;
+  for (const c of rowCandidates) win = pickEarlierWindow(win, c);
+  if (!win) {
+    const lockAt = Number(row.lock_at ?? row.at);
+    if (Number.isFinite(lockAt) && lockAt > 0) {
+      const tz = hubCalendarTz(env);
+      const inclusive = trialInclusiveDays(env);
+      const firstDay = calendarDateInTz(new Date(lockAt * 1000), tz).iso;
+      const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
+      win = { first: firstDay, last: lastDay, source: row.id || null };
+    }
+  }
+  if (!win) {
+    const created = Number(row?.created_at);
+    if (Number.isFinite(created) && created > 0) {
+      const tz = hubCalendarTz(env);
+      const inclusive = trialInclusiveDays(env);
+      const firstDay = calendarDateInTz(new Date(created * 1000), tz).iso;
+      const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
+      win = { first: firstDay, last: lastDay, source: row.id || null };
+    }
+  }
+  if (!win) return null;
   const product = normalizeProduct(row.product);
   return {
     first: win.first,
@@ -244,10 +352,14 @@ export async function backfillTrialGrants(env, productFilter) {
   const createdAt = new Date().toISOString();
 
   const lockSql = `
-    SELECT mt.machine, mt.request_id,
-           lr.id, lr.product, lr.kind, lr.licence_tier, lr.licence_expiry, lr.created_at
+    SELECT mt.machine, mt.request_id, mt.at AS lock_at,
+           lr.id, lr.product, lr.kind, lr.licence_tier, lr.licence_expiry, lr.created_at,
+           lr.status, lr.reason, lr.device, lr.device_key,
+           c.id AS cust_id, c.first_day AS cust_first_day, c.last_day AS cust_last_day,
+           c.licence_expiry AS cust_licence_expiry, c.licence_tier AS cust_licence_tier, c.kind AS cust_kind
     FROM machine_trials mt
-    LEFT JOIN licence_requests lr ON lr.id = mt.request_id`;
+    LEFT JOIN licence_requests lr ON lr.id = mt.request_id
+    LEFT JOIN customers c ON c.product = lr.product AND c.device = lr.device`;
   const lockRows = await env.DB.prepare(lockSql).bind().all();
 
   for (const row of lockRows.results || []) {
@@ -264,6 +376,7 @@ export async function backfillTrialGrants(env, productFilter) {
     ? await env.DB.prepare(reqSql).bind(products[0]).all()
     : await env.DB.prepare(reqSql).bind().all();
   for (const row of reqRows.results || []) {
+    if (!requestIsTrialGrantSource(row)) continue;
     const win = windowFromRequestRowForBackfill(row, env);
     if (!win) continue;
     const product = normalizeProduct(row.product);
@@ -337,13 +450,6 @@ seeds(kind, id) AS (
 closure(kind, id) AS (
   SELECT kind, id FROM seeds
   UNION
-  SELECT tg2.subject_kind, tg2.subject
-  FROM closure c
-  INNER JOIN trial_grants tg1 ON tg1.product = ?
-    AND tg1.subject_kind = c.kind AND tg1.subject = c.id
-  INNER JOIN trial_grants tg2 ON tg2.product = tg1.product
-    AND tg2.source_request IS NOT NULL AND tg2.source_request = tg1.source_request
-  UNION
   SELECT 'm', lower(lr.machine)
   FROM closure c
   INNER JOIN licence_requests lr ON lr.product = ?
@@ -356,7 +462,7 @@ closure(kind, id) AS (
 )
 SELECT kind, id FROM closure`;
 
-  binds.push(product, product, product);
+  binds.push(product, product);
   const rows = await env.DB.prepare(sql).bind(...binds).all();
   const deviceSet = new Set();
   const machineSet = new Set();
@@ -387,78 +493,115 @@ export async function linkedSubjects(env, productId, device, machines = []) {
   };
 }
 
-async function strongestTermOnClosure(env, product, devices, deviceCodes) {
+async function strongestTermOnClosure(env, product, devices, deviceCodes, budget) {
   let best = null;
+  const chunk = inChunkSize(1);
   if (deviceCodes.length) {
-    const ph = deviceCodes.map(() => '?').join(', ');
-    const custRows = await env.DB.prepare(
-      `SELECT licence_tier, licence_expiry, kind, last_day FROM customers
-       WHERE product = ? AND device IN (${ph})`,
-    ).bind(product, ...deviceCodes).all();
-    for (const row of custRows.results || []) {
-      best = pickStrongerTerm(best, termFromRow(row));
+    for (let i = 0; i < deviceCodes.length; i += chunk) {
+      const spent = spendQueryBudget(budget);
+      if (!spent.ok) return { limit: true };
+      const part = deviceCodes.slice(i, i + chunk);
+      const ph = part.map(() => '?').join(', ');
+      const custRows = await env.DB.prepare(
+        `SELECT licence_tier, licence_expiry, kind, last_day FROM customers
+         WHERE product = ? AND device IN (${ph})`,
+      ).bind(product, ...part).all();
+      for (const row of custRows.results || []) {
+        best = pickStrongerTerm(best, termFromRow(row));
+      }
     }
   }
   if (devices.length) {
-    const ph = devices.map(() => '?').join(', ');
-    const reqRows = await env.DB.prepare(
-      `SELECT licence_tier, licence_expiry, kind FROM licence_requests
-       WHERE product = ? AND device_key IN (${ph}) AND status IN ('issued', 'delivered')`,
-    ).bind(product, ...devices).all();
-    for (const row of reqRows.results || []) {
-      best = pickStrongerTerm(best, termFromRow(row));
+    for (let i = 0; i < devices.length; i += chunk) {
+      const spent = spendQueryBudget(budget);
+      if (!spent.ok) return { limit: true };
+      const part = devices.slice(i, i + chunk);
+      const ph = part.map(() => '?').join(', ');
+      const reqRows = await env.DB.prepare(
+        `SELECT licence_tier, licence_expiry, kind FROM licence_requests
+         WHERE product = ? AND device_key IN (${ph}) AND status IN ('issued', 'delivered')`,
+      ).bind(product, ...part).all();
+      for (const row of reqRows.results || []) {
+        best = pickStrongerTerm(best, termFromRow(row));
+      }
     }
   }
-  return best;
+  return { limit: false, term: best };
 }
 
-async function earliestLedgerWindow(env, product, devices, machines) {
-  const clauses = [];
-  const binds = [product];
-  if (devices.length) {
-    const ph = devices.map(() => '?').join(', ');
-    clauses.push(`(subject_kind = 'd' AND subject IN (${ph}))`);
-    binds.push(...devices);
+async function earliestLedgerWindow(env, product, devices, machines, budget) {
+  let best = null;
+  const chunk = inChunkSize(1);
+  for (let i = 0; i < devices.length; i += chunk) {
+    const spent = spendQueryBudget(budget);
+    if (!spent.ok) return { limit: true };
+    const part = devices.slice(i, i + chunk);
+    const ph = part.map(() => '?').join(', ');
+    const row = await env.DB.prepare(
+      `SELECT first_day, last_day FROM trial_grants
+       WHERE product = ? AND subject_kind = 'd' AND subject IN (${ph})
+       ORDER BY first_day ASC, last_day ASC LIMIT 1`,
+    ).bind(product, ...part).first();
+    if (row) {
+      const win = { first: String(row.first_day), last: String(row.last_day) };
+      if (isValidCalendarIso(win.first) && isValidCalendarIso(win.last)) {
+        best = pickEarlierWindow(best, win);
+      }
+    }
   }
-  if (machines.length) {
-    const ph = machines.map(() => '?').join(', ');
-    clauses.push(`(subject_kind = 'm' AND subject IN (${ph}))`);
-    binds.push(...machines);
+  for (let i = 0; i < machines.length; i += chunk) {
+    const spent = spendQueryBudget(budget);
+    if (!spent.ok) return { limit: true };
+    const part = machines.slice(i, i + chunk);
+    const ph = part.map(() => '?').join(', ');
+    const row = await env.DB.prepare(
+      `SELECT first_day, last_day FROM trial_grants
+       WHERE product = ? AND subject_kind = 'm' AND subject IN (${ph})
+       ORDER BY first_day ASC, last_day ASC LIMIT 1`,
+    ).bind(product, ...part).first();
+    if (row) {
+      const win = { first: String(row.first_day), last: String(row.last_day) };
+      if (isValidCalendarIso(win.first) && isValidCalendarIso(win.last)) {
+        best = pickEarlierWindow(best, win);
+      }
+    }
   }
-  if (!clauses.length) return null;
-  const row = await env.DB.prepare(
-    `SELECT first_day, last_day FROM trial_grants
-     WHERE product = ? AND (${clauses.join(' OR ')})
-     ORDER BY first_day ASC, last_day ASC LIMIT 1`,
-  ).bind(...binds).first();
-  if (!row) return null;
-  const win = { first: String(row.first_day), last: String(row.last_day) };
-  if (!isValidCalendarIso(win.first) || !isValidCalendarIso(win.last)) return null;
-  return win;
+  return { limit: false, window: best };
 }
 
-async function deviceCodesForClosure(env, product, device, devices) {
+async function deviceCodesForClosure(env, product, device, devices, budget) {
   const deviceCodes = new Set([String(device || '').trim()]);
+  const chunk = inChunkSize(1);
   if (devices.length) {
-    const ph = devices.map(() => '?').join(', ');
-    const devRows = await env.DB.prepare(
-      `SELECT DISTINCT device FROM licence_requests WHERE product = ? AND device_key IN (${ph})`,
-    ).bind(product, ...devices).all();
-    for (const row of devRows.results || []) {
-      if (row.device) deviceCodes.add(String(row.device));
+    for (let i = 0; i < devices.length; i += chunk) {
+      const spent = spendQueryBudget(budget);
+      if (!spent.ok) return { limit: true, codes: [] };
+      const part = devices.slice(i, i + chunk);
+      const ph = part.map(() => '?').join(', ');
+      const devRows = await env.DB.prepare(
+        `SELECT DISTINCT device FROM licence_requests WHERE product = ? AND device_key IN (${ph})`,
+      ).bind(product, ...part).all();
+      for (const row of devRows.results || []) {
+        if (row.device) deviceCodes.add(String(row.device));
+      }
     }
   }
   const codes = [...deviceCodes];
   if (codes.length) {
-    const ph = codes.map(() => '?').join(', ');
-    const custRows = await env.DB.prepare(
-      `SELECT device FROM customers WHERE product = ? AND device IN (${ph})`,
-    ).bind(product, ...codes).all();
-    for (const row of custRows.results || []) {
-      if (row.device) deviceCodes.add(String(row.device));
+    for (let i = 0; i < codes.length; i += chunk) {
+      const spent = spendQueryBudget(budget);
+      if (!spent.ok) return { limit: true, codes: [] };
+      const part = codes.slice(i, i + chunk);
+      const ph = part.map(() => '?').join(', ');
+      const custRows = await env.DB.prepare(
+        `SELECT device FROM customers WHERE product = ? AND device IN (${ph})`,
+      ).bind(product, ...part).all();
+      for (const row of custRows.results || []) {
+        if (row.device) deviceCodes.add(String(row.device));
+      }
     }
   }
-  return [...deviceCodes];
+  return { limit: false, codes: [...deviceCodes] };
 }
 
 export async function resolveTrial(env, productId, device, machines = [], options = {}) {
@@ -468,11 +611,24 @@ export async function resolveTrial(env, productId, device, machines = [], option
   if (closure.blocked) {
     return { kind: 'blocked', reason: 'link_limit' };
   }
-  const deviceCodes = await deviceCodesForClosure(env, product, device, closure.devices);
-  const strongTerm = await strongestTermOnClosure(env, product, closure.devices, deviceCodes);
+  const budget = { used: 1 };
+  const codeResult = await deviceCodesForClosure(env, product, device, closure.devices, budget);
+  if (codeResult.limit) {
+    return { kind: 'blocked', reason: 'link_limit' };
+  }
+  const deviceCodes = codeResult.codes;
+  const termResult = await strongestTermOnClosure(env, product, closure.devices, deviceCodes, budget);
+  if (termResult.limit) {
+    return { kind: 'blocked', reason: 'link_limit' };
+  }
+  const strongTerm = termResult.term;
   const blockedBy = isActiveStrongTerm(strongTerm, env, today) ? 'downgrade_forbidden' : null;
 
-  const ledger = await earliestLedgerWindow(env, product, closure.devices, closure.machines);
+  const ledgerResult = await earliestLedgerWindow(env, product, closure.devices, closure.machines, budget);
+  if (ledgerResult.limit) {
+    return { kind: 'blocked', reason: 'link_limit' };
+  }
+  const ledger = ledgerResult.window;
   if (ledger) {
     return {
       kind: 'existing',

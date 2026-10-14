@@ -5,7 +5,8 @@ import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
   deviceKey, deviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice, REASON_PAID_IN_STUDIO,
-  hubCalendarSigned, ownerCapabilities, loadSigningKeys,
+  hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
+  offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz } from '../src/calendar.js';
@@ -158,7 +159,8 @@ test('offline mint blocks later online trial for that device', async () => {
   const keys = await signingKeys(11);
   await issueOfflineCustomer(e, keys, '7KD2M-QX9TP', 'Shop', 'trip-orders');
   const rows = await e.DB.prepare('SELECT machine FROM machine_trials').bind().all();
-  assert.equal(rows.results[0].machine, deviceLockKey(deviceKey('7KD2M-QX9TP')));
+  const machines = (rows.results || []).map((r) => r.machine);
+  assert.ok(machines.includes(deviceLockKey(deviceKey('7KD2M-QX9TP'))));
   const online = await postRequest(e, body({ nonce: 'n3' }));
   assert.equal(online.data.reason, 'already_used');
 });
@@ -667,13 +669,17 @@ test('purgeStaleCodes keeps issued row when kind is trial but licence_tier is pa
   assert.equal(row.code, 'APPROVED-PAID');
 });
 
-test('hub calendar signs with per-product trial key when global key is absent', async () => {
+test('hub calendar uses global signing keys only', async () => {
   const e = env();
   e.LICENCE_PRODUCTS = 'trip-orders,al-store';
   e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 88));
+  assert.equal(hubTimeSigningMaterial(e), null);
   const out = await hubCalendarSigned(e);
-  assert.ok(out.sig);
-  assert.equal(out.kid, 'trial-hub');
+  assert.equal(out.sig, undefined);
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 87));
+  const signed = await hubCalendarSigned(e);
+  assert.ok(signed.sig);
+  assert.equal(signed.kid, 'trial-hub');
 });
 
 test('ownerCapabilities reflects per-product paid key', () => {
@@ -684,19 +690,36 @@ test('ownerCapabilities reflects per-product paid key', () => {
   const caps = ownerCapabilities(e);
   assert.equal(caps.paid_available, true);
   assert.equal(caps.trial_available, false);
+  assert.equal(caps.products['trip-orders'].paid_available, false);
+  assert.equal(caps.products['al-store'].paid_available, true);
 });
 
-test('offline manual activation signs the requested product', async () => {
+test('storedGrantMatches requires matching product', () => {
+  const row = { product: 'trip-orders', licence_tier: 'trial', kind: 'trial' };
+  assert.equal(storedGrantMatches(row, { grant: 'trial' }, 'trip-orders'), true);
+  assert.equal(storedGrantMatches(row, { grant: 'trial' }, 'al-store'), false);
+});
+
+test('offline manual activation is keyed per product and device', async () => {
   const e = env();
   e.LICENCE_PRODUCTS = 'trip-orders,al-store';
   e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 90));
   e.LICENCE_SIGNING_KEY_AL_STORE = pemFromSeed(Buffer.alloc(32, 91));
   const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
   const keysTo = await loadSigningKeys(e, 'trip-orders');
   const keysAl = await loadSigningKeys(e, 'al-store');
   const trip = await issueOfflineCustomer(e, keysTo, device, 'Shop', 'trip-orders', { grant: 'trial' });
-  const store = await issueOfflineCustomer(e, keysAl, 'ABCD2EFGH3', 'Shop', 'al-store', { grant: 'trial' });
+  const store = await issueOfflineCustomer(e, keysAl, device, 'Shop', 'al-store', { grant: 'trial' });
   assert.equal(trip.product, 'trip-orders');
   assert.equal(store.product, 'al-store');
   assert.notEqual(trip.code, store.code);
+  const tripRow = await e.DB.prepare('SELECT id, product FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('trip-orders', dkey)).first();
+  const storeRow = await e.DB.prepare('SELECT id, product FROM licence_requests WHERE id = ?')
+    .bind(offlineRequestId('al-store', dkey)).first();
+  assert.equal(tripRow.product, 'trip-orders');
+  assert.equal(storeRow.product, 'al-store');
+  assert.equal(await trialUsedForOfflineProduct(e, 'trip-orders', dkey), true);
+  assert.equal(await trialUsedForOfflineProduct(e, 'al-store', dkey), true);
 });

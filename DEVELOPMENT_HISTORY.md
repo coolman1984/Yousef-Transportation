@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## REV-owner3 hub fixes (2026-10-14)
+
+**What/why:** Offline activation rows keyed `offline:<product>:<device>` with product-aware grant match and locks; hub calendar signs only global trial/paid keys (documented); owner capabilities and panel tier controls per product; offline submit waits for products; customers list shows product.
+**Checks:** `cd licence-hub && npm test` (71 pass); `cd gateway && node --test test/gateway.test.js` (24 pass); `cd tests && timeout 600 python3 -m unittest` (full suite pass).
+**Next:** Owner deploy; ensure every product build trusts global `trial-hub` / `paid` public keys for hub time.
+
 ## REV-owner2 hub fixes (2026-10-14)
 
 **What/why:** Purge stale codes by `licence_tier` only; register `GET /owner/api/products` before 405; hub time and owner capabilities honor per-product signing keys; real `0002` migration SQL, `--local` CLI note, `wrangler.toml` products list.

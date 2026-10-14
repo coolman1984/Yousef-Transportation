@@ -136,6 +136,17 @@ export function deviceLockKey(dkey) {
   return `d:${dkey}`;
 }
 
+export function offlineRequestId(productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `offline:${product}:${dkey}`;
+}
+
+/** Offline trial lock is per product + device so multiple products can share one device code. */
+export function offlineDeviceLockKey(productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `od:${product}:${dkey}`;
+}
+
 export function machineLockKey(machineHash) {
   return `h:${machineHash}`;
 }
@@ -185,6 +196,11 @@ export async function trialUsedForDevice(env, deviceKeyNorm) {
   return Boolean(row);
 }
 
+export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm) {
+  const row = await trialLockRow(env, offlineDeviceLockKey(productId, deviceKeyNorm));
+  return Boolean(row);
+}
+
 /** Online path: refuse when device code or stable machine hash was already used. */
 export async function trialUsedOnline(env, deviceKeyNorm, machineHash) {
   if (await trialUsedForDevice(env, deviceKeyNorm)) return true;
@@ -213,8 +229,8 @@ function hubCalendarDay(env) {
 }
 
 export function hubTimeSigningMaterial(env) {
-  const trialPem = anySigningKeyPem(env, 'LICENCE_SIGNING_KEY');
-  const paidPem = anySigningKeyPem(env, 'PAID_SIGNING_KEY');
+  const trialPem = env.LICENCE_SIGNING_KEY || null;
+  const paidPem = env.PAID_SIGNING_KEY || null;
   if (!trialPem && !paidPem) return null;
   if (trialPem) return { pem: trialPem, kid: HUB_TIME_KID_TRIAL };
   if (paidPem) return { pem: paidPem, kid: HUB_TIME_KID_PAID };
@@ -251,7 +267,10 @@ export function parseOwnerGrant(body = {}) {
   throw new Error('bad_grant');
 }
 
-export function storedGrantMatches(row, grant) {
+export function storedGrantMatches(row, grant, productId) {
+  const expectedProduct = String(productId ?? row.product ?? 'trip-orders').trim() || 'trip-orders';
+  const rowProduct = String(row.product || 'trip-orders').trim() || 'trip-orders';
+  if (rowProduct !== expectedProduct) return false;
   const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
   const expiry = String(row.licence_expiry || '').trim();
   if (grant.grant === 'trial') return tier === 'trial' || tier === '';
@@ -452,6 +471,11 @@ async function clearTrialLocks(env, dkey, machineHash) {
   await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(dkey).run();
 }
 
+async function clearOfflineTrialLocks(env, productId, dkey) {
+  await env.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(offlineDeviceLockKey(productId, dkey)).run();
+  await clearTrialLocks(env, dkey, null);
+}
+
 async function waitForIssuedOffline(env, requestId, attempts = 30) {
   for (let i = 0; i < attempts; i++) {
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
@@ -552,7 +576,7 @@ export async function approveRequest(env, requestId, keys, options = {}) {
 
   if (row.status === 'issued' && row.code) {
     if (await locksOwnedByRequest(env, dkey, machineHash, requestId)) {
-      if (!force && storedGrantMatches(row, grant)) {
+      if (!force && storedGrantMatches(row, grant, row.product)) {
         await ensureCustomerRecord(env, row, signedFromRow(row), now());
         return signedFromRow(row);
       }
@@ -607,13 +631,13 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     throw new Error('bad_grant');
   }
   const dkey = deviceKey(device);
-  const requestId = 'offline:' + dkey;
-  const lock = deviceLockKey(dkey);
+  const requestId = offlineRequestId(productId, dkey);
+  const lock = offlineDeviceLockKey(productId, dkey);
   const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (existing?.code && existing.status === 'issued') {
     const claim = await trialLockRow(env, lock);
     if (claim && claim.request_id === requestId) {
-      if (!force && storedGrantMatches(existing, grant)) {
+      if (!force && storedGrantMatches(existing, grant, productId)) {
         await ensureCustomerRecord(env, existing, signedFromRow(existing), now());
         return signedFromRow(existing);
       }
@@ -623,7 +647,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     }
   }
   let ownsLock = false;
-  if (grant.grant === 'trial' && !force && (await trialUsedForDevice(env, dkey))) {
+  if (grant.grant === 'trial' && !force && (await trialUsedForOfflineProduct(env, productId, dkey))) {
     const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (row?.code && row.status === 'issued') {
@@ -634,12 +658,12 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     else throw new Error('already_used');
   }
   const t = now();
-  if (force) await clearTrialLocks(env, dkey, null);
+  if (force) await clearOfflineTrialLocks(env, productId, dkey);
 
   const offlineKind = grant.grant === 'permanent' ? 'permanent' : grant.grant === 'paid' ? 'monthly' : 'trial';
   await env.DB.prepare(
-    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING',
-  ).bind(requestId, 'offline', productId, offlineKind, device, dkey, '', 'offline-' + dkey, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO UPDATE SET product = excluded.product, kind = excluded.kind, shop = excluded.shop, updated_at = excluded.updated_at',
+  ).bind(requestId, 'offline', productId, offlineKind, device, dkey, '', 'offline-' + requestId, shop.slice(0, 60) || '—', '', '', 'pending', t, t).run();
 
   if (!ownsLock) {
     const ins = await env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
@@ -690,13 +714,20 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const cleanupStmt = env.DB.prepare(
     'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
   ).bind(requestId, requestId);
+  const batchStmts = [
+    env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
+    customerStmt,
+    tierStmt,
+    cleanupStmt,
+  ];
+  if (grant.grant === 'trial') {
+    batchStmts.push(
+      env.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING')
+        .bind(deviceLockKey(dkey), requestId, t),
+    );
+  }
   try {
-    const results = await env.DB.batch([
-      env.DB.prepare(issueSql).bind('issued', signed.code, signed.device, t, requestId, lock, requestId),
-      customerStmt,
-      tierStmt,
-      cleanupStmt,
-    ]);
+    const results = await env.DB.batch(batchStmts);
     const issued = results[0]?.meta?.changes > 0;
     if (!issued) {
       const row = await waitForIssuedOffline(env, requestId);
@@ -729,21 +760,28 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
 
 export function issueOfflineCustomer(env, keys, device, shop, productId, options = {}) {
   const dkey = deviceKey(device);
+  const tailKey = `${String(productId || 'trip-orders').trim()}:${dkey}`;
   const tails = offlineTailMap(env);
-  const prev = tails.get(dkey) || Promise.resolve();
+  const prev = tails.get(tailKey) || Promise.resolve();
   const job = prev.catch(() => {}).then(() => issueOfflineCustomerInner(env, keys, device, shop, productId, options));
-  tails.set(dkey, job);
+  tails.set(tailKey, job);
   return job.finally(() => {
-    if (tails.get(dkey) === job) tails.delete(dkey);
+    if (tails.get(tailKey) === job) tails.delete(tailKey);
   });
 }
 
 /** Drop activation codes from delivered rows older than TRIAL_DAYS (scheduled). */
 export function ownerCapabilities(env) {
-  return {
-    paid_available: Boolean(anySigningKeyPem(env, 'PAID_SIGNING_KEY')),
-    trial_available: Boolean(anySigningKeyPem(env, 'LICENCE_SIGNING_KEY')),
-  };
+  const byProduct = {};
+  for (const productId of products(env)) {
+    byProduct[productId] = {
+      paid_available: Boolean(signingKeyForProduct(env, 'PAID_SIGNING_KEY', productId)),
+      trial_available: Boolean(signingKeyForProduct(env, 'LICENCE_SIGNING_KEY', productId)),
+    };
+  }
+  const paidAny = Object.values(byProduct).some((p) => p.paid_available);
+  const trialAny = Object.values(byProduct).some((p) => p.trial_available);
+  return { products: byProduct, paid_available: paidAny, trial_available: trialAny };
 }
 
 export async function purgeStaleCodes(env) {

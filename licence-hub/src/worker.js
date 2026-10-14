@@ -64,7 +64,14 @@ async function ownerApi(request, env, url, session) {
     return json({ items: rows.results || [] });
   }
   if (path === '/customers' && request.method === 'GET') {
-    const rows = await env.DB.prepare('SELECT shop, device, kind, first_day, last_day, created_at FROM customers ORDER BY created_at DESC LIMIT 200').all();
+    const rows = await env.DB.prepare(
+      `SELECT c.shop, c.device, c.kind, c.first_day, c.last_day, c.created_at,
+        COALESCE(
+          (SELECT r.product FROM licence_requests r WHERE r.device = c.device AND r.status = 'issued' ORDER BY r.updated_at DESC LIMIT 1),
+          'trip-orders'
+        ) AS product
+       FROM customers c ORDER BY c.created_at DESC LIMIT 200`,
+    ).all();
     const items = (rows.results || []).map((r) => {
       let daysLeft = null;
       if (r.last_day) {

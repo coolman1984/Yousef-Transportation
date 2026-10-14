@@ -29,6 +29,7 @@ async function api(path, opts) {
 
 let csrf = '';
 let paidAvailable = false;
+let productCapabilities = {};
 let productFilter = '';
 
 export function productLabelAr(productId) {
@@ -41,8 +42,18 @@ async function session() {
   const s = await api('/session');
   if (s) csrf = s.csrf || '';
   const cap = await api('/capabilities');
-  if (cap) paidAvailable = Boolean(cap.paid_available);
+  if (cap) {
+    paidAvailable = Boolean(cap.paid_available);
+    productCapabilities = cap.products || {};
+  }
   return s;
+}
+
+function paidForProduct(productId) {
+  const id = productId || 'trip-orders';
+  const row = productCapabilities[id];
+  if (row) return Boolean(row.paid_available);
+  return paidAvailable;
 }
 
 function headers() {
@@ -203,8 +214,8 @@ function renderPendingList(host, items) {
     ul.innerHTML = '<li class="muted">لا توجد طلبات معلّقة.</li>';
     return;
   }
-  const disablePaid = !paidAvailable;
   items.forEach((item) => {
+    const disablePaid = !paidForProduct(item.product || 'trip-orders');
     const li = document.createElement('li');
     const when = new Date(item.created_at * 1000).toLocaleString('ar-EG');
     const kindLabel = kindLabelAr(item.kind);
@@ -270,7 +281,8 @@ export async function loadCustomers(host) {
   data.items.forEach((item) => {
     const li = document.createElement('li');
     const left = item.days_left != null ? (' · باقي ' + item.days_left + ' يوم') : '';
-    li.innerHTML = '<div><strong>' + escape(item.shop) + '</strong><div class="muted" dir="ltr">' + escape(item.device) + left + '</div></div>';
+    const prod = productLabelAr(item.product || 'trip-orders');
+    li.innerHTML = '<div><strong>' + escape(item.shop) + '</strong><div class="muted">' + escape(prod) + '</div><div class="muted" dir="ltr">' + escape(item.device) + left + '</div></div>';
     ul.append(li);
   });
 }
@@ -278,6 +290,8 @@ export async function loadCustomers(host) {
 export function wireOffline(form, out, tierHost) {
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    const submitBtn = form.querySelector('button[type="submit"]');
+    if (submitBtn && submitBtn.disabled) return;
     await session();
     out.hidden = true;
     const device = form.device.value.trim();
@@ -304,19 +318,47 @@ export function wireOffline(form, out, tierHost) {
   });
 }
 
+function renderOfflineTierSlot(slot, form, selectedProduct) {
+  const product = selectedProduct || 'trip-orders';
+  const tierOnly = slot.querySelector('[data-tier-slot-tier]');
+  const html = tierPickerHtml(!paidForProduct(product), '', 'offline');
+  if (tierOnly) {
+    tierOnly.innerHTML = html;
+    wireTierForm(tierOnly);
+    return;
+  }
+  slot.innerHTML = html;
+  wireTierForm(slot);
+}
+
 export function mountOfflineTier(host) {
   const slot = host.querySelector('[data-tier-slot]');
   if (!slot) return;
+  const form = host.querySelector('#offline-form') || document.getElementById('offline-form');
+  const submitBtn = form ? form.querySelector('button[type="submit"]') : null;
+  if (submitBtn) submitBtn.disabled = true;
   session().then(async () => {
     const products = await api('/products');
+    const loaded = Boolean(products && Array.isArray(products.products));
+    if (!loaded) return;
     let productField = '';
-    if (products && products.products && products.products.length) {
+    let selected = 'trip-orders';
+    if (products.products.length) {
+      selected = products.products.includes('trip-orders') ? 'trip-orders' : products.products[0];
       const opts = products.products.map((p) =>
-        '<option value="' + escape(p) + '"' + (p === 'trip-orders' ? ' selected' : '') + '>' + escape(productLabelAr(p)) + '</option>',
+        '<option value="' + escape(p) + '"' + (p === selected ? ' selected' : '') + '>' + escape(productLabelAr(p)) + '</option>',
       ).join('');
       productField = '<div class="field"><label for="product">المنتج</label><select id="product" name="product">' + opts + '</select></div>';
     }
-    slot.innerHTML = productField + tierPickerHtml(!paidAvailable, '', 'offline');
-    wireTierForm(slot);
+    slot.innerHTML = productField + '<div data-tier-slot-tier></div>';
+    const tierWrap = slot.querySelector('[data-tier-slot-tier]');
+    renderOfflineTierSlot(tierWrap || slot, form, selected);
+    const productEl = slot.querySelector('[name="product"]');
+    if (productEl) {
+      productEl.addEventListener('change', () => {
+        renderOfflineTierSlot(tierWrap || slot, form, productEl.value);
+      });
+    }
+    if (submitBtn) submitBtn.disabled = false;
   });
 }

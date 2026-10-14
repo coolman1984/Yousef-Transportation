@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil } from '../public/owner/app.js';
+import { showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier } from '../public/owner/app.js';
 
 function panelEl() {
   const listeners = {};
@@ -57,6 +57,38 @@ test('readGrant uses the checked radio inside its card', () => {
     },
   };
   assert.deepEqual(readGrant(root), { grant: 'paid', paid_until: '2027-01-15' });
+});
+
+test('offline submit stays disabled until product list is loaded', async (t) => {
+  t.mock.method(globalThis, 'fetch', async (url) => {
+    const path = String(url);
+    if (path.includes('/session')) return { status: 200, json: async () => ({ csrf: 'x' }) };
+    if (path.includes('/capabilities')) return { status: 200, json: async () => ({ products: { 'trip-orders': { paid_available: true } } }) };
+    if (path.includes('/products')) return { status: 200, json: async () => ({ products: ['trip-orders'] }) };
+    return { status: 404, json: async () => ({}) };
+  });
+  const tierWrap = { innerHTML: '', querySelector: () => null };
+  const slot = {
+    querySelector(sel) {
+      if (sel === '[data-tier-slot-tier]') return tierWrap;
+      if (sel === '[name="product"]') return { value: 'trip-orders', addEventListener: () => {} };
+      return null;
+    },
+    set innerHTML(_v) { /* slot filled */ },
+    get innerHTML() { return ''; },
+  };
+  const submit = { disabled: true };
+  const form = { querySelector: (sel) => (sel === 'button[type="submit"]' ? submit : null) };
+  const host = {
+    querySelector(sel) {
+      if (sel === '[data-tier-slot]') return slot;
+      if (sel === '#offline-form') return form;
+      return null;
+    },
+  };
+  mountOfflineTier(host);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(submit.disabled, false);
 });
 
 test('presetPaidUntil clamps month overflow from Cairo today', () => {

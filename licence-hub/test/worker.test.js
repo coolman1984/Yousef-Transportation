@@ -117,6 +117,17 @@ test('GET /owner/api/products is allowed before POST-only gate', async () => {
   assert.deepEqual([...data.products].sort(), ['al-store', 'trip-orders']);
 });
 
+test('GET /owner/api/capabilities returns per-product paid flags', async () => {
+  const e = env({
+    LICENCE_PRODUCTS: 'trip-orders,al-store',
+    PAID_SIGNING_KEY_AL_STORE: pemFromSeed(Buffer.alloc(32, 93)),
+  });
+  const res = await ownerFetch(e, '/owner/api/capabilities');
+  const data = await res.json();
+  assert.equal(data.products['trip-orders'].paid_available, false);
+  assert.equal(data.products['al-store'].paid_available, true);
+});
+
 test('owner offline API signs with the product sent in the body', async () => {
   const e = env({
     LICENCE_PRODUCTS: 'trip-orders,al-store',

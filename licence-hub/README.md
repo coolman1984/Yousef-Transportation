@@ -93,7 +93,7 @@ Poll every few seconds while `pending`; stop on `issued`, `refused`, or `expired
 
 The `trial_grants` table is the authoritative, insert-only record of which device (`subject_kind = d`) or machine hash (`m`, always lowercased) has already received a trial window for a product. Application code uses `INSERT OR IGNORE` only; optional SQL triggers reject `UPDATE`/`DELETE`.
 
-**Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial locks and requests populate the ledger.
+**Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial requests and related evidence populate the ledger.
 
 **Resolver limits:** `resolveTrial` and `linkedSubjects` expand device↔machine links with a recursive SQL closure over `licence_requests`, capped at **256** nodes; above that they fail closed with `link_limit`. Each resolver keeps total D1 statements under **50** (closure seed chunks included). Each statement keeps bind count ≤ **90** (closure seeds are chunked; ledger/term lookups are chunked). `linkedSubjects` always returns `deviceCodes` as a plain array plus `link_limit`. Paid/permanent blocking follows customers plus `issued`/`delivered` requests only. Blank `licence_expiry` on a paid customer falls back to `last_day` like `NULL`.
 
@@ -101,7 +101,9 @@ The `trial_grants` table is the authoritative, insert-only record of which devic
 
 **Backfill I/O:** three reads (`etw|` locks, requests, customers) plus one batch insert; unnormalizable devices are skipped.
 
-**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices.
+**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices. `trialGrantStatements` with no machine hashes only refuses when that device key already has a `d` row; it does not look at existing `m` rows (callers must pass linked machine hashes when they want an all-or-nothing grant).
+
+**Grant batch limits:** each `trialGrantStatements` call is one INSERT (all rows or none) with ≤ **90** binds — at most **11** distinct machine hashes per call. Above that, the builder throws `link_limit`.
 
 ## Tests / الاختبارات
 

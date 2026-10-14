@@ -143,6 +143,10 @@ function machineForHash(machine, hashCase) {
   return hashCase === 'upper' ? machine.toUpperCase() : machine;
 }
 
+function deviceForHash(device, hashCase) {
+  return hashCase === 'upper' ? device.toUpperCase() : device.toLowerCase();
+}
+
 function priorTarget(linkShape, hashCase) {
   if (linkShape === 'peer') {
     return {
@@ -175,7 +179,7 @@ function priorSetup(source, e, rowStatus, linkShape, hashCase, lastDay = '2026-0
   switch (source) {
     case 'etw_d':
       return e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
-        .bind(`etw|${PRODUCT}|d|${target.dkey}`, `${first}|${last}`, 1).run()
+        .bind(`etw|${PRODUCT}|d|${deviceForHash(target.device, hashCase)}`, `${first}|${last}`, 1).run()
         .then(() => backfillTrialGrants(e, PRODUCT));
     case 'etw_m':
       return e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
@@ -217,7 +221,7 @@ function priorSetup(source, e, rowStatus, linkShape, hashCase, lastDay = '2026-0
       return e.DB.prepare(
         `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, created_at)
          VALUES(?, ?, '', ?, 'trial', ?, ?, 'trial', 1)`,
-      ).bind('c-mx', PRODUCT, target.device, first, last).run().then(() => backfillTrialGrants(e, PRODUCT));
+      ).bind('c-mx', PRODUCT, deviceForHash(target.device, hashCase), first, last).run().then(() => backfillTrialGrants(e, PRODUCT));
     default:
       return Promise.resolve();
   }
@@ -667,7 +671,7 @@ test('regression: closure chunks 99 machine seeds under bind cap; paid peer bloc
     id: 'paid-peer',
     device: DEVICE_B,
     dkey: DKEY_B,
-    machine: machines[0],
+    machine: machines[90],
     kind: 'monthly',
     tier: 'paid',
     expiry: '2026-12-31',
@@ -840,6 +844,57 @@ test('second device grant does not store a different window when machine row exi
   ).bind('m', MACHINE_A).first();
   assert.equal(mRow.first_day, '2026-06-01');
   assert.equal(mRow.last_day, '2026-06-14');
+});
+
+test('regression: partial hash grant blocked when any listed machine already has a row', async () => {
+  const e = env();
+  await insertRequest(e, { id: 'ga', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A });
+  await insertRequest(e, { id: 'gb', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_A });
+  await insertRequest(e, { id: 'gc', device: DEVICE_C, dkey: DKEY_C, machine: MACHINE_B });
+  const win1 = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  const win2 = { first_day: '2026-07-01', last_day: '2026-07-14' };
+  await e.DB.batch(trialGrantStatements(e, PRODUCT, DEVICE_A, [MACHINE_A], win1, 'req-a'));
+  await e.DB.batch(trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A, MACHINE_B], win2, 'req-b'));
+  const julyB = await e.DB.prepare(
+    'SELECT first_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('m', MACHINE_B).first();
+  assert.equal(julyB, null);
+  const r = await resolveTrial(e, PRODUCT, DEVICE_C, [MACHINE_B], { today: '2026-07-01' });
+  assert.equal(r.kind, 'eligible');
+});
+
+test('regression: paid customer blocks resolveTrial with lowercase device code', async () => {
+  const e = env();
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('paid-lo', ?, '', ?, 'paid', '2025-01-01', '2026-12-31', 'paid', '2026-12-31', 1)`,
+  ).bind(PRODUCT, DEVICE_A).run();
+  await insertRequest(e, {
+    id: 'delivered-lo',
+    device: '7kd2m-qx9tp',
+    dkey: DKEY_A,
+    machine: MACHINE_A,
+    status: 'delivered',
+    tier: 'trial',
+    kind: 'trial',
+    expiry: '2026-06-14',
+  });
+  const blocked = await resolveTrial(e, PRODUCT, '7kd2m-qx9tp', [MACHINE_A], { today: '2026-06-01' });
+  assert.equal(blocked.kind, 'blocked');
+  assert.equal(blocked.reason, 'downgrade_forbidden');
+});
+
+test('trialGrantStatements refuses more than 11 machine hashes (link_limit)', () => {
+  const e = env();
+  const hashes = [];
+  for (let i = 0; i < 95; i++) {
+    hashes.push(String(i).padStart(64, 'f'));
+  }
+  const win = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  assert.throws(
+    () => trialGrantStatements(e, PRODUCT, DEVICE_A, hashes, win, 'big'),
+    /link_limit/,
+  );
 });
 
 test('isActiveStrongTerm treats paid_until equal to today as active', () => {

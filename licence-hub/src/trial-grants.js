@@ -399,18 +399,35 @@ export async function linkedSubjects(env, productId, device, machines = []) {
   };
 }
 
+function customerDeviceMatchSql() {
+  return "upper(replace(device, '-', ''))";
+}
+
+function normalizedDeviceKeys(codes) {
+  const keys = new Set();
+  for (const raw of codes) {
+    try {
+      keys.add(deviceKeyNorm(raw));
+    } catch {
+      /* skip malformed display codes */
+    }
+  }
+  return [...keys];
+}
+
 async function strongestTermOnClosure(env, product, devices, deviceCodes, budget) {
   let best = null;
   const chunk = inChunkSize(1);
-  if (deviceCodes.length) {
-    for (let i = 0; i < deviceCodes.length; i += chunk) {
+  const custKeys = normalizedDeviceKeys(deviceCodes);
+  if (custKeys.length) {
+    for (let i = 0; i < custKeys.length; i += chunk) {
       const spent = spendQueryBudget(budget);
       if (!spent.ok) return { limit: true };
-      const part = deviceCodes.slice(i, i + chunk);
+      const part = custKeys.slice(i, i + chunk);
       const ph = part.map(() => '?').join(', ');
       const custRows = await env.DB.prepare(
         `SELECT licence_tier, licence_expiry, kind, last_day FROM customers
-         WHERE product = ? AND device IN (${ph})`,
+         WHERE product = ? AND ${customerDeviceMatchSql()} IN (${ph})`,
       ).bind(product, ...part).all();
       for (const row of custRows.results || []) {
         best = pickStrongerTerm(best, termFromRow(row));
@@ -498,10 +515,12 @@ async function deviceCodesForClosure(env, product, device, devices, budget) {
       const spent = spendQueryBudget(budget);
       if (!spent.ok) return { limit: true, codes: [] };
       const part = codes.slice(i, i + chunk);
-      const ph = part.map(() => '?').join(', ');
+      const keys = normalizedDeviceKeys(part);
+      if (!keys.length) continue;
+      const kPh = keys.map(() => '?').join(', ');
       const custRows = await env.DB.prepare(
-        `SELECT device FROM customers WHERE product = ? AND device IN (${ph})`,
-      ).bind(product, ...part).all();
+        `SELECT device FROM customers WHERE product = ? AND ${customerDeviceMatchSql()} IN (${kPh})`,
+      ).bind(product, ...keys).all();
       for (const row of custRows.results || []) {
         if (row.device) deviceCodes.add(String(row.device));
       }
@@ -552,10 +571,38 @@ export async function resolveTrial(env, productId, device, machines = [], option
   return { kind: 'eligible' };
 }
 
+/** Conflict guard binds: product, device key, optional machine hashes. */
+const GRANT_GUARD_BINDS = 2;
+
+function grantConflictExistsSql(mhList) {
+  const deviceClause = "(tg.subject_kind = 'd' AND tg.subject = ?)";
+  if (!mhList.length) {
+    return `EXISTS (
+      SELECT 1 FROM trial_grants tg
+      WHERE tg.product = ? AND ${deviceClause}
+    )`;
+  }
+  const mPh = mhList.map(() => '?').join(', ');
+  return `EXISTS (
+    SELECT 1 FROM trial_grants tg
+    WHERE tg.product = ? AND (${deviceClause} OR (tg.subject_kind = 'm' AND tg.subject IN (${mPh})))
+  )`;
+}
+
+function grantConflictGuardBinds(product, dkey, mhList) {
+  if (!mhList.length) return [product, dkey];
+  return [product, dkey, ...mhList];
+}
+
+function grantRowBindCount(mhList) {
+  return 6 * (1 + mhList.length) + GRANT_GUARD_BINDS + mhList.length;
+}
+
 /**
  * Insert-only trial ledger rows for a device and optional machine hashes.
- * Device rows are skipped when a machine row already exists with a different window
- * (callers must re-resolve inside the same batch before granting — PR B).
+ * One D1 statement inserts every row or none: a pre-insert conflict check covers this
+ * device key and all listed machine hashes. Device-only grants do not consult machine
+ * rows unless machine hashes are supplied (see README).
  */
 export function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);
@@ -575,39 +622,27 @@ export function trialGrantStatements(env, productId, device, machines, window, s
     seen.add(mh);
     mhList.push(mh);
   }
-  const stmts = [];
-  if (!mhList.length) {
-    stmts.push(
-      env.DB.prepare(
-        `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-         VALUES(?, 'd', ?, ?, ?, ?, ?)`,
-      ).bind(product, dkey, first, last, createdAt, src),
-    );
-  } else {
-    const mPh = mhList.map(() => '?').join(', ');
-    stmts.push(
-      env.DB.prepare(
-        `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-         SELECT ?, 'd', ?, ?, ?, ?, ?
-         WHERE NOT EXISTS (
-           SELECT 1 FROM trial_grants tg
-           WHERE tg.product = ? AND tg.subject_kind = 'm' AND tg.subject IN (${mPh})
-             AND NOT (tg.first_day = ? AND tg.last_day = ?)
-         )`,
-      ).bind(product, dkey, first, last, createdAt, src, product, ...mhList, first, last),
-    );
+  if (grantRowBindCount(mhList) > D1_STMT_BIND_MAX) {
+    throw new Error('link_limit');
   }
+  const conflictSql = grantConflictExistsSql(mhList);
+  const guardBinds = grantConflictGuardBinds(product, dkey, mhList);
+  const rowBinds = [product, dkey, first, last, createdAt, src];
+  const unions = [
+    `SELECT ? AS product, 'd' AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
+  ];
+  const binds = [...rowBinds];
   for (const mh of mhList) {
-    stmts.push(
-      env.DB.prepare(
-        `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-         SELECT ?, 'm', ?, ?, ?, ?, ?
-         WHERE NOT EXISTS (
-           SELECT 1 FROM trial_grants tg
-           WHERE tg.product = ? AND tg.subject_kind = 'm' AND tg.subject = ?
-         )`,
-      ).bind(product, mh, first, last, createdAt, src, product, mh),
+    unions.push(
+      `SELECT ? AS product, 'm' AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
     );
+    binds.push(product, mh, first, last, createdAt, src);
   }
-  return stmts;
+  const sql = `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
+    SELECT product, subject_kind, subject, first_day, last_day, created_at, source_request
+    FROM (${unions.join(' UNION ALL ')}) AS planned
+    WHERE NOT (${conflictSql})`;
+  return [
+    env.DB.prepare(sql).bind(...binds, ...guardBinds),
+  ];
 }

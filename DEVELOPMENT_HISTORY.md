@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence hub trial window round 2 (2026-10-14)
+
+**What/why:** Review on `fix/trial-after-expired-paid`: one trial window per device+product must survive paid/permanent upgrades and block fresh mints (P0–P1). Immutable `etw|` markers in `machine_trials` (no D1 schema change); `originalTrialWindow`/`trialSignOptions`/`currentTerm` honour active trial vs expired paid; offline/online reuse issued trial codes; reissue no longer steals locks to extend or restart.
+**Checks:** `cd licence-hub && npm test` (156 pass).
+**Next:** Owner review PR; deploy hub worker after merge.
+
 ## REV38 replay recovery + version on retry (2026-10-14)
 
 **What/why:** Independent review (REV38-1): legacy hub replay without `poll_token` must not show “code refused” or offer a new request that rotates the nonce; office stays in waiting/backoff with `recovery_unavailable` and the licence screen explains that in Arabic. After an app update, replay must not 401 on version — office stores `version` at `begin()` and the hub ignores version on nonce replay (device/product/machine/shop/ref still enforced).

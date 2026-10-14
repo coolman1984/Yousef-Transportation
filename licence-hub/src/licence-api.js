@@ -271,13 +271,123 @@ async function trialLockRow(env, lockId) {
   return null;
 }
 
+const EMBEDDED_TRIAL_WIN_PREFIX = 'etw|';
+
+function embeddedTrialWindowDeviceKey(productId, dkey, first, last) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `${EMBEDDED_TRIAL_WIN_PREFIX}${product}|${dkey}|${first}|${last}`;
+}
+
+function embeddedTrialWindowDevicePrefix(productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `${EMBEDDED_TRIAL_WIN_PREFIX}${product}|${dkey}|`;
+}
+
+function embeddedTrialWindowMachineKey(productId, machineHash, first, last) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `${EMBEDDED_TRIAL_WIN_PREFIX}${product}|m|${machineHash}|${first}|${last}`;
+}
+
+function embeddedTrialWindowMachinePrefix(productId, machineHash) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return `${EMBEDDED_TRIAL_WIN_PREFIX}${product}|m|${machineHash}|`;
+}
+
+function parseEmbeddedTrialWindowMachineKey(machine) {
+  const raw = String(machine || '');
+  if (!raw.startsWith(EMBEDDED_TRIAL_WIN_PREFIX)) return null;
+  const parts = raw.split('|');
+  if (parts.length < 5) return null;
+  if (parts[2] === 'm' && parts.length >= 6) {
+    return { first: parts[4], last: parts[5] };
+  }
+  if (parts.length >= 5) {
+    return { first: parts[3], last: parts[4] };
+  }
+  return null;
+}
+
+async function fetchEmbeddedTrialWindowForDevice(env, productId, dkey) {
+  const prefix = embeddedTrialWindowDevicePrefix(productId, dkey);
+  const row = await env.DB.prepare(
+    'SELECT machine FROM machine_trials WHERE machine LIKE ? LIMIT 1',
+  ).bind(prefix + '%').first();
+  return row ? parseEmbeddedTrialWindowMachineKey(row.machine) : null;
+}
+
+async function fetchEmbeddedTrialWindowForMachine(env, productId, machineHash) {
+  if (!machineHash) return null;
+  const prefix = embeddedTrialWindowMachinePrefix(productId, machineHash);
+  const row = await env.DB.prepare(
+    'SELECT machine FROM machine_trials WHERE machine LIKE ? LIMIT 1',
+  ).bind(prefix + '%').first();
+  return row ? parseEmbeddedTrialWindowMachineKey(row.machine) : null;
+}
+
+/** Immutable first trial window for device+product (survives paid/permanent upgrades). */
+async function persistTrialWindowMarker(env, productId, dkey, machineHash, first, last, requestId, t) {
+  const firstIso = String(first || '').trim();
+  const lastIso = String(last || '').trim();
+  if (!firstIso || !lastIso || !dkey) return;
+  const devKey = embeddedTrialWindowDeviceKey(productId, dkey, firstIso, lastIso);
+  await env.DB.prepare(
+    'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
+  ).bind(devKey, requestId, t).run();
+  if (machineHash) {
+    const machKey = embeddedTrialWindowMachineKey(productId, machineHash, firstIso, lastIso);
+    await env.DB.prepare(
+      'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
+    ).bind(machKey, requestId, t).run();
+  }
+}
+
+async function migrateEmbeddedTrialMarkers(env) {
+  const rows = await env.DB.prepare(
+    `SELECT device_key, product, id, licence_expiry, machine, updated_at FROM licence_requests
+     WHERE status IN ('issued', 'delivered')
+       AND (licence_tier = 'trial' OR kind = 'trial')`,
+  ).bind().all();
+  for (const row of rows.results || []) {
+    const last = String(row.licence_expiry || '').trim();
+    const dkey = String(row.device_key || '').trim();
+    if (!last || !dkey) continue;
+    const inclusive = trialInclusiveDays(env);
+    const first = shiftCalendarDays(last, -(inclusive - 1));
+    const product = String(row.product || 'trip-orders').trim() || 'trip-orders';
+    const mh = normalizeMachineHash(row.machine);
+    await persistTrialWindowMarker(
+      env, product, dkey, mh, first, last, row.id, row.updated_at || now(),
+    );
+  }
+  const custs = await env.DB.prepare(
+    `SELECT device, product, first_day, last_day FROM customers
+     WHERE kind = 'trial' OR licence_tier = 'trial'`,
+  ).bind().all();
+  for (const c of custs.results || []) {
+    const first = String(c.first_day || '').trim();
+    const last = String(c.last_day || '').trim();
+    if (!first || !last) continue;
+    let dkey;
+    try {
+      dkey = deviceKey(c.device);
+    } catch {
+      continue;
+    }
+    const product = String(c.product || 'trip-orders').trim() || 'trip-orders';
+    const requestId = offlineRequestId(product, dkey);
+    await persistTrialWindowMarker(env, product, dkey, null, first, last, requestId, now());
+  }
+}
+
 /** Backfill d:/h: locks from pre-prefix machine_trials rows (upgrade-safe). */
 export async function migrateLegacyTrialLocks(env) {
+  await migrateEmbeddedTrialMarkers(env);
   const rows = await env.DB.prepare(
     `SELECT machine, request_id, at FROM machine_trials
      WHERE machine NOT LIKE 'd:%' AND machine NOT LIKE 'h:%'
        AND machine NOT LIKE 'od:%' AND machine NOT LIKE 'pd:%' AND machine NOT LIKE 'ph:%'
-       AND machine NOT LIKE 'offline:%'`,
+       AND machine NOT LIKE 'offline:%'
+       AND machine NOT LIKE 'etw|%'`,
   ).bind().all();
   for (const row of rows.results || []) {
     const prefixed = deviceLockKey(row.machine);
@@ -312,13 +422,16 @@ export function productTrialMachineLocks(productId, machineHash) {
   return [onlineMachineLockKey(productId, machineHash)];
 }
 
-/** True when a machine_trials row blocks a new trial (paid/permanent locks do not). */
+/** True when a machine_trials row blocks a new trial (paid/permanent-only locks do not). */
 export async function trialLockRequestBlocksTrial(env, requestId) {
   if (!requestId) return false;
   const req = await env.DB.prepare(
-    'SELECT licence_tier, kind, status FROM licence_requests WHERE id = ?',
+    'SELECT licence_tier, kind, status, device_key, product FROM licence_requests WHERE id = ?',
   ).bind(requestId).first();
   if (!req) return true;
+  const dkey = String(req.device_key || '').trim();
+  const product = String(req.product || 'trip-orders').trim() || 'trip-orders';
+  if (dkey && (await fetchEmbeddedTrialWindowForDevice(env, product, dkey))) return true;
   const tier = String(req.licence_tier || '').trim().toLowerCase();
   if (tier === 'paid' || tier === 'permanent') return false;
   if (tier === 'trial') return true;
@@ -341,6 +454,8 @@ async function anyTrialLockUsed(env, lockIds) {
 
 export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, machineHash = null) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await fetchEmbeddedTrialWindowForDevice(env, product, deviceKeyNorm)) return true;
+  if (machineHash && (await fetchEmbeddedTrialWindowForMachine(env, product, machineHash))) return true;
   if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
   if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   if (product !== 'trip-orders') return false;
@@ -356,6 +471,8 @@ export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, 
 /** Online path: refuse when this product's trial lock was used on any channel. */
 export async function trialUsedOnline(env, productId, deviceKeyNorm, machineHash) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  if (await fetchEmbeddedTrialWindowForDevice(env, product, deviceKeyNorm)) return true;
+  if (machineHash && (await fetchEmbeddedTrialWindowForMachine(env, product, machineHash))) return true;
   if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
   if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   return false;
@@ -483,13 +600,32 @@ export function termFromRow(row) {
   const tier = String(row.licence_tier || row.kind || '').trim().toLowerCase();
   if (!tier) return null;
   const paidLike = tier === 'paid' || tier === 'monthly';
+  if (tier === 'trial') {
+    const until = String(row.licence_expiry ?? row.last_day ?? '').trim();
+    return { tier: 'trial', until };
+  }
   const until = paidLike ? String(row.licence_expiry ?? row.last_day ?? '').trim() : '';
   return { tier: tier === 'monthly' ? 'paid' : tier, until };
 }
 
-export function pickStrongerTerm(a, b) {
+function isActiveTrialTerm(term, env) {
+  if (term?.tier !== 'trial') return false;
+  const until = String(term.until || '').trim();
+  if (!until) return true;
+  return !trialWindowEnded(until, env);
+}
+
+export function pickStrongerTerm(a, b, env = null) {
   if (!a) return b;
   if (!b) return a;
+  if (env) {
+    const aTrial = isActiveTrialTerm(a, env);
+    const bTrial = isActiveTrialTerm(b, env);
+    const aPaid = a.tier === 'paid' && isActiveStrongTerm(a, env);
+    const bPaid = b.tier === 'paid' && isActiveStrongTerm(b, env);
+    if (aTrial && b.tier === 'paid' && !bPaid) return a;
+    if (bTrial && a.tier === 'paid' && !aPaid) return b;
+  }
   const cur = grantStrengthFromRow({ licence_tier: a.tier, licence_expiry: a.until });
   const other = grantStrengthFromRow({ licence_tier: b.tier, licence_expiry: b.until });
   if (other.level > cur.level) return b;
@@ -508,14 +644,14 @@ export async function currentTerm(env, productId, device) {
   const cust = await env.DB.prepare(
     'SELECT licence_tier, licence_expiry, kind, last_day FROM customers WHERE device = ? AND product = ?',
   ).bind(device, product).first();
-  best = pickStrongerTerm(best, termFromRow(cust));
+  best = pickStrongerTerm(best, termFromRow(cust), env);
 
   const rows = await env.DB.prepare(
     `SELECT licence_tier, licence_expiry, kind FROM licence_requests
      WHERE device_key = ? AND status IN ('issued', 'delivered') AND (product = ? OR id = ?)`,
   ).bind(dkey, product, offlineId).all();
   for (const row of rows.results || []) {
-    best = pickStrongerTerm(best, termFromRow(row));
+    best = pickStrongerTerm(best, termFromRow(row), env);
   }
   return best;
 }
@@ -554,7 +690,9 @@ export function assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env =
 export function mayIssueTrialOverDelivered(grant, knownTerm, env) {
   if (grant?.grant !== 'trial') return false;
   if (isActiveStrongTerm(knownTerm, env)) return false;
+  if (isActiveTrialTerm(knownTerm, env)) return false;
   const tier = String(knownTerm?.tier || '').trim().toLowerCase();
+  if (tier === 'trial') return false;
   return tier === 'paid' || tier === 'permanent';
 }
 
@@ -603,6 +741,29 @@ export async function originalTrialWindow(env, productId, device) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
   const knownTerm = await currentTerm(env, productId, device);
   const strongActive = isActiveStrongTerm(knownTerm, env);
+  if (strongActive) return null;
+
+  const dkey = deviceKey(device);
+
+  const embedded = await fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+  if (embedded) return embedded;
+
+  const rows = await env.DB.prepare(
+    `SELECT licence_expiry, licence_tier, kind FROM licence_requests
+     WHERE device_key = ? AND product = ?
+       AND status IN ('issued', 'delivered')
+     ORDER BY updated_at DESC`,
+  ).bind(dkey, product).all();
+  for (const row of rows.results || []) {
+    const licTier = String(row.licence_tier ?? '').trim().toLowerCase();
+    const kind = String(row.kind ?? '').trim().toLowerCase();
+    if (licTier !== 'trial' && kind !== 'trial') continue;
+    const last = String(row.licence_expiry || '').trim();
+    if (!last) continue;
+    const inclusive = trialInclusiveDays(env);
+    const first = shiftCalendarDays(last, -(inclusive - 1));
+    return { first, last };
+  }
 
   const cust = await env.DB.prepare(
     'SELECT first_day, last_day, licence_expiry, kind, licence_tier FROM customers WHERE device = ? AND product = ?',
@@ -612,13 +773,6 @@ export async function originalTrialWindow(env, productId, device) {
     const last = String(cust.last_day || cust.licence_expiry || '').trim();
     if (first && last) return { first, last };
   }
-  const dkey = deviceKey(device);
-  const rows = await env.DB.prepare(
-    `SELECT licence_expiry, licence_tier, kind FROM licence_requests
-     WHERE device_key = ? AND product = ?
-       AND status IN ('issued', 'delivered')
-     ORDER BY updated_at DESC`,
-  ).bind(dkey, product).all();
   for (const row of rows.results || []) {
     if (!rowIsTrialSource(row, strongActive)) continue;
     const last = String(row.licence_expiry || '').trim();
@@ -649,8 +803,7 @@ async function trialSignOptions(env, grant, reissue, productId, device) {
   const win = await originalTrialWindow(env, productId, device);
   if (win) {
     if (trialWindowEnded(win.last, env)) throw new Error('trial_expired');
-    if (reissue) return { trialFirstDay: win.first, trialLastDay: win.last };
-    return {};
+    return { trialFirstDay: win.first, trialLastDay: win.last };
   }
   if (reissue) {
     const fresh = freshTrialWindowFromToday(env);
@@ -663,6 +816,16 @@ async function latestIssuedForDeviceProduct(env, productId, dkey) {
   return env.DB.prepare(
     "SELECT * FROM licence_requests WHERE product = ? AND device_key = ? AND status IN ('issued', 'delivered') ORDER BY updated_at DESC LIMIT 1",
   ).bind(String(productId || 'trip-orders').trim() || 'trip-orders', dkey).first();
+}
+
+async function issuedTrialRowForDevice(env, productId, dkey) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  return env.DB.prepare(
+    `SELECT * FROM licence_requests WHERE device_key = ? AND product = ?
+       AND status = 'issued' AND code IS NOT NULL
+       AND (licence_tier = 'trial' OR kind = 'trial')
+     ORDER BY updated_at DESC LIMIT 1`,
+  ).bind(dkey, product).first();
 }
 
 function customerUpsertStmts(env, shop, signed, meta, t, requestId) {
@@ -884,12 +1047,16 @@ async function notifyOwner(env, body) {
 
 function signedFromRow(row, signed = null) {
   if (signed) return signed;
+  const tier = String(row.licence_tier || row.kind || 'trial').trim().toLowerCase();
+  let edition = 'trial';
+  if (tier === 'paid' || tier === 'monthly') edition = 'standard';
+  else if (tier === 'permanent') edition = 'perpetual';
   return {
     code: row.code,
     serial: '',
     first_day: '',
     last_day: '',
-    edition: 'trial',
+    edition,
     product: row.product,
     device: row.device,
   };
@@ -930,8 +1097,17 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, reiss
   const machineLock = machineHash ? onlineMachineLockKey(productId, machineHash) : null;
 
   const stmts = [];
-  if (isTrialGrant && (replace || reissue)) {
+  if (isTrialGrant && replace) {
     await upsertOnlineLocks(env, requestId, productId, dkey, machineHash, t);
+  } else if (isTrialGrant && reissue) {
+    const devWin = await fetchEmbeddedTrialWindowForDevice(env, productId, dkey);
+    const machWin = machineHash
+      ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
+      : null;
+    const prior = devWin || machWin;
+    if (prior && !trialWindowEnded(prior.last, env)) {
+      await upsertOnlineLocks(env, requestId, productId, dkey, machineHash, t);
+    }
   } else if (isTrialGrant || !replace) {
     for (const lock of onlineLockKeys(productId, dkey, machineHash)) {
       stmts.push(
@@ -985,6 +1161,11 @@ async function claimAndIssue(env, requestId, dkey, machineHash, signed, t, reiss
       'DELETE FROM machine_trials WHERE request_id = ? AND NOT EXISTS (SELECT 1 FROM licence_requests WHERE id = ? AND code IS NOT NULL)',
     ).bind(requestId, requestId).run();
     return { ok: false };
+  }
+  if (isTrialGrant && signed?.first_day && signed?.last_day) {
+    await persistTrialWindowMarker(
+      env, productId, dkey, machineHash, signed.first_day, signed.last_day, requestId, t,
+    );
   }
   return { ok: true, signed };
 }
@@ -1069,10 +1250,23 @@ export async function approveRequest(env, requestId, keys, options = {}) {
   if (grant.grant === 'trial' && !reissue && (await trialUsedOnline(env, productId, dkey, machineHash))) {
     const owns = await locksOwnedByRequest(env, productId, dkey, machineHash, requestId);
     if (!owns) {
+      const machWin = machineHash
+        ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
+        : null;
+      if (machWin && trialWindowEnded(machWin.last, env)) throw new Error('trial_expired');
       assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
       await refuseRequest(env, requestId, 'already_used');
       return null;
     }
+  }
+
+  if (grant.grant === 'trial' && reissue) {
+    const devWin = await fetchEmbeddedTrialWindowForDevice(env, productId, dkey);
+    const machWin = machineHash
+      ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
+      : null;
+    const prior = devWin || machWin;
+    if (prior && trialWindowEnded(prior.last, env)) throw new Error('trial_expired');
   }
 
   const t = now();
@@ -1131,8 +1325,14 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     } else if (grant.grant === 'trial') {
       const win = await originalTrialWindow(env, productId, device);
       if (win && trialWindowEnded(win.last, env)) throw new Error('trial_expired');
-      assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
-      throw new Error('reissue_confirm');
+      if (win && !trialWindowEnded(win.last, env)) {
+        replacingIssued = true;
+        const claim = await trialLockRow(env, lock);
+        ownsLock = Boolean(claim && claim.request_id === requestId);
+      } else {
+        assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
+        throw new Error('reissue_confirm');
+      }
     } else {
       assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
       throw new Error('reissue_confirm');
@@ -1161,13 +1361,27 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   if (grant.grant === 'trial' && !reissue && (await trialUsedForOfflineProduct(env, productId, dkey))) {
     const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
-    if (row?.code && row.status === 'issued') {
+    if (row?.code && row.status === 'issued' && storedGrantMatches(row, grant, productId)) {
       await ensureCustomerRecord(env, row, signedFromRow(row), now());
       return signedFromRow(row);
     }
     if (claim?.request_id === requestId) ownsLock = true;
     else throw new Error('already_used');
   }
+  if (grant.grant === 'trial' && !reissue) {
+    const issuedTrial = await issuedTrialRowForDevice(env, productId, dkey);
+    if (issuedTrial && storedGrantMatches(issuedTrial, grant, productId)) {
+      const win = await originalTrialWindow(env, productId, device);
+      const base = signedFromRow(issuedTrial);
+      if (win) {
+        base.first_day = win.first;
+        base.last_day = win.last;
+      }
+      await ensureCustomerRecord(env, issuedTrial, base, now());
+      return base;
+    }
+  }
+
   const t = now();
   const grantRow = { product: productId, device };
   let signed;
@@ -1316,15 +1530,18 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   } catch (e) {
     return await finishAfterBatchFailure(e);
   }
+  if (grant.grant === 'trial' && signed?.first_day && signed?.last_day) {
+    await persistTrialWindowMarker(env, productId, dkey, null, signed.first_day, signed.last_day, requestId, t);
+  }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (row?.code && row.status === 'issued') {
     await ensureCustomerRecord(env, row, signed, t);
-    return signedFromRow(row);
+    return signed;
   }
   const again = await waitForIssuedOffline(env, requestId);
   if (again) {
-    await ensureCustomerRecord(env, again, signedFromRow(again), t);
-    return signedFromRow(again);
+    await ensureCustomerRecord(env, again, signed, t);
+    return signed;
   }
   throw new Error('already_used');
 }

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Licence hub trial window round 4 (2026-10-15)
+
+**What/why:** Review round 3 on `fix/trial-after-expired-paid`: gather earliest `etw|` across device key, machine `m|` key, and peer device codes on the same machine hash; offline markers persist machine hash when known; `unseen_device_confirm` + owner Arabic confirm for offline trial on never-seen codes; block trials when another code on the machine has active paid/permanent (peer rows and active `d:`/`h:` locks); offline shares active machine trial window without minting fresh dates.
+**Checks:** `cd licence-hub && npm test` (165 pass).
+**Next:** Owner review PR; deploy hub worker after merge.
+
 ## Licence hub trial window round 3 (2026-10-14)
 
 **What/why:** Final review on `fix/trial-after-expired-paid`: one trial window per machine hash (earliest `etw|…|m|…` wins, no second dates on the same machine); `originalTrialWindow`/`trialSignOptions`/reissue use that canonical window; online approve transfers `d:`/`h:` locks from expired paid rows instead of `already_used`; lock upsert only on reissue/replace so concurrent first mints cannot steal each other.

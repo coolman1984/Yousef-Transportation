@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   showIssuedCode, readGrant, tierPickerHtml, presetPaidUntil, mountOfflineTier, approveAfterReissueConfirm,
   offlineAfterBlockedError, offlineFlagsAfterDowngradeConfirmed, ownerIssueFlags, defaultTierSelection, customerTierLabelAr, downgradeConfirmMessageAr, productLabelAr,
+  unseenDeviceConfirmMessageAr,
   setOwnerHubCalendarTz,
 } from '../public/owner/app.js';
 
@@ -28,9 +29,19 @@ test('approveAfterReissueConfirm aborts when owner cancels reissue confirm', () 
 });
 
 test('offlineAfterBlockedError maps reissue and already_used to reissue retry', () => {
-  assert.deepEqual(offlineAfterBlockedError('reissue_confirm', false), { abort: true, reissue: false });
-  assert.deepEqual(offlineAfterBlockedError('already_used', true), { abort: false, reissue: true });
-  assert.deepEqual(offlineAfterBlockedError('downgrade', true), { abort: false, reissue: false });
+  assert.deepEqual(offlineAfterBlockedError('reissue_confirm', false), { abort: true, reissue: false, confirmUnseenDevice: false });
+  assert.deepEqual(offlineAfterBlockedError('already_used', true), { abort: false, reissue: true, confirmUnseenDevice: false });
+  assert.deepEqual(offlineAfterBlockedError('downgrade', true), { abort: false, reissue: false, confirmUnseenDevice: false });
+});
+
+test('offlineAfterBlockedError maps unseen_device_confirm to confirm flag retry', () => {
+  assert.deepEqual(offlineAfterBlockedError('unseen_device_confirm', false), { abort: true, reissue: false, confirmUnseenDevice: false });
+  assert.deepEqual(offlineAfterBlockedError('unseen_device_confirm', true), { abort: false, reissue: false, confirmUnseenDevice: true });
+  assert.match(unseenDeviceConfirmMessageAr(), /لم يُسجَّل/);
+});
+
+test('ownerIssueFlags sends confirm_unseen_device when requested', () => {
+  assert.deepEqual(ownerIssueFlags({ confirmUnseenDevice: true }), { confirm_unseen_device: true });
 });
 
 test('offlineFlagsAfterDowngradeConfirmed sets reissue for delivered replacement', () => {

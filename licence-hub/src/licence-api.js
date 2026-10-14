@@ -336,17 +336,110 @@ async function resolveMachineHashForDevice(env, productId, dkey) {
      WHERE device_key = ? AND product = ? AND machine IS NOT NULL AND machine != ''
      ORDER BY updated_at DESC LIMIT 1`,
   ).bind(dkey, product).first();
-  return normalizeMachineHash(row?.machine);
+  const direct = normalizeMachineHash(row?.machine);
+  if (direct) return direct;
+  const etwRow = await env.DB.prepare(
+    'SELECT request_id FROM machine_trials WHERE machine LIKE ? LIMIT 1',
+  ).bind(`${embeddedTrialWindowDevicePrefix(product, dkey)}%`).first();
+  if (!etwRow?.request_id) return null;
+  const owner = await env.DB.prepare(
+    'SELECT machine FROM licence_requests WHERE id = ?',
+  ).bind(etwRow.request_id).first();
+  return normalizeMachineHash(owner?.machine);
+}
+
+function earliestTrialWindowPair(a, b) {
+  if (!a?.first || !a?.last) return b;
+  if (!b?.first || !b?.last) return a;
+  return a.first <= b.first ? a : b;
+}
+
+async function listPeerDeviceKeysOnMachine(env, productId, machineHash, excludeDkey = null) {
+  if (!machineHash) return [];
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  const rows = await env.DB.prepare(
+    `SELECT DISTINCT device_key FROM licence_requests
+     WHERE product = ? AND machine = ? AND device_key IS NOT NULL AND device_key != ''`,
+  ).bind(product, machineHash).all();
+  const keys = [];
+  for (const row of rows.results || []) {
+    const dk = String(row.device_key || '').trim();
+    if (!dk || dk === excludeDkey || keys.includes(dk)) continue;
+    keys.push(dk);
+  }
+  return keys;
+}
+
+/** Earliest etw window across this device, machine m| key, and peer device keys on the same machine. */
+async function earliestEmbeddedTrialWindow(env, productId, dkey, machineHash) {
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  let best = await fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+  if (machineHash) {
+    best = earliestTrialWindowPair(best, await fetchEmbeddedTrialWindowForMachine(env, product, machineHash));
+    const peers = await listPeerDeviceKeysOnMachine(env, product, machineHash, dkey);
+    for (const peerDkey of peers) {
+      best = earliestTrialWindowPair(best, await fetchEmbeddedTrialWindowForDevice(env, product, peerDkey));
+    }
+  }
+  return best;
 }
 
 /** Earliest stored etw window for this product on machine (any device) then on device. */
 async function canonicalTrialWindow(env, productId, dkey, machineHash) {
+  return earliestEmbeddedTrialWindow(env, productId, dkey, machineHash);
+}
+
+async function deviceSeenForProduct(env, productId, device, dkey) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
-  if (machineHash) {
-    const mach = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
-    if (mach) return mach;
+  const req = await env.DB.prepare(
+    'SELECT id FROM licence_requests WHERE product = ? AND device_key = ? LIMIT 1',
+  ).bind(product, dkey).first();
+  if (req) return true;
+  const cust = await env.DB.prepare(
+    'SELECT id FROM customers WHERE product = ? AND device = ? LIMIT 1',
+  ).bind(product, device).first();
+  return Boolean(cust);
+}
+
+/** Active paid/permanent on another device code sharing this machine hash (requests or customers). */
+async function activeStrongTermOnMachinePeers(env, productId, machineHash, excludeDkey = null) {
+  if (!machineHash) return null;
+  const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+  let best = null;
+  const rows = await env.DB.prepare(
+    `SELECT licence_tier, licence_expiry, kind, device_key, device FROM licence_requests
+     WHERE product = ? AND machine = ? AND status IN ('issued', 'delivered')`,
+  ).bind(product, machineHash).all();
+  const devicesChecked = new Set();
+  for (const row of rows.results || []) {
+    const dk = String(row.device_key || '').trim();
+    if (excludeDkey && dk === excludeDkey) continue;
+    const term = termFromRow(row);
+    if (isActiveStrongTerm(term, env)) best = pickStrongerTerm(best, term, env);
+    const device = String(row.device || '').trim();
+    if (device) devicesChecked.add(device);
   }
-  return fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+  for (const device of devicesChecked) {
+    let dk;
+    try {
+      dk = deviceKey(device);
+    } catch {
+      continue;
+    }
+    if (excludeDkey && dk === excludeDkey) continue;
+    const cust = await env.DB.prepare(
+      'SELECT licence_tier, licence_expiry, kind, last_day FROM customers WHERE device = ? AND product = ?',
+    ).bind(device, product).first();
+    const term = termFromRow(cust);
+    if (isActiveStrongTerm(term, env)) best = pickStrongerTerm(best, term, env);
+  }
+  return best;
+}
+
+async function assertTrialMachineEligible(env, productId, dkey, machineHash, grant) {
+  if (grant.grant !== 'trial') return;
+  const peerTerm = await activeStrongTermOnMachinePeers(env, productId, machineHash, dkey);
+  if (peerTerm) throw downgradeForbiddenError(peerTerm);
 }
 
 function isExpiredPaidLicenceRequest(req, env) {
@@ -497,10 +590,14 @@ export async function trialLockRequestBlocksTrial(env, requestId) {
   const product = String(req.product || 'trip-orders').trim() || 'trip-orders';
   if (dkey && (await fetchEmbeddedTrialWindowForDevice(env, product, dkey))) return true;
   const tier = String(req.licence_tier || '').trim().toLowerCase();
-  if (tier === 'paid' || tier === 'permanent') return false;
+  if (tier === 'paid' || tier === 'permanent') {
+    return isActiveStrongTerm(termFromRow(req), env);
+  }
   if (tier === 'trial') return true;
   const kind = String(req.kind ?? req.licence_tier ?? '').trim().toLowerCase();
-  if (kind === 'monthly' || kind === 'permanent' || kind === 'paid') return false;
+  if (kind === 'monthly' || kind === 'permanent' || kind === 'paid') {
+    return isActiveStrongTerm(termFromRow(req), env);
+  }
   if (kind === 'trial') return true;
   if (tier === '' && (req.status === 'pending' || req.status === 'approved')) {
     return kind !== 'monthly' && kind !== 'permanent';
@@ -518,8 +615,7 @@ async function anyTrialLockUsed(env, lockIds) {
 
 export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, machineHash = null) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
-  if (await fetchEmbeddedTrialWindowForDevice(env, product, deviceKeyNorm)) return true;
-  if (machineHash && (await fetchEmbeddedTrialWindowForMachine(env, product, machineHash))) return true;
+  if (await earliestEmbeddedTrialWindow(env, product, deviceKeyNorm, machineHash)) return true;
   if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
   if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   if (product !== 'trip-orders') return false;
@@ -535,8 +631,7 @@ export async function trialUsedForOfflineProduct(env, productId, deviceKeyNorm, 
 /** Online path: refuse when this product's trial lock was used on any channel. */
 export async function trialUsedOnline(env, productId, deviceKeyNorm, machineHash) {
   const product = String(productId || 'trip-orders').trim() || 'trip-orders';
-  if (await fetchEmbeddedTrialWindowForDevice(env, product, deviceKeyNorm)) return true;
-  if (machineHash && (await fetchEmbeddedTrialWindowForMachine(env, product, machineHash))) return true;
+  if (await earliestEmbeddedTrialWindow(env, product, deviceKeyNorm, machineHash)) return true;
   if (await anyTrialLockUsed(env, productTrialDeviceLocks(product, deviceKeyNorm))) return true;
   if (await anyTrialLockUsed(env, productTrialMachineLocks(product, machineHash))) return true;
   return false;
@@ -742,7 +837,8 @@ export function downgradeError(term) {
 export function resolveIssueFlags(options = {}) {
   const reissue = options.reissue === true || options.force === true;
   const confirmDowngrade = options.confirm_downgrade === true;
-  return { reissue, confirmDowngrade };
+  const confirmUnseenDevice = options.confirm_unseen_device === true;
+  return { reissue, confirmDowngrade, confirmUnseenDevice };
 }
 
 export function assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env = null) {
@@ -810,12 +906,7 @@ export async function originalTrialWindow(env, productId, device, machineHashOpt
   const dkey = deviceKey(device);
   const machineHash = machineHashOpt || await resolveMachineHashForDevice(env, product, dkey);
 
-  if (machineHash) {
-    const machEmbedded = await fetchEmbeddedTrialWindowForMachine(env, product, machineHash);
-    if (machEmbedded) return machEmbedded;
-  }
-
-  const embedded = await fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+  const embedded = await earliestEmbeddedTrialWindow(env, product, dkey, machineHash);
   if (embedded) return embedded;
 
   const rows = await env.DB.prepare(
@@ -1322,12 +1413,14 @@ export async function approveRequest(env, requestId, keys, options = {}) {
     assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
   }
 
+  if (grant.grant === 'trial') {
+    await assertTrialMachineEligible(env, productId, dkey, machineHash, grant);
+  }
+
   if (grant.grant === 'trial' && !reissue && (await trialUsedOnline(env, productId, dkey, machineHash))) {
     const owns = await locksOwnedByRequest(env, productId, dkey, machineHash, requestId);
     if (!owns) {
-      const machWin = machineHash
-        ? await fetchEmbeddedTrialWindowForMachine(env, productId, machineHash)
-        : null;
+      const machWin = await earliestEmbeddedTrialWindow(env, productId, dkey, machineHash);
       if (machWin && trialWindowEnded(machWin.last, env)) throw new Error('trial_expired');
       assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
       await refuseRequest(env, requestId, 'already_used');
@@ -1372,7 +1465,7 @@ export async function refuseRequest(env, requestId, reason = 'refused') {
 }
 
 async function issueOfflineCustomerInner(env, keys, device, shop, productId, options = {}) {
-  const { reissue, confirmDowngrade } = resolveIssueFlags(options);
+  let { reissue, confirmDowngrade, confirmUnseenDevice } = resolveIssueFlags(options);
   let grant;
   try {
     grant = parseOwnerGrant(options, env);
@@ -1381,10 +1474,29 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     throw new Error('bad_grant');
   }
   const dkey = deviceKey(device);
+  const machineHash = await resolveMachineHashForDevice(env, productId, dkey);
   const requestId = offlineRequestId(productId, dkey);
   const lock = offlineDeviceLockKey(productId, dkey);
   const knownTerm = await currentTerm(env, productId, device);
   assertTrialNotOverStrongTerm(env, knownTerm, grant);
+  if (grant.grant === 'trial') {
+    await assertTrialMachineEligible(env, productId, dkey, machineHash, grant);
+    const skipUnseenConfirm = env.OWNER_OFFLINE_SKIP_UNSEEN_CONFIRM === true
+      || env.OWNER_OFFLINE_SKIP_UNSEEN_CONFIRM === '1';
+    if (!skipUnseenConfirm
+      && !(await deviceSeenForProduct(env, productId, device, dkey))
+      && !confirmUnseenDevice) {
+      throw new Error('unseen_device_confirm');
+    }
+    if (!reissue) {
+      const product = String(productId || 'trip-orders').trim() || 'trip-orders';
+      const devEmb = await fetchEmbeddedTrialWindowForDevice(env, product, dkey);
+      const collective = await earliestEmbeddedTrialWindow(env, product, dkey, machineHash);
+      if (!devEmb && collective && !trialWindowEnded(collective.last, env)) {
+        reissue = true;
+      }
+    }
+  }
   const existing = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   let ownsLock = false;
   let replacingIssued = false;
@@ -1394,7 +1506,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
       const claim = await trialLockRow(env, lock);
       ownsLock = Boolean(claim && claim.request_id === requestId);
     } else if (grant.grant === 'trial') {
-      const win = await originalTrialWindow(env, productId, device);
+      const win = await originalTrialWindow(env, productId, device, machineHash);
       if (win && trialWindowEnded(win.last, env)) throw new Error('trial_expired');
       if (win && !trialWindowEnded(win.last, env)) {
         replacingIssued = true;
@@ -1429,7 +1541,11 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   } else if (!(existing?.status === 'delivered' && mayIssueTrialOverDelivered(grant, knownTerm, env))) {
     assertDowngradeAllowed(knownTerm, grant, confirmDowngrade, env);
   }
-  if (grant.grant === 'trial' && !reissue && (await trialUsedForOfflineProduct(env, productId, dkey))) {
+  if (grant.grant === 'trial' && reissue) {
+    const prior = await canonicalTrialWindow(env, productId, dkey, machineHash);
+    if (prior && trialWindowEnded(prior.last, env)) throw new Error('trial_expired');
+  }
+  if (grant.grant === 'trial' && !reissue && (await trialUsedForOfflineProduct(env, productId, dkey, machineHash))) {
     const claim = await trialLockRow(env, lock);
     const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
     if (row?.code && row.status === 'issued' && storedGrantMatches(row, grant, productId)) {
@@ -1442,7 +1558,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   if (grant.grant === 'trial' && !reissue) {
     const issuedTrial = await issuedTrialRowForDevice(env, productId, dkey);
     if (issuedTrial && storedGrantMatches(issuedTrial, grant, productId)) {
-      const win = await originalTrialWindow(env, productId, device);
+      const win = await originalTrialWindow(env, productId, device, machineHash);
       const base = signedFromRow(issuedTrial);
       if (win) {
         base.first_day = win.first;
@@ -1457,7 +1573,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
   const grantRow = { product: productId, device };
   let signed;
   try {
-    const signOpts = await trialSignOptions(env, grant, reissue, productId, device, null);
+    const signOpts = await trialSignOptions(env, grant, reissue, productId, device, machineHash);
     signed = await signGrant(env, keys, grant, grantRow, signOpts);
   } catch (e) {
     if (e?.message === 'no_signing_key') throw e;
@@ -1602,7 +1718,7 @@ async function issueOfflineCustomerInner(env, keys, device, shop, productId, opt
     return await finishAfterBatchFailure(e);
   }
   if (grant.grant === 'trial' && signed?.first_day && signed?.last_day) {
-    await persistTrialWindowMarker(env, productId, dkey, null, signed.first_day, signed.last_day, requestId, t);
+    await persistTrialWindowMarker(env, productId, dkey, machineHash, signed.first_day, signed.last_day, requestId, t);
   }
   const row = await env.DB.prepare('SELECT * FROM licence_requests WHERE id = ?').bind(requestId).first();
   if (row?.code && row.status === 'issued') {

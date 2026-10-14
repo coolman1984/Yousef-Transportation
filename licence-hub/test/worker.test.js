@@ -232,6 +232,7 @@ test('owner offline API signs with the product sent in the body', async () => {
       shop: 'متجر',
       product: 'al-store',
       grant: 'trial',
+      confirm_unseen_device: true,
     },
   });
   assert.equal(res.status, 200);

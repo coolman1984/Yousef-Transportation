@@ -190,6 +190,7 @@ async function ownerApi(request, env, url, session) {
         force: body.force === true,
         reissue: body.reissue === true,
         confirm_downgrade: body.confirm_downgrade === true,
+        confirm_unseen_device: body.confirm_unseen_device === true,
         grant: body.grant,
         preset: body.preset,
         paid_until: body.paid_until,
@@ -211,6 +212,7 @@ async function ownerApi(request, env, url, session) {
       }
       if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
       if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
+      if (e?.message === 'unseen_device_confirm') return json({ error: 'unseen_device_confirm' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }

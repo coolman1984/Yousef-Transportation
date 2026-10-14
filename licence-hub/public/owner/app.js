@@ -40,11 +40,16 @@ let productLabels = {};
 let hubDefaultProduct = '';
 
 /** Build owner issue POST flags (legacy force is not sent; server maps it only when clients still send it). */
-export function ownerIssueFlags({ reissue = false, confirmDowngrade = false } = {}) {
+export function ownerIssueFlags({ reissue = false, confirmDowngrade = false, confirmUnseenDevice = false } = {}) {
   const flags = {};
   if (reissue) flags.reissue = true;
   if (confirmDowngrade) flags.confirm_downgrade = true;
+  if (confirmUnseenDevice) flags.confirm_unseen_device = true;
   return flags;
+}
+
+export function unseenDeviceConfirmMessageAr() {
+  return 'كود الجهاز لم يُسجَّل من قبل في النظام. هل تؤكد إصدار تجربة لهذا الكود؟';
 }
 
 /** Reissue confirm: cancel must not POST approve; confirmed reissue sends reissue only (no downgrade skip). */
@@ -56,9 +61,12 @@ export function approveAfterReissueConfirm(hasCustomer, userConfirmed) {
 
 /** Offline blocked responses: confirmed retry posts with reissue (re-sign trial, no new window). */
 export function offlineAfterBlockedError(error, userConfirmed) {
-  if (error !== 'reissue_confirm' && error !== 'already_used') return { abort: false, reissue: false };
-  if (!userConfirmed) return { abort: true, reissue: false };
-  return { abort: false, reissue: true };
+  if (error !== 'reissue_confirm' && error !== 'already_used' && error !== 'unseen_device_confirm') {
+    return { abort: false, reissue: false, confirmUnseenDevice: false };
+  }
+  if (!userConfirmed) return { abort: true, reissue: false, confirmUnseenDevice: false };
+  if (error === 'unseen_device_confirm') return { abort: false, reissue: false, confirmUnseenDevice: true };
+  return { abort: false, reissue: true, confirmUnseenDevice: false };
 }
 
 /** After downgrade confirm on offline issue, replace delivered/issued rows (not only weaker grant). */
@@ -406,12 +414,13 @@ export function wireOffline(form, out, tierHost) {
     const grant = readGrant(tierHost || form.closest('.card') || document);
     let reissue = false;
     let confirmDowngrade = false;
+    let confirmUnseenDevice = false;
     const offlineBody = () => ({
       device,
       shop,
       product,
       csrf,
-      ...ownerIssueFlags({ reissue, confirmDowngrade }),
+      ...ownerIssueFlags({ reissue, confirmDowngrade, confirmUnseenDevice }),
       ...grant,
     });
     let data = await api('/offline', {
@@ -419,6 +428,16 @@ export function wireOffline(form, out, tierHost) {
       headers: headers(),
       body: JSON.stringify(offlineBody()),
     });
+    if (data && data.error === 'unseen_device_confirm') {
+      const retry = offlineAfterBlockedError(data.error, confirm(unseenDeviceConfirmMessageAr()));
+      if (retry.abort) return;
+      confirmUnseenDevice = retry.confirmUnseenDevice;
+      data = await api('/offline', {
+        method: 'POST',
+        headers: headers(),
+        body: JSON.stringify(offlineBody()),
+      });
+    }
     if (data && (data.error === 'reissue_confirm' || data.error === 'already_used')) {
       const confirmMsg = data.error === 'already_used'
         ? 'تجربة مستخدمة — إعادة إصدار نفس التجربة؟ (لن تُمدَّد المدة)'

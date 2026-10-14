@@ -1,7 +1,7 @@
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
   REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, defaultProduct, ownerProductsPayload,
-  licencePathname, currentTerm,
+  licencePathname, deviceKey, offlineRequestId, termFromRow, pickStrongerTerm,
 } from './licence-api.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -70,9 +70,35 @@ async function ownerApi(request, env, url, session) {
        FROM customers c
        ORDER BY c.created_at DESC LIMIT 200`,
     ).bind().all();
+    const customers = rows.results || [];
+    // D1 Free has a limit of 50 SQL queries per Worker invocation.
+    // Load grants for the selected devices in bounded batches, not twice per customer.
+    const deviceKeys = [...new Set(customers.map((c) => deviceKey(c.device)))];
+    const grantsByDevice = new Map();
+    const GRANT_BATCH = 40;
+    for (let offset = 0; offset < deviceKeys.length; offset += GRANT_BATCH) {
+      const batch = deviceKeys.slice(offset, offset + GRANT_BATCH);
+      const placeholders = batch.map(() => '?').join(', ');
+      const grants = await env.DB.prepare(
+        `SELECT id, product, device_key, licence_tier, licence_expiry, kind
+         FROM licence_requests WHERE status IN ('issued', 'delivered')
+         AND device_key IN (${placeholders})`,
+      ).bind(...batch).all();
+      for (const grant of grants.results || []) {
+        if (!grantsByDevice.has(grant.device_key)) grantsByDevice.set(grant.device_key, []);
+        grantsByDevice.get(grant.device_key).push(grant);
+      }
+    }
+
     const items = [];
-    for (const c of rows.results || []) {
-      const term = await currentTerm(env, c.product, c.device);
+    for (const c of customers) {
+      const dkey = deviceKey(c.device);
+      let term = termFromRow(c);
+      for (const grant of grantsByDevice.get(dkey) || []) {
+        // Preserve currentTerm semantics, including legacy offline grant ids.
+        if (grant.product !== c.product && grant.id !== offlineRequestId(c.product, dkey)) continue;
+        term = pickStrongerTerm(term, termFromRow(grant));
+      }
       const licenceTier = term?.tier || c.licence_tier || c.kind || '';
       const licenceExpiry = term?.until || c.licence_expiry || c.last_day || '';
       const lastDay = licenceExpiry || c.last_day || '';

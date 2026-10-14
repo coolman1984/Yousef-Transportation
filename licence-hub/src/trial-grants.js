@@ -86,13 +86,6 @@ function rowIsTrialLike(row) {
   return false;
 }
 
-/** True when this row is evidence of a past trial (including paid replace of a trial request). */
-function rowWasTrialSource(row) {
-  const kind = String(row?.kind ?? '').trim().toLowerCase();
-  if (kind === 'trial') return true;
-  return rowIsTrialLike(row);
-}
-
 function windowFromRequestRow(row, env) {
   if (!row || !rowIsTrialLike(row)) return null;
   const last = String(row.licence_expiry || '').trim();
@@ -103,40 +96,15 @@ function windowFromRequestRow(row, env) {
 }
 
 function windowFromRequestRowForBackfill(row, env) {
-  if (!row || !rowWasTrialSource(row)) return null;
-  const tz = hubCalendarTz(env);
-  const inclusive = trialInclusiveDays(env);
-  const candidates = [];
-  const kindTrial = String(row?.kind ?? '').trim().toLowerCase() === 'trial';
-  const trialLikeNow = rowIsTrialLike(row);
+  if (!row || !requestIsTrialGrantSource(row)) return null;
   const last = String(row.licence_expiry || '').trim();
-  if (trialLikeNow && last && isValidCalendarIso(last)) {
-    candidates.push({
-      first: shiftCalendarDays(last, -(inclusive - 1)),
-      last,
-      source: row.id || null,
-    });
-  } else if (kindTrial && last && isValidCalendarIso(last)) {
-    candidates.push({
-      first: shiftCalendarDays(last, -(inclusive - 1)),
-      last,
-      source: row.id || null,
-    });
-  }
-  const created = Number(row.created_at);
-  if (kindTrial && !trialLikeNow && Number.isFinite(created) && created > 0) {
-    const firstDay = calendarDateInTz(new Date(created * 1000), tz).iso;
-    const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
-    candidates.push({ first: firstDay, last: lastDay, source: row.id || null });
-  }
-  if (!candidates.length && trialLikeNow && Number.isFinite(created) && created > 0) {
-    const firstDay = calendarDateInTz(new Date(created * 1000), tz).iso;
-    const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
-    candidates.push({ first: firstDay, last: lastDay, source: row.id || null });
-  }
-  let best = null;
-  for (const c of candidates) best = pickEarlierWindow(best, c);
-  return best;
+  if (!last || !isValidCalendarIso(last)) return null;
+  const inclusive = trialInclusiveDays(env);
+  return {
+    first: shiftCalendarDays(last, -(inclusive - 1)),
+    last,
+    source: row.id || null,
+  };
 }
 
 function customerTrialLastDay(row) {
@@ -151,6 +119,9 @@ function windowFromCustomerRow(row) {
   if (!row) return null;
   const kind = String(row?.kind ?? '').trim().toLowerCase();
   const licTier = String(row?.licence_tier ?? '').trim().toLowerCase();
+  if (licTier === 'paid' || licTier === 'permanent' || kind === 'paid' || kind === 'permanent') {
+    return null;
+  }
   const trialCustomer = kind === 'trial' || licTier === 'trial' || (licTier === '' && kind === 'trial');
   if (!trialCustomer && !rowIsTrialLike(row)) return null;
   const first = String(row.first_day || '').trim();
@@ -160,44 +131,13 @@ function windowFromCustomerRow(row) {
   return { first, last, source: row.id || null };
 }
 
-function windowFromCustomerTrialSnapshot(row) {
-  if (!row) return null;
-  const first = String(row.cust_first_day || row.first_day || '').trim();
-  const last = String(row.cust_last_day || '').trim() || customerTrialLastDay({
-    last_day: row.cust_last_day,
-    licence_expiry: row.cust_licence_expiry,
-  });
-  if (!first || !last || !isValidCalendarIso(first) || !isValidCalendarIso(last)) return null;
-  if (first > last) return null;
-  return { first, last, source: row.cust_id || null };
-}
-
-function lockSubject(machine) {
-  const m = String(machine || '');
-  if (m.startsWith('d:')) return { kind: 'd', subject: m.slice(2) };
-  if (m.startsWith('h:')) return { kind: 'm', subject: m.slice(2).toLowerCase() };
-  if (m.startsWith('od:') || m.startsWith('pd:')) {
-    const parts = m.split(':');
-    if (parts.length >= 3) return { kind: 'd', subject: parts.slice(2).join(':') };
-  }
-  if (m.startsWith('ph:')) {
-    const parts = m.split(':');
-    if (parts.length >= 3) return { kind: 'm', subject: parts.slice(2).join(':').toLowerCase() };
-  }
-  if (m.startsWith('offline:')) {
-    const parts = m.split(':');
-    if (parts.length === 2) return { kind: 'd', subject: parts[1] };
-    if (parts.length >= 3) return { kind: 'd', subject: parts[parts.length - 1] };
-  }
-  if (!m.includes(':') && m.length === 10) return { kind: 'd', subject: m };
-  return null;
-}
-
 function paidUntilFromRow(row) {
   const exp = row?.licence_expiry;
   if (exp !== null && exp !== undefined) {
     const trimmed = String(exp).trim();
-    if (trimmed === '') return '';
+    if (trimmed === '') {
+      return String(row?.last_day ?? '').trim();
+    }
     return trimmed;
   }
   return String(row?.last_day ?? '').trim();
@@ -269,80 +209,19 @@ function requestIsTrialGrantSource(row) {
   return false;
 }
 
-/** Trial window for a d:/h: lock row (trial was consumed on this device/machine). */
-function trialWindowFromLockRow(row, env) {
-  const lockMachine = row.machine;
-  const requestId = row.request_id;
-  const etw = parseEtwKey(lockMachine);
-  if (etw) {
-    const win = parseEtwWindow(requestId);
-    if (!win) return null;
-    return {
-      first: win.first,
-      last: win.last,
-      product: etw.product,
-      kind: etw.kind,
-      subject: etw.kind === 'm' ? etw.subject.toLowerCase() : etw.subject,
-      source: null,
-    };
-  }
-  const subj = lockSubject(lockMachine);
-  if (!subj) return null;
-  if (row.id) {
-    const status = String(row?.status ?? '').trim().toLowerCase();
-    const reason = String(row?.reason ?? '').trim().toLowerCase();
-    if (status === 'expired' && reason === 'pending_timeout') return null;
-    if (!['issued', 'delivered', 'expired'].includes(status)) return null;
-  } else if (!row?.id) {
-    return null;
-  }
-  const rowCandidates = [];
-  const fromReq = windowFromRequestRowForBackfill(row, env);
-  if (fromReq) rowCandidates.push(fromReq);
-  const kind = String(row?.kind ?? '').trim().toLowerCase();
-  const tier = String(row?.licence_tier ?? '').trim().toLowerCase();
-  const last = String(row?.licence_expiry ?? '').trim();
-  if (last && isValidCalendarIso(last) && (kind === 'monthly' || tier === 'paid' || kind === 'trial')) {
-    const inclusive = trialInclusiveDays(env);
-    rowCandidates.push({
-      first: shiftCalendarDays(last, -(inclusive - 1)),
-      last,
-      source: row.id || null,
-    });
-  }
-  const custWin = windowFromCustomerTrialSnapshot(row);
-  if (custWin) rowCandidates.push({ ...custWin, source: custWin.source || row.id || null });
-  let win = null;
-  for (const c of rowCandidates) win = pickEarlierWindow(win, c);
-  if (!win) {
-    const lockAt = Number(row.lock_at ?? row.at);
-    if (Number.isFinite(lockAt) && lockAt > 0) {
-      const tz = hubCalendarTz(env);
-      const inclusive = trialInclusiveDays(env);
-      const firstDay = calendarDateInTz(new Date(lockAt * 1000), tz).iso;
-      const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
-      win = { first: firstDay, last: lastDay, source: row.id || null };
-    }
-  }
-  if (!win) {
-    const created = Number(row?.created_at);
-    if (Number.isFinite(created) && created > 0) {
-      const tz = hubCalendarTz(env);
-      const inclusive = trialInclusiveDays(env);
-      const firstDay = calendarDateInTz(new Date(created * 1000), tz).iso;
-      const lastDay = shiftCalendarDays(firstDay, inclusive - 1);
-      win = { first: firstDay, last: lastDay, source: row.id || null };
-    }
-  }
+/** Trial window from an etw| machine_trials row only (not d:/h: locks). */
+function trialWindowFromEtwRow(row) {
+  const etw = parseEtwKey(row.machine);
+  if (!etw) return null;
+  const win = parseEtwWindow(row.request_id);
   if (!win) return null;
-  const product = normalizeProduct(row.product);
   return {
     first: win.first,
     last: win.last,
-    product,
-    kind: subj.kind,
-    subject: subj.kind === 'm' ? subj.subject.toLowerCase() : subj.subject,
-    source: win.source,
+    product: etw.product,
+    kind: etw.kind,
+    subject: etw.kind === 'm' ? etw.subject.toLowerCase() : etw.subject,
+    source: null,
   };
 }
 
@@ -351,19 +230,11 @@ export async function backfillTrialGrants(env, productFilter) {
   const subjectWindows = new Map();
   const createdAt = new Date().toISOString();
 
-  const lockSql = `
-    SELECT mt.machine, mt.request_id, mt.at AS lock_at,
-           lr.id, lr.product, lr.kind, lr.licence_tier, lr.licence_expiry, lr.created_at,
-           lr.status, lr.reason, lr.device, lr.device_key,
-           c.id AS cust_id, c.first_day AS cust_first_day, c.last_day AS cust_last_day,
-           c.licence_expiry AS cust_licence_expiry, c.licence_tier AS cust_licence_tier, c.kind AS cust_kind
-    FROM machine_trials mt
-    LEFT JOIN licence_requests lr ON lr.id = mt.request_id
-    LEFT JOIN customers c ON c.product = lr.product AND c.device = lr.device`;
-  const lockRows = await env.DB.prepare(lockSql).bind().all();
-
-  for (const row of lockRows.results || []) {
-    const parsed = trialWindowFromLockRow(row, env);
+  const etwRows = await env.DB.prepare(
+    'SELECT machine, request_id FROM machine_trials WHERE machine LIKE ?',
+  ).bind(`${ETW_PREFIX}%`).all();
+  for (const row of etwRows.results || []) {
+    const parsed = trialWindowFromEtwRow(row);
     if (!parsed) continue;
     if (products && !products.includes(parsed.product)) continue;
     recordSubject(subjectWindows, parsed.product, parsed.kind, parsed.subject, parsed, parsed.source);
@@ -426,23 +297,8 @@ export async function backfillTrialGrants(env, productFilter) {
   return stmts.length;
 }
 
-async function computeLinkedClosure(env, product, device, machines = []) {
-  const dkey = deviceKeyNorm(device);
-  const seedMachines = [];
-  for (const m of machines) {
-    const mh = normalizeMachineHash(m);
-    if (mh) seedMachines.push(mh);
-  }
-
-  const seedParts = [`SELECT 'd' AS kind, ? AS id`];
-  const binds = [dkey];
-  for (const mh of seedMachines) {
-    seedParts.push(`SELECT 'm', ?`);
-    binds.push(mh);
-  }
-  const seedsSql = seedParts.join(' UNION ALL ');
-
-  const sql = `
+function closureSql(seedsSql) {
+  return `
 WITH RECURSIVE
 seeds(kind, id) AS (
   ${seedsSql}
@@ -461,15 +317,56 @@ closure(kind, id) AS (
     AND c.kind = 'm' AND lower(lr.machine) = c.id AND length(lr.device_key) > 0
 )
 SELECT kind, id FROM closure`;
+}
 
+async function runClosureChunk(env, product, dkey, machineChunk, budget) {
+  const spent = spendQueryBudget(budget);
+  if (!spent.ok) return { limit: true };
+  const seedParts = [`SELECT 'd' AS kind, ? AS id`];
+  const binds = [dkey];
+  for (const mh of machineChunk) {
+    seedParts.push(`SELECT 'm', ?`);
+    binds.push(mh);
+  }
+  const seedsSql = seedParts.join(' UNION ALL ');
   binds.push(product, product);
-  const rows = await env.DB.prepare(sql).bind(...binds).all();
+  const rows = await env.DB.prepare(closureSql(seedsSql)).bind(...binds).all();
   const deviceSet = new Set();
   const machineSet = new Set();
   for (const row of rows.results || []) {
     if (row.kind === 'd') deviceSet.add(String(row.id));
     else if (row.kind === 'm') machineSet.add(String(row.id));
   }
+  return { limit: false, devices: deviceSet, machines: machineSet };
+}
+
+async function computeLinkedClosure(env, product, device, machines = [], budget = null) {
+  const dkey = deviceKeyNorm(device);
+  const seedMachines = [];
+  for (const m of machines) {
+    const mh = normalizeMachineHash(m);
+    if (mh) seedMachines.push(mh);
+  }
+
+  const deviceSet = new Set();
+  const machineSet = new Set();
+  const reservedBinds = 3;
+  const machineChunkSize = inChunkSize(reservedBinds);
+  if (!seedMachines.length) {
+    const part = await runClosureChunk(env, product, dkey, [], budget);
+    if (part.limit) return { blocked: true, reason: 'link_limit' };
+    for (const id of part.devices) deviceSet.add(id);
+    for (const id of part.machines) machineSet.add(id);
+  } else {
+    for (let i = 0; i < seedMachines.length; i += machineChunkSize) {
+      const chunk = seedMachines.slice(i, i + machineChunkSize);
+      const part = await runClosureChunk(env, product, dkey, chunk, budget);
+      if (part.limit) return { blocked: true, reason: 'link_limit' };
+      for (const id of part.devices) deviceSet.add(id);
+      for (const id of part.machines) machineSet.add(id);
+    }
+  }
+
   const nodeCount = deviceSet.size + machineSet.size;
   if (nodeCount > LINK_CLOSURE_CAP) {
     return { blocked: true, reason: 'link_limit' };
@@ -480,7 +377,7 @@ SELECT kind, id FROM closure`;
 /** Every linked device key and machine hash (lowercased) for trial identity. */
 export async function linkedSubjects(env, productId, device, machines = []) {
   const product = normalizeProduct(productId);
-  const closure = await computeLinkedClosure(env, product, device, machines);
+  const closure = await computeLinkedClosure(env, product, device, machines, null);
   if (closure.blocked) {
     return { devices: [], machines: [], deviceCodes: [], link_limit: true };
   }
@@ -607,11 +504,11 @@ async function deviceCodesForClosure(env, product, device, devices, budget) {
 export async function resolveTrial(env, productId, device, machines = [], options = {}) {
   const product = normalizeProduct(productId);
   const today = options.today || calendarDateInTz(new Date(), hubCalendarTz(env)).iso;
-  const closure = await computeLinkedClosure(env, product, device, machines);
+  const budget = { used: 0 };
+  const closure = await computeLinkedClosure(env, product, device, machines, budget);
   if (closure.blocked) {
     return { kind: 'blocked', reason: 'link_limit' };
   }
-  const budget = { used: 1 };
   const codeResult = await deviceCodesForClosure(env, product, device, closure.devices, budget);
   if (codeResult.limit) {
     return { kind: 'blocked', reason: 'link_limit' };

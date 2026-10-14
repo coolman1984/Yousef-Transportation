@@ -204,10 +204,6 @@ function tableExists(db, name) {
 function applyTrialGrantsMigration(db) {
   const migrationId = '0004_trial_grants';
   if (migrationApplied(db, migrationId)) return;
-  if (tableExists(db, 'trial_grants')) {
-    markApplied(db, migrationId);
-    return;
-  }
   const sql = readFileSync(join(root, 'migrations', '0004_trial_grants.sql'), 'utf8');
   db.exec(sql);
   markApplied(db, migrationId);

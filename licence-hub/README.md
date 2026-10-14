@@ -95,6 +95,8 @@ The `trial_grants` table is the authoritative, insert-only record of which devic
 
 **Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial locks and requests populate the ledger.
 
+**Resolver limits:** `resolveTrial` expands device↔machine links with a recursive SQL closure (requests plus `trial_grants` rows that share a `source_request`), capped at **256** nodes; above that it returns `blocked` / `link_limit` (fail closed). Paid/permanent blocking follows `currentTerm` (customers plus `issued`/`delivered` requests only). **Backfill** uses a small fixed number of D1 reads (locks+join, requests, customers) then one batch insert; it treats `kind = trial` requests as trial evidence even when tier/expiry were upgraded to paid, skips unnormalizable devices, and does not re-read each lock row individually. Rows with `pending`/`refused` status are not backfilled from lock joins.
+
 ## Tests / الاختبارات
 
 ```bash

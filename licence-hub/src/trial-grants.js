@@ -663,12 +663,17 @@ function grantWindowGuardStatement(env, product, reqFirst, reqLast, subjectRows)
     SELECT NULL, 'd', '', '', '', ''
     WHERE EXISTS (
       SELECT 1
-      FROM json_each(?) AS j
-      INNER JOIN trial_grants AS tg
-        ON tg.product = ?
-       AND tg.subject_kind = json_extract(j.value, '$.kind')
-       AND tg.subject = json_extract(j.value, '$.subject')
-      WHERE tg.first_day <> ? OR tg.last_day <> ?
+      FROM (
+        SELECT tg.first_day AS fd, tg.last_day AS ld
+        FROM json_each(?) AS j
+        INNER JOIN trial_grants AS tg
+          ON tg.product = ?
+         AND tg.subject_kind = json_extract(j.value, '$.kind')
+         AND tg.subject = json_extract(j.value, '$.subject')
+        ORDER BY tg.first_day ASC, tg.last_day ASC
+        LIMIT 1
+      ) AS earliest
+      WHERE earliest.fd <> ? OR earliest.ld <> ?
     )`;
   const binds = [payload, product, reqFirst, reqLast];
   if (binds.length > D1_STMT_BIND_MAX) {
@@ -701,8 +706,9 @@ function grantPropagateStatement(env, product, subjectRows, winFirst, winLast, c
  * Insert-only trial ledger rows for the device↔machine closure (same subject set as resolveTrial).
  * Propagate inserts the closure-wide earliest window (min first_day, tie min last_day) for every
  * linked subject lacking a row (INSERT OR IGNORE; later rows on other subjects are untouched).
- * Opening and closing guards read trial_grants inside the batch and abort when any closure
- * subject already has a row whose window differs from the request (see README).
+ * Opening and closing guards read trial_grants inside the batch and abort only when the
+ * earliest live row in the closure (min first_day, tie min last_day) exists and differs
+ * from the request (see README). Later rows on other subjects are ignored.
  */
 export async function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);

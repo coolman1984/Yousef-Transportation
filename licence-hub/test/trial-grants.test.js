@@ -303,7 +303,8 @@ for (const prior of priorSources) {
           const matrixLastDay = '2026-06-20';
           const matrixWin = trialWindow(matrixLastDay);
           const expectExisting = ['etw_d', 'etw_m', 'customer'].includes(prior)
-            || (['lock', 'request'].includes(prior) && ['issued', 'delivered', 'expired'].includes(rowStatus));
+            || (['lock', 'request'].includes(prior)
+              && ['issued', 'delivered', 'expired', 'refused', 'approved'].includes(rowStatus));
           if (rowStatus === 'expired_pending_timeout') {
             assert.ok(!expectExisting);
           }
@@ -802,6 +803,124 @@ test('linkedSubjects fails closed when closure query budget is exceeded', async 
   assert.ok(Array.isArray(linked.deviceCodes));
   assert.equal(linked.deviceCodes.length, 0);
   assert.equal(linked.devices.length, 0);
+});
+
+test('permanent customer with spaced device blocks hyphenated resolveTrial', async () => {
+  const e = env();
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('perm-sp', ?, '', ?, 'permanent', '2025-01-01', '', 'permanent', '', 1)`,
+  ).bind(PRODUCT, '7KD2M QX9TP').run();
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [], { today: '2026-03-01' });
+  assert.equal(r.kind, 'blocked');
+  assert.equal(r.reason, 'downgrade_forbidden');
+});
+
+test('trial customer with spaced device is found by backfill and linkedSubjects', async () => {
+  const e = env();
+  const win = trialWindow('2026-04-01');
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, created_at)
+     VALUES('trial-sp', ?, '', ?, 'trial', ?, ?, 'trial', 1)`,
+  ).bind(PRODUCT, '7KD2M QX9TP', win.first, win.last).run();
+  const n = await backfillTrialGrants(e, PRODUCT);
+  assert.ok(n >= 1);
+  const linked = await linkedSubjects(e, PRODUCT, DEVICE_A, []);
+  assert.ok(linked.deviceCodes.some((c) => c.replace(/[\s-]/g, '').toUpperCase() === '7KD2MQX9TP'));
+  const r = await resolveTrial(e, PRODUCT, DEVICE_A, [], { today: '2026-03-15' });
+  assert.equal(r.kind, 'existing');
+  assert.equal(r.last_day, win.last);
+});
+
+test('backfill paging and insert batches match single-pass ledger', async () => {
+  const e = env();
+  const win = trialWindow('2026-05-01');
+  for (let i = 0; i < 5; i++) {
+    const code = `7KD${String(i).padStart(2, '0')}-QX9TP`;
+    await insertRequest(e, {
+      id: `page-req-${i}`,
+      device: code,
+      dkey: deviceKey(code),
+      machine: MACHINE_A,
+      expiry: win.last,
+    });
+  }
+  const full = await backfillTrialGrants(e, PRODUCT);
+  const fullRows = await e.DB.prepare(
+    'SELECT subject_kind, subject, first_day, last_day FROM trial_grants ORDER BY subject_kind, subject',
+  ).bind().all();
+  const e2 = env();
+  for (let i = 0; i < 5; i++) {
+    const code = `7KD${String(i).padStart(2, '0')}-QX9TP`;
+    await insertRequest(e2, {
+      id: `page-req-${i}`,
+      device: code,
+      dkey: deviceKey(code),
+      machine: MACHINE_A,
+      expiry: win.last,
+    });
+  }
+  const paged = await backfillTrialGrants(e2, PRODUCT, { pageSize: 2, insertBatchSize: 2 });
+  assert.equal(paged, full);
+  const pagedRows = await e2.DB.prepare(
+    'SELECT subject_kind, subject, first_day, last_day FROM trial_grants ORDER BY subject_kind, subject',
+  ).bind().all();
+  assert.deepEqual(pagedRows.results, fullRows.results);
+});
+
+test('backfill includes refused and approved rows with issued trial evidence', async () => {
+  const e = env();
+  const win = trialWindow('2026-06-01');
+  await insertRequest(e, {
+    id: 'refused-trial',
+    device: DEVICE_B,
+    dkey: DKEY_B,
+    machine: MACHINE_B,
+    status: 'refused',
+    tier: 'trial',
+    kind: 'trial',
+    expiry: win.last,
+  });
+  await insertRequest(e, {
+    id: 'approved-trial',
+    device: DEVICE_C,
+    dkey: DKEY_C,
+    machine: MACHINE_B,
+    status: 'approved',
+    tier: 'trial',
+    kind: 'trial',
+    expiry: win.last,
+  });
+  await insertRequest(e, {
+    id: 'refused-perm',
+    device: DEVICE_A,
+    dkey: DKEY_A,
+    machine: MACHINE_A,
+    status: 'refused',
+    tier: 'permanent',
+    kind: 'permanent',
+    expiry: '',
+  });
+  await insertRequest(e, {
+    id: 'pending-trial',
+    device: 'ZBAA2-AAAAA',
+    dkey: deviceKey('ZBAA2-AAAAA'),
+    machine: MACHINE_A,
+    status: 'pending',
+    tier: 'trial',
+    kind: 'trial',
+    expiry: win.last,
+  });
+  const n = await backfillTrialGrants(e, PRODUCT);
+  assert.ok(n >= 2);
+  const bRow = await e.DB.prepare(
+    'SELECT last_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('d', DKEY_B).first();
+  assert.equal(bRow.last_day, win.last);
+  const cRow = await e.DB.prepare(
+    'SELECT last_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('d', DKEY_C).first();
+  assert.equal(cRow.last_day, win.last);
 });
 
 test('etw d subject with hyphenated device code normalizes on backfill', async () => {

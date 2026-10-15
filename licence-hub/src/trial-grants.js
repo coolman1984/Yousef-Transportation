@@ -5,6 +5,9 @@ const LINK_CLOSURE_CAP = 256;
 const D1_STMT_BIND_MAX = 90;
 const RESOLVE_QUERY_BUDGET = 50;
 const ETW_PREFIX = 'etw|';
+const BACKFILL_PAGE_SIZE_DEFAULT = 500;
+const BACKFILL_INSERT_BATCH_SIZE_DEFAULT = 50;
+const BACKFILL_INSERT_BINDS_PER_ROW = 7;
 
 /** 64-hex SHA-256 machine tag from the office app, or null when malformed. */
 export function normalizeMachineHash(machine) {
@@ -188,14 +191,29 @@ function recordSubject(map, product, kind, subject, window, source) {
   map.set(key, next);
 }
 
+function requestHasIssuedTrialEvidence(row) {
+  const kind = String(row?.kind ?? '').trim().toLowerCase();
+  if (kind !== 'trial') return false;
+  const last = String(row?.licence_expiry ?? '').trim();
+  if (last && isValidCalendarIso(last)) return true;
+  const tier = String(row?.licence_tier ?? '').trim().toLowerCase();
+  if (tier === 'trial') return true;
+  return false;
+}
+
 function requestIsTrialGrantSource(row) {
   const status = String(row?.status ?? '').trim().toLowerCase();
   const reason = String(row?.reason ?? '').trim().toLowerCase();
   if (status === 'expired' && reason === 'pending_timeout') return false;
-  if (!['issued', 'delivered', 'expired'].includes(status)) return false;
+  if (status === 'pending' || status === 'pending_timeout') return false;
+  if (!['issued', 'delivered', 'expired', 'refused', 'approved'].includes(status)) return false;
 
   const last = String(row?.licence_expiry ?? '').trim();
   const hasExpiry = last !== '' && isValidCalendarIso(last);
+
+  if (status === 'refused' || status === 'approved') {
+    if (!requestHasIssuedTrialEvidence(row)) return false;
+  }
 
   if (rowIsTrialLike(row)) {
     if (status === 'expired' && !hasExpiry) return false;
@@ -230,63 +248,102 @@ function trialWindowFromEtwRow(row) {
   };
 }
 
-export async function backfillTrialGrants(env, productFilter) {
+async function forEachTablePage(env, baseSql, binds, pageSize, onRow) {
+  let afterRowid = 0;
+  for (;;) {
+    const sql = /\bwhere\b/i.test(baseSql)
+      ? `${baseSql} AND rowid > ? ORDER BY rowid LIMIT ?`
+      : `${baseSql} WHERE rowid > ? ORDER BY rowid LIMIT ?`;
+    const page = await env.DB.prepare(sql).bind(...binds, afterRowid, pageSize).all();
+    const rows = page.results || [];
+    if (!rows.length) break;
+    for (const row of rows) {
+      afterRowid = row.rowid;
+      onRow(row);
+    }
+    if (rows.length < pageSize) break;
+  }
+}
+
+async function flushBackfillInserts(env, stmts, insertBatchSize) {
+  if (!stmts.length) return;
+  for (let i = 0; i < stmts.length; i += insertBatchSize) {
+    await env.DB.batch(stmts.slice(i, i + insertBatchSize));
+  }
+}
+
+export async function backfillTrialGrants(env, productFilter, options = {}) {
   const products = productFilter ? [normalizeProduct(productFilter)] : null;
+  const pageSize = Math.max(
+    1,
+    Number(options.pageSize ?? env.TRIAL_BACKFILL_PAGE_SIZE ?? BACKFILL_PAGE_SIZE_DEFAULT) || BACKFILL_PAGE_SIZE_DEFAULT,
+  );
+  const insertBatchSize = Math.min(
+    BACKFILL_INSERT_BATCH_SIZE_DEFAULT,
+    Math.max(
+      1,
+      Number(options.insertBatchSize ?? env.TRIAL_BACKFILL_INSERT_BATCH ?? BACKFILL_INSERT_BATCH_SIZE_DEFAULT)
+        || BACKFILL_INSERT_BATCH_SIZE_DEFAULT,
+    ),
+  );
+  if (BACKFILL_INSERT_BINDS_PER_ROW > 100) {
+    throw new Error('backfill_insert_batch_too_large');
+  }
   const subjectWindows = new Map();
   const createdAt = new Date().toISOString();
 
-  const etwRows = await env.DB.prepare(
-    'SELECT machine, request_id FROM machine_trials WHERE machine LIKE ?',
-  ).bind(`${ETW_PREFIX}%`).all();
-  for (const row of etwRows.results || []) {
-    const parsed = trialWindowFromEtwRow(row);
-    if (!parsed) continue;
-    if (products && !products.includes(parsed.product)) continue;
-    recordSubject(subjectWindows, parsed.product, parsed.kind, parsed.subject, parsed, parsed.source);
-  }
+  await forEachTablePage(
+    env,
+    `SELECT rowid, machine, request_id FROM machine_trials WHERE machine LIKE ?`,
+    [`${ETW_PREFIX}%`],
+    pageSize,
+    (row) => {
+      const parsed = trialWindowFromEtwRow(row);
+      if (!parsed) return;
+      if (products && !products.includes(parsed.product)) return;
+      recordSubject(subjectWindows, parsed.product, parsed.kind, parsed.subject, parsed, parsed.source);
+    },
+  );
 
-  const reqSql = products
-    ? `SELECT * FROM licence_requests WHERE product = ? AND status IN ('issued', 'delivered', 'expired')`
-    : `SELECT * FROM licence_requests WHERE status IN ('issued', 'delivered', 'expired')`;
-  const reqRows = products
-    ? await env.DB.prepare(reqSql).bind(products[0]).all()
-    : await env.DB.prepare(reqSql).bind().all();
-  for (const row of reqRows.results || []) {
-    if (!requestIsTrialGrantSource(row)) continue;
+  const reqStatusList = `('issued', 'delivered', 'expired', 'refused', 'approved')`;
+  const reqBase = products
+    ? `SELECT rowid, * FROM licence_requests WHERE product = ? AND status IN ${reqStatusList}`
+    : `SELECT rowid, * FROM licence_requests WHERE status IN ${reqStatusList}`;
+  const reqBinds = products ? [products[0]] : [];
+  await forEachTablePage(env, reqBase, reqBinds, pageSize, (row) => {
+    if (!requestIsTrialGrantSource(row)) return;
     const win = windowFromRequestRowForBackfill(row, env);
-    if (!win) continue;
+    if (!win) return;
     const product = normalizeProduct(row.product);
-    if (products && !products.includes(product)) continue;
+    if (products && !products.includes(product)) return;
     let dkey;
     try {
       dkey = String(row.device_key || '').trim() || deviceKeyNorm(row.device);
     } catch {
-      continue;
+      return;
     }
     recordSubject(subjectWindows, product, 'd', dkey, win, win.source);
     const mh = normalizeMachineHash(row.machine);
     if (mh) recordSubject(subjectWindows, product, 'm', mh, win, win.source);
-  }
+  });
 
-  const custSql = products
-    ? 'SELECT * FROM customers WHERE product = ?'
-    : 'SELECT * FROM customers';
-  const custRows = products
-    ? await env.DB.prepare(custSql).bind(products[0]).all()
-    : await env.DB.prepare(custSql).bind().all();
-  for (const row of custRows.results || []) {
+  const custBase = products
+    ? 'SELECT rowid, * FROM customers WHERE product = ?'
+    : 'SELECT rowid, * FROM customers';
+  const custBinds = products ? [products[0]] : [];
+  await forEachTablePage(env, custBase, custBinds, pageSize, (row) => {
     const win = windowFromCustomerRow(row);
-    if (!win) continue;
+    if (!win) return;
     const product = normalizeProduct(row.product);
-    if (products && !products.includes(product)) continue;
+    if (products && !products.includes(product)) return;
     let dkey;
     try {
       dkey = deviceKeyNorm(row.device);
     } catch {
-      continue;
+      return;
     }
     recordSubject(subjectWindows, product, 'd', dkey, win, win.source);
-  }
+  });
 
   const stmts = [];
   for (const [key, win] of subjectWindows) {
@@ -298,7 +355,7 @@ export async function backfillTrialGrants(env, productFilter) {
       ).bind(product, kind, subject, win.first, win.last, createdAt, win.source || null),
     );
   }
-  if (stmts.length) await env.DB.batch(stmts);
+  await flushBackfillInserts(env, stmts, insertBatchSize);
   return stmts.length;
 }
 
@@ -399,8 +456,17 @@ export async function linkedSubjects(env, productId, device, machines = []) {
   };
 }
 
+/** SQL expression: strip hyphens/whitespace and uppercase (matches `normalize()` for device codes). */
+function deviceCodeNormSql(column) {
+  return `upper(replace(replace(replace(replace(${column}, '-', ''), ' ', ''), char(9), ''), char(10), ''))`;
+}
+
 function customerDeviceMatchSql() {
-  return "upper(replace(device, '-', ''))";
+  return deviceCodeNormSql('device');
+}
+
+function ledgerDeviceSubjectMatchSql() {
+  return deviceCodeNormSql('subject');
 }
 
 function normalizedDeviceKeys(codes) {
@@ -462,7 +528,7 @@ async function earliestLedgerWindow(env, product, devices, machines, budget) {
     const ph = part.map(() => '?').join(', ');
     const row = await env.DB.prepare(
       `SELECT first_day, last_day FROM trial_grants
-       WHERE product = ? AND subject_kind = 'd' AND subject IN (${ph})
+       WHERE product = ? AND subject_kind = 'd' AND ${ledgerDeviceSubjectMatchSql()} IN (${ph})
        ORDER BY first_day ASC, last_day ASC LIMIT 1`,
     ).bind(product, ...part).first();
     if (row) {

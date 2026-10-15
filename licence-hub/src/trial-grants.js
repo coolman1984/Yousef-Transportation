@@ -627,10 +627,10 @@ export async function resolveTrial(env, productId, device, machines = [], option
 }
 
 /**
- * When true, the last prepared statement from `trialGrantStatements` is the window guard.
- * PR B must run the full returned array in one D1 batch: ledger propagate inserts, then this
- * guard, then (in the same batch) the licence issue write. A guard failure means the batch
- * rolls back — re-resolve trial for the requested window and sign that existing window.
+ * When true, `trialGrantStatements` ends with a live window guard (see README).
+ * PR B must run the full returned array in one D1 batch: opening guard, propagate inserts,
+ * closing guard, then (in the same batch) the licence issue write. Guards read trial_grants
+ * inside the transaction; a guard failure rolls back — re-resolve trial and sign that window.
  */
 export const TRIAL_GRANT_WINDOW_GUARD_LAST = true;
 
@@ -655,21 +655,26 @@ function closureGrantSubjects(devices, machines) {
   return rows;
 }
 
-function grantWindowGuardStatement(env, reqFirst, reqLast, authWin) {
+function grantWindowGuardStatement(env, product, reqFirst, reqLast, subjectRows) {
+  const payload = JSON.stringify(
+    subjectRows.map((row) => ({ kind: row.kind, subject: row.subject })),
+  );
   const sql = `INSERT INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at)
     SELECT NULL, 'd', '', '', '', ''
-    WHERE ? = 1 AND (? <> ? OR ? <> ?)`;
-  if (!authWin) {
-    return env.DB.prepare(sql).bind(0, '', reqFirst, '', reqLast);
+    WHERE EXISTS (
+      SELECT 1
+      FROM json_each(?) AS j
+      INNER JOIN trial_grants AS tg
+        ON tg.product = ?
+       AND tg.subject_kind = json_extract(j.value, '$.kind')
+       AND tg.subject = json_extract(j.value, '$.subject')
+      WHERE tg.first_day <> ? OR tg.last_day <> ?
+    )`;
+  const binds = [payload, product, reqFirst, reqLast];
+  if (binds.length > D1_STMT_BIND_MAX) {
+    throw new Error('link_limit');
   }
-  const mismatch = authWin.first !== reqFirst || authWin.last !== reqLast;
-  return env.DB.prepare(sql).bind(
-    mismatch ? 1 : 0,
-    authWin.first,
-    reqFirst,
-    authWin.last,
-    reqLast,
-  );
+  return env.DB.prepare(sql).bind(...binds);
 }
 
 function grantPropagateStatement(env, product, subjectRows, winFirst, winLast, createdAt, src) {
@@ -696,8 +701,8 @@ function grantPropagateStatement(env, product, subjectRows, winFirst, winLast, c
  * Insert-only trial ledger rows for the device↔machine closure (same subject set as resolveTrial).
  * Propagate inserts the closure-wide earliest window (min first_day, tie min last_day) for every
  * linked subject lacking a row (INSERT OR IGNORE; later rows on other subjects are untouched).
- * A final guard aborts the D1 batch when that authoritative window exists and differs from the
- * requested window (see README).
+ * Opening and closing guards read trial_grants inside the batch and abort when any closure
+ * subject already has a row whose window differs from the request (see README).
  */
 export async function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);
@@ -724,13 +729,14 @@ export async function trialGrantStatements(env, productId, device, machines, win
   if (!subjects.length) {
     throw new Error('link_limit');
   }
-  const stmts = [];
+  const guard = () => grantWindowGuardStatement(env, product, first, last, subjects);
+  const stmts = [guard()];
   for (let i = 0; i < subjects.length; i += GRANT_PROPAGATE_ROWS_PER_STMT) {
     const chunk = subjects.slice(i, i + GRANT_PROPAGATE_ROWS_PER_STMT);
     stmts.push(
       grantPropagateStatement(env, product, chunk, insertFirst, insertLast, createdAt, src),
     );
   }
-  stmts.push(grantWindowGuardStatement(env, first, last, authWin));
+  stmts.push(guard());
   return stmts;
 }

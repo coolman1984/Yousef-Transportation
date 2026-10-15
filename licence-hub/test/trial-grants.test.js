@@ -1134,6 +1134,47 @@ test('regression probe A: July grant on linked closure refused; June retry propa
   }
 });
 
+test('regression probe: stale July batch aborts when June commits before batch (live guard)', async () => {
+  const e = env();
+  const winJune = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  const winJuly = { first_day: '2026-07-01', last_day: '2026-07-14' };
+  await insertRequest(e, { id: 'race-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A });
+  await insertRequest(e, { id: 'race-b', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_A });
+  const julyStmts = await trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A], winJuly, 'july-stale');
+  await e.DB.batch(await trialGrantStatements(e, PRODUCT, DEVICE_A, [MACHINE_A], winJune, 'june-race'));
+  await assert.rejects(
+    () => e.DB.batch(julyStmts),
+    /NOT NULL constraint failed/i,
+  );
+  const julyB = await e.DB.prepare(
+    'SELECT first_day FROM trial_grants WHERE subject_kind = ? AND subject = ? AND first_day = ?',
+  ).bind('d', DKEY_B, winJuly.first_day).first();
+  assert.equal(julyB, null);
+  const julyM = await e.DB.prepare(
+    'SELECT first_day FROM trial_grants WHERE subject_kind = ? AND subject = ? AND first_day = ?',
+  ).bind('m', MACHINE_A, winJuly.first_day).first();
+  assert.equal(julyM, null);
+  const bJune = await e.DB.prepare(
+    'SELECT first_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('d', DKEY_B).first();
+  assert.equal(bJune?.first_day, winJune.first_day);
+});
+
+test('regression probe: stale batch succeeds when concurrent commit matches requested window', async () => {
+  const e = env();
+  const winJune = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  await insertRequest(e, { id: 'same-a', device: DEVICE_A, dkey: DKEY_A, machine: MACHINE_A });
+  await insertRequest(e, { id: 'same-b', device: DEVICE_B, dkey: DKEY_B, machine: MACHINE_A });
+  const grantStmts = await trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A], winJune, 'b-pending');
+  await e.DB.batch(await trialGrantStatements(e, PRODUCT, DEVICE_A, [MACHINE_A], winJune, 'a-first'));
+  await e.DB.batch(grantStmts);
+  const bRow = await e.DB.prepare(
+    'SELECT first_day, last_day FROM trial_grants WHERE subject_kind = ? AND subject = ?',
+  ).bind('d', DKEY_B).first();
+  assert.equal(bRow.first_day, winJune.first_day);
+  assert.equal(bRow.last_day, winJune.last_day);
+});
+
 test('regression probe B: June grant converges across mixed closure windows', async () => {
   const e = env();
   const winJune = { first_day: '2026-06-01', last_day: '2026-06-14' };
@@ -1161,7 +1202,10 @@ test('regression probe B: June grant converges across mixed closure windows', as
   const resolved = await resolveTrial(e, PRODUCT, DEVICE_B, [MACHINE_A], { today: '2026-07-01' });
   assert.equal(resolved.kind, 'existing');
   assert.equal(resolved.first_day, winJune.first_day);
-  await e.DB.batch(await trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A], winJune, 'sync-june'));
+  await assert.rejects(
+    async () => e.DB.batch(await trialGrantStatements(e, PRODUCT, DEVICE_B, [MACHINE_A], winJune, 'sync-june')),
+    /NOT NULL constraint failed/i,
+  );
   const after = await resolveTrial(e, PRODUCT, DEVICE_C, [MACHINE_B], { today: '2026-07-01' });
   assert.equal(after.kind, 'existing');
   assert.equal(after.first_day, winJune.first_day);

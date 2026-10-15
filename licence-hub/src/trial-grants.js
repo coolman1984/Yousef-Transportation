@@ -571,38 +571,107 @@ export async function resolveTrial(env, productId, device, machines = [], option
   return { kind: 'eligible' };
 }
 
-/** Conflict guard binds: product, device key, optional machine hashes. */
-const GRANT_GUARD_BINDS = 2;
+/**
+ * When true, the last prepared statement from `trialGrantStatements` is the window guard.
+ * PR B must run the full returned array in one D1 batch: ledger propagate inserts, then this
+ * guard, then (in the same batch) the licence issue write. A guard failure means the batch
+ * rolls back — re-resolve trial for the requested window and sign that existing window.
+ */
+export const TRIAL_GRANT_WINDOW_GUARD_LAST = true;
 
-function grantConflictExistsSql(mhList) {
+const GRANT_ROW_BINDS = 6;
+
+function grantSubjectsWhereSql(mhList) {
   const deviceClause = "(tg.subject_kind = 'd' AND tg.subject = ?)";
   if (!mhList.length) {
-    return `EXISTS (
-      SELECT 1 FROM trial_grants tg
-      WHERE tg.product = ? AND ${deviceClause}
-    )`;
+    return { where: `tg.product = ? AND ${deviceClause}`, binds: (product, dkey) => [product, dkey] };
   }
   const mPh = mhList.map(() => '?').join(', ');
-  return `EXISTS (
-    SELECT 1 FROM trial_grants tg
-    WHERE tg.product = ? AND (${deviceClause} OR (tg.subject_kind = 'm' AND tg.subject IN (${mPh})))
-  )`;
+  return {
+    where: `tg.product = ? AND (${deviceClause} OR (tg.subject_kind = 'm' AND tg.subject IN (${mPh})))`,
+    binds: (product, dkey) => [product, dkey, ...mhList],
+  };
 }
 
-function grantConflictGuardBinds(product, dkey, mhList) {
-  if (!mhList.length) return [product, dkey];
-  return [product, dkey, ...mhList];
+function authoritativeEarliestSubquery(mhList) {
+  const { where } = grantSubjectsWhereSql(mhList);
+  return `(SELECT tg.first_day, tg.last_day FROM trial_grants tg
+    WHERE ${where}
+    ORDER BY tg.first_day ASC, tg.last_day ASC LIMIT 1)`;
 }
 
-function grantRowBindCount(mhList) {
-  return 6 * (1 + mhList.length) + GRANT_GUARD_BINDS + mhList.length;
+function grantAuthBindCount(mhList) {
+  return 2 + mhList.length;
+}
+
+function grantPropagateBindCount(rowCount, mhList) {
+  return GRANT_ROW_BINDS * rowCount + grantAuthBindCount(mhList);
+}
+
+function maxMachineRowsPerPropagateStmt(mhList, includeDevice) {
+  let best = -1;
+  for (let machineRows = 0; machineRows <= mhList.length; machineRows += 1) {
+    const rowCount = (includeDevice ? 1 : 0) + machineRows;
+    if (rowCount === 0) continue;
+    if (grantPropagateBindCount(rowCount, mhList) <= D1_STMT_BIND_MAX) {
+      best = machineRows;
+    }
+  }
+  return best;
+}
+
+function grantWindowGuardStatement(env, product, dkey, mhList, reqFirst, reqLast) {
+  const { binds: authBinds } = grantSubjectsWhereSql(mhList);
+  const auth = authoritativeEarliestSubquery(mhList);
+  const sql = `INSERT INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at)
+    SELECT NULL, 'd', '', '', '', ''
+    WHERE EXISTS (
+      SELECT 1 FROM ${auth} AS auth
+      WHERE auth.first_day <> ? OR auth.last_day <> ?
+    )`;
+  const bindArgs = [...authBinds(product, dkey), reqFirst, reqLast];
+  if (bindArgs.length > D1_STMT_BIND_MAX) {
+    throw new Error('link_limit');
+  }
+  return env.DB.prepare(sql).bind(...bindArgs);
+}
+
+function grantPropagateStatement(env, product, dkey, mhList, reqFirst, reqLast, createdAt, src, includeDevice, mhChunk) {
+  const auth = authoritativeEarliestSubquery(mhList);
+  const { binds: authBinds } = grantSubjectsWhereSql(mhList);
+  const unions = [];
+  const binds = [];
+  if (includeDevice) {
+    unions.push(
+      `SELECT ? AS product, 'd' AS subject_kind, ? AS subject, ? AS req_first, ? AS req_last, ? AS created_at, ? AS source_request`,
+    );
+    binds.push(product, dkey, reqFirst, reqLast, createdAt, src);
+  }
+  for (const mh of mhChunk) {
+    unions.push(
+      `SELECT ? AS product, 'm' AS subject_kind, ? AS subject, ? AS req_first, ? AS req_last, ? AS created_at, ? AS source_request`,
+    );
+    binds.push(product, mh, reqFirst, reqLast, createdAt, src);
+  }
+  const sql = `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
+    SELECT planned.product, planned.subject_kind, planned.subject,
+      COALESCE(auth.first_day, planned.req_first),
+      COALESCE(auth.last_day, planned.req_last),
+      planned.created_at, planned.source_request
+    FROM (${unions.join(' UNION ALL ')}) AS planned
+    LEFT JOIN ${auth} AS auth ON 1 = 1`;
+  const bindArgs = [...binds, ...authBinds(product, dkey)];
+  if (bindArgs.length > D1_STMT_BIND_MAX) {
+    throw new Error('link_limit');
+  }
+  return env.DB.prepare(sql).bind(...bindArgs);
 }
 
 /**
  * Insert-only trial ledger rows for a device and optional machine hashes.
- * One D1 statement inserts every row or none: a pre-insert conflict check covers this
- * device key and all listed machine hashes. Device-only grants do not consult machine
- * rows unless machine hashes are supplied (see README).
+ * Propagate inserts use the earliest window already stored for this device and listed hashes
+ * (fallback: requested window). A final guard statement aborts the D1 batch when that
+ * authoritative window still differs from the requested window after propagate (see README).
  */
 export function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);
@@ -622,27 +691,42 @@ export function trialGrantStatements(env, productId, device, machines, window, s
     seen.add(mh);
     mhList.push(mh);
   }
-  if (grantRowBindCount(mhList) > D1_STMT_BIND_MAX) {
+  if (grantAuthBindCount(mhList) + 2 > D1_STMT_BIND_MAX) {
     throw new Error('link_limit');
   }
-  const conflictSql = grantConflictExistsSql(mhList);
-  const guardBinds = grantConflictGuardBinds(product, dkey, mhList);
-  const rowBinds = [product, dkey, first, last, createdAt, src];
-  const unions = [
-    `SELECT ? AS product, 'd' AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
-  ];
-  const binds = [...rowBinds];
-  for (const mh of mhList) {
-    unions.push(
-      `SELECT ? AS product, 'm' AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
+  const stmts = [];
+  if (mhList.length === 0) {
+    if (maxMachineRowsPerPropagateStmt(mhList, true) < 0) {
+      throw new Error('link_limit');
+    }
+    stmts.push(
+      grantPropagateStatement(env, product, dkey, mhList, first, last, createdAt, src, true, []),
     );
-    binds.push(product, mh, first, last, createdAt, src);
+  } else {
+    let offset = 0;
+    const firstTake = maxMachineRowsPerPropagateStmt(mhList, true);
+    if (firstTake < 0) {
+      throw new Error('link_limit');
+    }
+    stmts.push(
+      grantPropagateStatement(
+        env, product, dkey, mhList, first, last, createdAt, src, true, mhList.slice(0, firstTake),
+      ),
+    );
+    offset = firstTake;
+    while (offset < mhList.length) {
+      const take = maxMachineRowsPerPropagateStmt(mhList, false);
+      if (take < 1) {
+        throw new Error('link_limit');
+      }
+      stmts.push(
+        grantPropagateStatement(
+          env, product, dkey, mhList, first, last, createdAt, src, false, mhList.slice(offset, offset + take),
+        ),
+      );
+      offset += take;
+    }
   }
-  const sql = `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-    SELECT product, subject_kind, subject, first_day, last_day, created_at, source_request
-    FROM (${unions.join(' UNION ALL ')}) AS planned
-    WHERE NOT (${conflictSql})`;
-  return [
-    env.DB.prepare(sql).bind(...binds, ...guardBinds),
-  ];
+  stmts.push(grantWindowGuardStatement(env, product, dkey, mhList, first, last));
+  return stmts;
 }

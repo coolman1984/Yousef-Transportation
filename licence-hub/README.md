@@ -101,9 +101,9 @@ The `trial_grants` table is the authoritative, insert-only record of which devic
 
 **Backfill I/O:** three reads (`etw|` locks, requests, customers) plus one batch insert; unnormalizable devices are skipped.
 
-**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices. `trialGrantStatements` with no machine hashes only refuses when that device key already has a `d` row; it does not look at existing `m` rows (callers must pass linked machine hashes when they want an all-or-nothing grant).
+**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices. Device-only `trialGrantStatements` still propagate missing machine rows when callers pass linked hashes on a later grant.
 
-**Grant batch limits:** each `trialGrantStatements` call is one INSERT (all rows or none) with ≤ **90** binds — at most **11** distinct machine hashes per call. Above that, the builder throws `link_limit`.
+**Grant batches (`trialGrantStatements`):** returns one or more propagate `INSERT OR IGNORE` statements (each ≤ **90** binds; machine hashes chunked) plus a final **window guard** (`TRIAL_GRANT_WINDOW_GUARD_LAST`). Propagate rows use the earliest `trial_grants` window already stored for the device key and every listed machine hash (fallback: the requested window). The guard makes the whole D1 batch fail when that authoritative window, after propagate, still differs from the requested window — callers must re-run `resolveTrial`, sign the existing window, and retry. PR B runs the full returned array in **one** batch: propagate statements, guard, then the licence issue write. Too many machine hashes for the bind cap throws `link_limit` before building.
 
 ## Tests / الاختبارات
 

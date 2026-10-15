@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Trial grants ledger PR A — review round 7 (2026-10-15)
+
+**What/why:** Replace all-or-nothing grant with propagate (`INSERT OR IGNORE` + earliest-window COALESCE per subject, chunked ≤90 binds) and final NOT NULL window guard (`TRIAL_GRANT_WINDOW_GUARD_LAST`); README/PR B batch contract; regression probes (July rollback + June re-grant, device-only propagate, guard rolls back tail stmt); 99-seed paid peer only on hash index 90.
+**Checks:** `cd licence-hub && npm test` (715 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
 ## Trial grants ledger PR A — review round 6 (2026-10-15)
 
 **What/why:** All-or-nothing `trialGrantStatements` (one INSERT, shared pre-check on device + listed machines; ≤90 binds / ≤11 hashes); normalized customer device match; README drops lock backfill claim; regression probes (July `b` row, lowercase paid, 95-hash `link_limit`, far-hash paid peer).

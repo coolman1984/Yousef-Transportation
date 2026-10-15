@@ -89,6 +89,22 @@ Poll every few seconds while `pending`; stop on `issued`, `refused`, or `expired
 2. Embed the product’s public key tag in sold builds (`TO_RELEASE_PUBLIC_KEYS`) or `licence_keys.txt` for contract installs.
 3. Optionally set `LICENCE_SIGNING_KEY_<PRODUCT>` / `PAID_SIGNING_KEY_<PRODUCT>` (uppercase, hyphens → underscores) to override the shared trial/paid keys for **codes** for that product only. Hub `/licence/time` still uses the global `LICENCE_SIGNING_KEY` / `PAID_SIGNING_KEY` pair.
 
+## Trial grants ledger (`trial_grants`)
+
+The `trial_grants` table is the authoritative, insert-only record of which device (`subject_kind = d`) or machine hash (`m`, always lowercased) has already received a trial window for a product. Application code uses `INSERT OR IGNORE` only; optional SQL triggers reject `UPDATE`/`DELETE`.
+
+**Migration order (existing D1):** back up the database first, then apply pending migrations (`0001`–`0003` if still needed, then `0004_trial_grants.sql` or `node scripts/apply-migrations.mjs` on a SQLite export) **before** deploying a worker build that writes the ledger. Fresh installs: `schema.sql` already includes `trial_grants`. After `0004`, run the worker’s backfill (PR B) or call `backfillTrialGrants` once so historical trial requests and related evidence populate the ledger.
+
+**Resolver limits:** `resolveTrial` and `linkedSubjects` expand device↔machine links with a recursive SQL closure over `licence_requests`, capped at **256** nodes; above that they fail closed with `link_limit`. Each resolver keeps total D1 statements under **50** (closure seed chunks included). Each statement keeps bind count ≤ **90** (closure seeds are chunked; ledger/term lookups are chunked). `linkedSubjects` always returns `deviceCodes` as a plain array plus `link_limit`. Paid/permanent blocking follows customers plus `issued`/`delivered` requests only. Blank `licence_expiry` on a paid customer falls back to `last_day` like `NULL`.
+
+**Legacy backfill (lenient):** `backfillTrialGrants` creates ledger rows only from (1) `licence_requests` still marked trial (`kind`/`licence_tier`) that were actually issued (`issued`/`delivered`, or `expired` except `pending_timeout`) with a valid `licence_expiry` window, (2) `customers` rows of trial kind/tier with `first_day`/`last_day` (not paid/permanent), and (3) `etw|` rows in `machine_trials`. **d:/h:/od: lock rows are not trial evidence** (paid issues write locks too). Windows are never invented from `created_at` or lock timestamps. **Accepted edge case:** a device that went trial→paid in the hub (request row overwritten) may receive one more online trial after paid expires; there is no separate historical trial row to backfill.
+
+**Backfill I/O:** three reads (`etw|` locks, requests, customers) plus one batch insert; unnormalizable devices are skipped.
+
+**Offline trial with blank machine:** a hub request with `machine = ''` backfills only a device (`d`) ledger row, not a machine (`m`) row. Another device code on the same physical PC can still resolve as `eligible` until PR B ties grants to the owner-confirmed machine hash for unseen devices. Device-only `trialGrantStatements` still propagate missing machine rows when callers pass linked hashes on a later grant.
+
+**Grant batches (`trialGrantStatements`):** async; expands the same device↔machine closure as `resolveTrial` (50-query budget, `link_limit` when exceeded). Returns propagate `INSERT OR IGNORE` statements (closure subjects chunked, ≤ **90** binds each) plus a final **window guard** (`TRIAL_GRANT_WINDOW_GUARD_LAST`). The authoritative window is the earliest row (min `first_day`, tie min `last_day`) among **all** closure subjects; propagate inserts that window for every linked subject still missing a row (existing later rows on other subjects stay untouched). The guard fails the batch only when that authoritative window exists and differs from the requested window — callers re-run `resolveTrial`, sign that window, and retry. PR B runs the full returned array in **one** batch: propagate statements, guard, then the licence issue write.
+
 ## Tests / الاختبارات
 
 ```bash

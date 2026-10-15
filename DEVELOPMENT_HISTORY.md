@@ -1,6 +1,48 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Trial grants ledger PR A — review round 8 (2026-10-15)
+
+**What/why:** `trialGrantStatements` is async and uses the same device↔machine closure and earliest-window logic as `resolveTrial` (50-query budget, `link_limit`); propagate fills every closure subject missing a row with that window; guard fails only when the requested window differs from closure earliest; probes A/B + resolve→retry convergence tests.
+**Checks:** `cd licence-hub && npm test` (718 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — review round 7 (2026-10-15)
+
+**What/why:** Replace all-or-nothing grant with propagate (`INSERT OR IGNORE` + earliest-window COALESCE per subject, chunked ≤90 binds) and final NOT NULL window guard (`TRIAL_GRANT_WINDOW_GUARD_LAST`); README/PR B batch contract; regression probes (July rollback + June re-grant, device-only propagate, guard rolls back tail stmt); 99-seed paid peer only on hash index 90.
+**Checks:** `cd licence-hub && npm test` (715 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — review round 6 (2026-10-15)
+
+**What/why:** All-or-nothing `trialGrantStatements` (one INSERT, shared pre-check on device + listed machines; ≤90 binds / ≤11 hashes); normalized customer device match; README drops lock backfill claim; regression probes (July `b` row, lowercase paid, 95-hash `link_limit`, far-hash paid peer).
+**Checks:** `cd licence-hub && npm test` (713 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — review round 4 (2026-10-15)
+
+**What/why:** Owner option B lenient legacy backfill: requests/customers/`etw|` only (no d:/h: lock synthesis or `created_at` windows); chunk closure seeds under D1 bind cap; real query-count tests; paid-only locks → zero ledger; `''` paid `licence_expiry` falls back like NULL; README documents trial→paid overwrite edge case.
+**Checks:** `cd licence-hub && npm test` (706 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — review round 3 (2026-10-15)
+
+**What/why:** Close round-2 review on paid-replace lock backfill (ignore `lr.status`; monthly/paid + locks), skip `pending_timeout` expired rows, chunk D1 `IN` binds (≤90), drop `source_request` closure join (etw `source_request` null), `''` paid expiry vs `last_day`, expanded regression/matrix tests.
+**Checks:** `cd licence-hub && npm test` (681 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — review round 2 (2026-10-15)
+
+**What/why:** Close P1/high review on `resolveTrial` / backfill: no unordered `LIMIT`; recursive SQL closure (256 cap, `link_limit`); `currentTerm`-style blocking on closure; `blocked_by` on existing ledger rows; backfill set-based with `kind=trial` paid-replace evidence; `apply-migrations` always runs `0004` triggers; `normalizeMachineHash` without trim; table-driven tests + regression probes.
+**Checks:** `cd licence-hub && npm test` (604 pass).
+**Next:** PR B call-site switch; owner review PR #40.
+
+## Trial grants ledger PR A — schema, backfill, resolver (2026-10-15)
+
+**What/why:** Yousef #39 redesign part 1: D1 `trial_grants` insert-only ledger, `backfillTrialGrants` / `resolveTrial` / `linkedSubjects` / `trialGrantStatements` in `licence-hub/src/trial-grants.js`; `normalizeMachineHash` relocated (re-exported from `licence-api.js`). No call-site switch yet (PR B).
+**Checks:** `cd licence-hub && npm test` (155 pass).
+**Next:** PR B wires signing paths to `resolveTrial` + ledger batch writes; owner back up D1 then apply `0004_trial_grants.sql`.
+
 ## REV38 replay recovery + version on retry (2026-10-14)
 
 **What/why:** Independent review (REV38-1): legacy hub replay without `poll_token` must not show “code refused” or offer a new request that rotates the nonce; office stays in waiting/backoff with `recovery_unavailable` and the licence screen explains that in Arabic. After an app update, replay must not 401 on version — office stores `version` at `begin()` and the hub ignores version on nonce replay (device/product/machine/shop/ref still enforced).

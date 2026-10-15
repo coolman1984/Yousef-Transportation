@@ -820,9 +820,7 @@
    "errors": [
     "err.chooseMonth",
     "err.tooLarge",
-    "err.notFound",
-    "err.notImage",
-    "err.fullFolder"
+    "err.notFound"
    ]
   },
   {
@@ -936,10 +934,7 @@
    "errors": [
     "err.inUse",
     "err.duplicate",
-    "err.dupPerson",
-    "err.nameEmpty",
-    "err.badMobile",
-    "err.badExpiry"
+    "err.dupPerson"
    ]
   },
   {
@@ -952,7 +947,23 @@
    "errors": [
     "err.clockOff",
     "err.mailboxSecret",
-    "err.mailboxReplay",
+    "err.mailboxReplay"
+   ]
+  },
+  {
+   "id": "value-refused",
+   "cat": "trips",
+   "page": "drivers",
+   "roles": [
+    "administrator",
+    "dispatcher"
+   ],
+   "errors": [
+    "err.nameEmpty",
+    "err.badMobile",
+    "err.badExpiry",
+    "err.notImage",
+    "err.fullFolder",
     "err.httpsOnly"
    ]
   }

@@ -389,24 +389,28 @@ def _refuse_delete_in_use(store, entity, rid):
 
 
 NAME_MAX = 120
-NAMED_LISTS = ('drivers', 'people', 'places', 'departments', 'tripCategories')
+NAMED_LISTS = ('drivers', 'people', 'places', 'departments', 'tripCategories', 'routes')
 
 
 def _check_list_row(store, entity, row, rid):
     """Master-data sanity: no money or hours below zero, and no second copy of a category, a department or the same person."""
-    if entity in NAMED_LISTS and 'name' in row:
+    prev = _row(store, entity, rid) if entity in NAMED_LISTS and rid else None
+
+    def changed(field):   # a row saved earlier keeps its old value when another field is edited (the form posts the whole row)
+        return not prev or str(prev.get(field) or '') != str(row.get(field) or '')
+    if entity in NAMED_LISTS and 'name' in row and changed('name'):
         name = domain.norm_text(row.get('name') or '')
         if not name:
             raise BadRequest('name: write the name')
         if len(name) > NAME_MAX:
             raise BadRequest(f'name: at most {NAME_MAX} characters')
-    if entity in ('drivers', 'people') and row.get('mobile'):
+    if entity in ('drivers', 'people') and row.get('mobile') and changed('mobile'):
         raw = domain.norm_text(str(row['mobile'])).translate(domain._AR_DIGITS)
         digits = ''.join(ch for ch in raw if ch.isdigit())
-        if re.search(r'[^0-9+\-\s().]', raw) or not 8 <= len(digits) <= 15:
+        if re.search(r'[^0-9+\-\s()./,]', raw) or not 8 <= len(digits) <= 32:
             raise BadRequest('mobile: write a phone number like 01012345678')
-    if entity == 'drivers' and row.get('licenseExpiry'):
-        v = str(row['licenseExpiry'])[:10]
+    if entity == 'drivers' and row.get('licenseExpiry') and changed('licenseExpiry'):
+        v = str(row['licenseExpiry'])
         try:
             d = datetime.date.fromisoformat(v)
         except ValueError:

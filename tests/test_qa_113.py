@@ -1,4 +1,5 @@
 """QA findings fixed for 1.1.3 (report of 15 Oct 2026, B1-B12)."""
+import json
 import os
 import subprocess
 import sys
@@ -66,8 +67,13 @@ class QA(unittest.TestCase):
         self.assertIn('src', self.c.call('POST', '/api/upload?name=ok.png', raw=png, headers={'Content-Type': 'application/octet-stream'}))
 
     def test_B7_xlsx_arabic_filename(self):
-        data = self.c.post('/api/xlsx', {'filename': 'تقرير', 'sheets': [{'name': 'S', 'head': ['a'], 'rows': [['1']]}]})
-        self.assertTrue(bytes(data).startswith(b'PK'))
+        import urllib.request
+        req = urllib.request.Request(self.S.base + '/api/xlsx', data=json.dumps({'filename': 'تقرير', 'sheets': [{'name': 'S', 'head': ['a'], 'rows': [['1']]}]}).encode(),
+                                     method='POST', headers={'Content-Type': 'application/json'})
+        with self.c.opener.open(req, timeout=60) as r:
+            body, cd = r.read(), r.headers.get('Content-Disposition')
+        self.assertTrue(body.startswith(b'PK'))
+        self.assertIn("filename*=UTF-8''%D8%AA%D9%82%D8%B1%D9%8A%D8%B1.xlsx", cd)
 
     def test_B8_print_missing_trip_is_404(self):
         with self.assertRaises(ApiError) as e:
@@ -76,6 +82,21 @@ class QA(unittest.TestCase):
 
     def test_B11_absurd_licence_expiry(self):
         self.refused([put('drivers', 'qd5', name='Old Licence', licenseExpiry='1900-01-01', active=True)], 'err.badExpiry')
+        self.refused([put('drivers', 'qd5', name='Old Licence', licenseExpiry='2019-12-31', active=True)], 'err.badExpiry')
+        self.refused([put('drivers', 'qd5', name='Old Licence', licenseExpiry='2026-10-12-x', active=True)], 'err.badDate')
+        self.c.post('/api/commit', {'label': 't', 'ops': [put('drivers', 'qd6', name='Fine Licence', licenseExpiry='2020-01-01', active=True)]})
+
+    def test_old_rows_stay_editable(self):
+        """A row saved before these rules (e.g. by an import) can still be edited in its other fields."""
+        old = dict(name='Legacy ' + 'n' * 150, mobile='N/A', licenseExpiry='2019-12-31', active=True)
+        self.c.post('/api/commit', {'label': 'import', 'force': True, 'ops': [put('drivers', 'qd9', **old)]})
+        drv = next(d for d in self.c.get('/api/state')['drivers'] if d['id'] == 'qd9')
+        self.c.post('/api/commit', {'label': 't', 'ops': [{'e': 'drivers', 'id': 'qd9', 'op': 'put', 'ver': drv.get('ver'),
+                                                           'row': {**old, 'name': drv['name'], 'vendor': 'Other', 'active': False}}]})
+
+    def test_B3_mobile_pairs_and_arabic_digits(self):
+        self.c.post('/api/commit', {'label': 't', 'ops': [put('drivers', 'qd7', name='Two Phones', mobile='01012345678 / 01112345678', active=True),
+                                                          put('drivers', 'qd8', name='Arabic Digits', mobile='٠١٠١٢٣٤٥٦٧٨', active=True)]})
 
 
 class B12_NoSyntaxWarning(unittest.TestCase):

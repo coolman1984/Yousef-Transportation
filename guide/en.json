@@ -177,5 +177,9 @@
  "problem.mailbox-refused.see": "The mailbox refuses this PC.",
  "problem.mailbox-refused.why": "The clock of this PC is wrong, or the secret does not match the one on the mailbox.",
  "problem.mailbox-refused.do.1": "Set the date and time of this PC, then try again.",
- "problem.mailbox-refused.do.2": "If the message stays, copy the setup code from the first PC again."
+ "problem.mailbox-refused.do.2": "If the message stays, copy the setup code from the first PC again.",
+ "problem.value-refused.see": "The program refuses a value you wrote.",
+ "problem.value-refused.why": "The value cannot be right. Examples: an empty or very long name, a wrong mobile, an impossible date. A file may not be a real picture, or an address may lack https://.",
+ "problem.value-refused.do.1": "Read the message: it names the wrong value.",
+ "problem.value-refused.do.2": "Correct it and save again."
 }

@@ -262,7 +262,7 @@
     'err.nameEmpty': 'اكتب الاسم الأول.',
     'err.badMobile': 'رقم الموبايل ده مش مظبوط. اكتبه كده: 01012345678.',
     'err.badExpiry': 'التاريخ ده مش منطقي. راجعه تاني.',
-    'err.notImage': 'الملف ده مش صورة حقيقية. اختار صورة PNG أو JPG.',
+    'err.notImage': 'الملف ده مش صورة حقيقية. اختار صورة حقيقية (JPG أو PNG أو GIF أو WebP أو BMP أو HEIC).',
     'err.fullFolder': 'اكتب المجلد كامل، زي E:\\TO-Backups.',
     'err.httpsOnly': 'العنوان لازم يبدأ بـ https://، زي https://trip-orders.yourname.workers.dev.',
     'err.offline': 'مفيش اتصال بالبرنامج دلوقتي. اللي كتبته لسه موجود، جرّب تحفظ تاني لما الاتصال يرجع.',

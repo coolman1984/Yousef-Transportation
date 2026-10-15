@@ -262,7 +262,7 @@
     'err.nameEmpty': 'Write the name first.',
     'err.badMobile': 'This mobile number is not right. Write it like 01012345678.',
     'err.badExpiry': 'This date is not possible. Check it.',
-    'err.notImage': 'This file is not a real picture. Choose a PNG or JPG picture.',
+    'err.notImage': 'This file is not a real picture. Choose a real picture (JPG, PNG, GIF, WebP, BMP or HEIC).',
     'err.fullFolder': 'Type the full folder, for example E:\\TO-Backups.',
     'err.httpsOnly': 'The address must start with https:// (for example https://trip-orders.yourname.workers.dev).',
     'err.offline': 'No connection to the program right now. What you typed is still here; save again when the connection is back.',

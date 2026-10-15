@@ -12,6 +12,8 @@ For an actual customer build:
 4. Issue the signed offline trial, monthly or permanent licence separately for the customer PC's shown device code. Verify the licence accepts valid codes, rejects forged/other-device codes, works offline and preserves read/export/backup when expired.
 5. Confirm installer/upgrade/disaster-recovery acceptance on the exact binary, sign/hash and archive that binary securely. Only explicitly approved, verified builds may be sent to a customer. There is currently **no automated commercial publishing**.
 
+**Customer build on GitHub (no trusted local Windows PC):** the manual `Customer release build` workflow (`.github/workflows/customer-release.yml`, main only) builds the commercial installer with the owner's PUBLIC `trial-hub` and `paid` keys, installs the previous release silently, upgrades it, checks data, licence enforcement, refusal of unknown keys and the live hub's signed calendar, and uploads the installer with `RELEASE-PROOF.txt` as an artifact. It never creates the release; that stays a separate, owner-approved step.
+
 A compiled application is harder to inspect but **not impossible** to reverse-engineer on a client-controlled computer. The repo is public until its owner changes visibility, and prior public clones cannot be recalled. **Data at rest stays unencrypted unless `TRIPORDERS_ENCRYPT=1`.** That flag is off by default. `sqlcipher3` is an optional package and is not required for a normal build. The plan, recovery-key rules, and the two-backup migration gate are in `docs/OFFLINE_SECURITY_AND_RECOVERY.md`.
 
 The installed program keeps data under `%ProgramData%\\TripOrders`; updates replace program files rather than intentionally deleting customer records.

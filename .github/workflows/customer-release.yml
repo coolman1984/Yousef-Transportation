@@ -1,0 +1,122 @@
+# Builds the CUSTOMER installer on a GitHub Windows runner with the owner's real PUBLIC verification keys.
+# Public keys are not secrets; no private key is used or needed. Manual only. It never publishes:
+# the release is created separately after the owner approved it and this run's checks passed.
+name: Customer release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: 'VERSION in server/version.py must equal this (e.g. 1.1.3)'
+        required: true
+
+permissions:
+  contents: read
+
+env:
+  # owner PUBLIC keys: trial-hub (licence hub trial + calendar) and paid (hub monthly/permanent)
+  TO_RELEASE_PUBLIC_KEYS: 'trial-hub:I4syALksvwqkGv5XUANtX32LandWOABv4-RveQU-vhM,paid:INmxPP1zYT4XyHDJQaS3_R_6nt4HCIlG-6-3kAIgfJI'
+  TO_BUILD_CHANNEL: commercial
+  LICENCE_HUB_URL: 'https://trip-orders-licence-hub.mflma2040.workers.dev'
+
+jobs:
+  customer-installer:
+    if: github.ref == 'refs/heads/main'
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '^22.13.0'
+      - name: Version matches
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.expected_version }}
+        run: |
+          v=$(python -c "import sys; sys.path.insert(0,'server'); import version; print(version.VERSION)")
+          [ "$v" = "$EXPECTED" ] || { echo "VERSION is $v, expected $EXPECTED"; exit 1; }
+      - name: Build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "nuitka>=2.4,<3" ordered-set zstandard cryptography
+          choco upgrade innosetup -y --no-progress
+      - name: Build the CUSTOMER installer (commercial channel, real public keys)
+        run: python tools/build_windows.py
+      - name: It is the customer installer, not the CI test one
+        shell: pwsh
+        run: |
+          $setup = "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          if (-not (Test-Path $setup)) { Get-ChildItem dist; throw "missing $setup" }
+          if (Test-Path dist/CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt) { throw 'CI-TEST marker present' }
+      - name: Install 1.1.2 (previous release) and make data on it
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          pip install cryptography
+          $dir = Join-Path $env:RUNNER_TEMP 'previous'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          gh release download v1.1.2 --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir
+          $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' | Select-Object -First 1
+          (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          if (-not (Test-Path $exe)) { throw '1.1.2 did not install' }
+          python tools/journey_exe.py legacy (Join-Path $env:RUNNER_TEMP 'office') $exe
+          if ($LASTEXITCODE -ne 0) { throw '1.1.2 journey failed' }
+      - name: Silent upgrade to the new installer, then start it and check licence + data
+        shell: pwsh
+        run: |
+          $setup = "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          (Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $ver = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "installed version: $ver"
+          if (-not $ver.StartsWith('${{ inputs.expected_version }}')) { throw "installed version is $ver" }
+          if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders-CITest')) { throw 'CI-test folder present' }
+          $env:TRIPORDERS_DPAPI_DIR = Join-Path $env:RUNNER_TEMP 'dpapi'
+          New-Item -ItemType Directory -Force $env:TRIPORDERS_DPAPI_DIR | Out-Null
+          python tools/customer_release_check.py (Join-Path $env:RUNNER_TEMP 'office') $exe $env:LICENCE_HUB_URL
+          if ($LASTEXITCODE -ne 0) { throw 'customer release check failed' }
+      - name: Fresh silent install on a clean office starts and serves its pages
+        shell: pwsh
+        run: |
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $h = Join-Path $env:RUNNER_TEMP 'fresh'
+          New-Item -ItemType Directory -Force $h | Out-Null
+          '{"port": 18090, "sync_port": 18453, "open_browser": false}' | Set-Content (Join-Path $h 'config.json')
+          $env:TO_HOME = $h
+          $p = Start-Process -FilePath $exe -ArgumentList '--background' -PassThru
+          $ok = $false
+          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
+            Start-Sleep -Seconds 1
+            try {
+              $s = Invoke-RestMethod http://127.0.0.1:18090/api/auth/status
+              $l = Invoke-RestMethod http://127.0.0.1:18090/api/licence
+              if ($l.enforced -and $l.build_channel -eq 'commercial' -and -not $l.full) { $ok = $true }
+            } catch { }
+          }
+          Stop-Process -Id $p.Id -Force
+          if (-not $ok) { throw 'fresh install did not start as an enforced commercial build' }
+      - name: Proof
+        shell: pwsh
+        run: |
+          $setup = Get-Item "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          @("product: Trip Orders", "version: ${{ inputs.expected_version }}", "channel: commercial", "source_commit: ${env:GITHUB_SHA}",
+            "installer: $($setup.Name)", "size: $($setup.Length)", "installer_sha256: $hash",
+            "public_keys: ${env:TO_RELEASE_PUBLIC_KEYS}",
+            "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
+            "checks: silent install of 1.1.2 + journey, silent upgrade, commercial+enforced, data kept, forged code refused, live hub signed calendar accepted by pinned trial-hub key, fresh install starts enforced") |
+            Set-Content -Encoding utf8 dist/RELEASE-PROOF.txt
+          Get-Content dist/RELEASE-PROOF.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: TripOrders-CUSTOMER-${{ inputs.expected_version }}
+          path: |
+            dist/TripOrders-Setup-*.exe
+            dist/RELEASE-PROOF.txt
+          retention-days: 90

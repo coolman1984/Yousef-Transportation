@@ -9,6 +9,10 @@ on:
       expected_version:
         description: 'VERSION in server/version.py must equal this (e.g. 1.1.3)'
         required: true
+      previous_tag:
+        description: 'Published release to upgrade from (N-1)'
+        required: true
+        default: 'v1.1.2'
 
 permissions:
   contents: read
@@ -18,13 +22,17 @@ env:
   TO_RELEASE_PUBLIC_KEYS: 'trial-hub:I4syALksvwqkGv5XUANtX32LandWOABv4-RveQU-vhM,paid:INmxPP1zYT4XyHDJQaS3_R_6nt4HCIlG-6-3kAIgfJI'
   TO_BUILD_CHANNEL: commercial
   LICENCE_HUB_URL: 'https://trip-orders-licence-hub.mflma2040.workers.dev'
+  VERSION_IN: ${{ inputs.expected_version }}
+  PREVIOUS_TAG: ${{ inputs.previous_tag }}
 
 jobs:
   customer-installer:
-    if: github.ref == 'refs/heads/main'
     runs-on: windows-latest
     timeout-minutes: 75
     steps:
+      - name: Only from main
+        shell: bash
+        run: '[ "$GITHUB_REF" = "refs/heads/main" ] || { echo "run this on main, not $GITHUB_REF"; exit 1; }'
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
@@ -34,11 +42,11 @@ jobs:
           node-version: '^22.13.0'
       - name: Version matches
         shell: bash
-        env:
-          EXPECTED: ${{ inputs.expected_version }}
         run: |
+          [[ "$VERSION_IN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'bad version input'; exit 1; }
+          [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'bad previous tag'; exit 1; }
           v=$(python -c "import sys; sys.path.insert(0,'server'); import version; print(version.VERSION)")
-          [ "$v" = "$EXPECTED" ] || { echo "VERSION is $v, expected $EXPECTED"; exit 1; }
+          [ "$v" = "$VERSION_IN" ] || { echo "VERSION is $v, expected $VERSION_IN"; exit 1; }
       - name: Build tools
         run: |
           python -m pip install --upgrade pip
@@ -49,10 +57,10 @@ jobs:
       - name: It is the customer installer, not the CI test one
         shell: pwsh
         run: |
-          $setup = "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          $setup = "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
           if (-not (Test-Path $setup)) { Get-ChildItem dist; throw "missing $setup" }
           if (Test-Path dist/CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt) { throw 'CI-TEST marker present' }
-      - name: Install 1.1.2 (previous release) and make data on it
+      - name: Install the previous release (N-1) and make data on it
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
@@ -60,53 +68,41 @@ jobs:
           pip install cryptography
           $dir = Join-Path $env:RUNNER_TEMP 'previous'
           New-Item -ItemType Directory -Force $dir | Out-Null
-          gh release download v1.1.2 --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir
+          gh release download $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir
           $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' | Select-Object -First 1
           (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
-          if (-not (Test-Path $exe)) { throw '1.1.2 did not install' }
+          if (-not (Test-Path $exe)) { throw 'the previous release did not install' }
           python tools/journey_exe.py legacy (Join-Path $env:RUNNER_TEMP 'office') $exe
-          if ($LASTEXITCODE -ne 0) { throw '1.1.2 journey failed' }
+          if ($LASTEXITCODE -ne 0) { throw 'the previous release journey failed' }
       - name: Silent upgrade to the new installer, then start it and check licence + data
         shell: pwsh
         run: |
-          $setup = "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          $setup = "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
           (Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
           $ver = (Get-Item $exe).VersionInfo.ProductVersion
           Write-Host "installed version: $ver"
-          if (-not $ver.StartsWith('${{ inputs.expected_version }}')) { throw "installed version is $ver" }
+          if (-not $ver.StartsWith($env:VERSION_IN)) { throw "installed version is $ver" }
           if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders-CITest')) { throw 'CI-test folder present' }
           $env:TRIPORDERS_DPAPI_DIR = Join-Path $env:RUNNER_TEMP 'dpapi'
           New-Item -ItemType Directory -Force $env:TRIPORDERS_DPAPI_DIR | Out-Null
-          python tools/customer_release_check.py (Join-Path $env:RUNNER_TEMP 'office') $exe $env:LICENCE_HUB_URL
+          python tools/customer_release_check.py upgraded (Join-Path $env:RUNNER_TEMP 'office') $exe $env:LICENCE_HUB_URL
           if ($LASTEXITCODE -ne 0) { throw 'customer release check failed' }
-      - name: Fresh silent install on a clean office starts and serves its pages
+      - name: Fresh office on the installed program is an enforced commercial build without a licence
         shell: pwsh
         run: |
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
-          $h = Join-Path $env:RUNNER_TEMP 'fresh'
-          New-Item -ItemType Directory -Force $h | Out-Null
-          '{"port": 18090, "sync_port": 18453, "open_browser": false}' | Set-Content (Join-Path $h 'config.json')
-          $env:TO_HOME = $h
-          $p = Start-Process -FilePath $exe -ArgumentList '--background' -PassThru
-          $ok = $false
-          for ($i = 0; $i -lt 60 -and -not $ok; $i++) {
-            Start-Sleep -Seconds 1
-            try {
-              $s = Invoke-RestMethod http://127.0.0.1:18090/api/auth/status
-              $l = Invoke-RestMethod http://127.0.0.1:18090/api/licence
-              if ($l.enforced -and $l.build_channel -eq 'commercial' -and -not $l.full) { $ok = $true }
-            } catch { }
-          }
-          Stop-Process -Id $p.Id -Force
-          if (-not $ok) { throw 'fresh install did not start as an enforced commercial build' }
+          $env:TRIPORDERS_DPAPI_DIR = Join-Path $env:RUNNER_TEMP 'dpapi-fresh'
+          New-Item -ItemType Directory -Force $env:TRIPORDERS_DPAPI_DIR | Out-Null
+          python tools/customer_release_check.py fresh (Join-Path $env:RUNNER_TEMP 'fresh') $exe
+          if ($LASTEXITCODE -ne 0) { throw 'fresh install check failed' }
       - name: Proof
         shell: pwsh
         run: |
-          $setup = Get-Item "dist/TripOrders-Setup-${{ inputs.expected_version }}.exe"
+          $setup = Get-Item "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
           $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
-          @("product: Trip Orders", "version: ${{ inputs.expected_version }}", "channel: commercial", "source_commit: ${env:GITHUB_SHA}",
+          @("product: Trip Orders", "version: $($env:VERSION_IN)", "channel: commercial", "source_commit: ${env:GITHUB_SHA}",
             "installer: $($setup.Name)", "size: $($setup.Length)", "installer_sha256: $hash",
             "public_keys: ${env:TO_RELEASE_PUBLIC_KEYS}",
             "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
@@ -115,7 +111,7 @@ jobs:
           Get-Content dist/RELEASE-PROOF.txt
       - uses: actions/upload-artifact@v7
         with:
-          name: TripOrders-CUSTOMER-${{ inputs.expected_version }}
+          name: TripOrders-CUSTOMER-${{ env.VERSION_IN }}
           path: |
             dist/TripOrders-Setup-*.exe
             dist/RELEASE-PROOF.txt

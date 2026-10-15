@@ -1400,3 +1400,62 @@ test('customer device I/L/O aliases match normalized resolveTrial device', async
   assert.equal(blocked.kind, 'blocked');
   assert.equal(blocked.reason, 'downgrade_forbidden');
 });
+
+test('PR B r2: stepped backfill for 1200 trials stays within query budget and matches one-shot', async () => {
+  const win = trialWindow('2026-09-01');
+  const { e: eFull } = countingEnv();
+  const bulkDevice = (i) => {
+    const hex = i.toString(16).padStart(8, '0').toUpperCase();
+    return `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+  };
+  for (let i = 0; i < 1200; i++) {
+    const device = bulkDevice(i);
+    await insertRequest(eFull, {
+      id: `bulk-${i}`,
+      device,
+      dkey: deviceKey(device),
+      machine: MACHINE_A,
+      expiry: win.last,
+    });
+  }
+  const fullCount = await backfillTrialGrants(eFull, PRODUCT);
+  const fullRows = await eFull.DB.prepare(
+    'SELECT product, subject_kind, subject, first_day, last_day FROM trial_grants ORDER BY subject_kind, subject',
+  ).bind().all();
+
+  const { e: eStep, queryCount } = countingEnv();
+  for (let i = 0; i < 1200; i++) {
+    const device = bulkDevice(i);
+    await insertRequest(eStep, {
+      id: `bulk-${i}`,
+      device,
+      dkey: deviceKey(device),
+      machine: MACHINE_A,
+      expiry: win.last,
+    });
+  }
+
+  const {
+    trialGrantsBackfillStep,
+    isTrialGrantsBackfillComplete,
+    assertTrialGrantsBackfillReady,
+  } = await import('../src/trial-grants.js');
+
+  await assert.rejects(() => assertTrialGrantsBackfillReady(eStep), /backfill_in_progress/);
+
+  let steps = 0;
+  while (!(await isTrialGrantsBackfillComplete(eStep))) {
+    const startQ = queryCount();
+    const out = await trialGrantsBackfillStep(eStep);
+    const used = queryCount() - startQ;
+    assert.ok(out.queriesUsed <= 20);
+    assert.ok(used <= 50);
+    steps += 1;
+    assert.ok(steps < 5000);
+  }
+  assert.ok(fullCount > 0);
+  const steppedRows = await eStep.DB.prepare(
+    'SELECT product, subject_kind, subject, first_day, last_day FROM trial_grants ORDER BY subject_kind, subject',
+  ).bind().all();
+  assert.deepEqual(steppedRows.results, fullRows.results);
+});

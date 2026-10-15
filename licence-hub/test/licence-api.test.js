@@ -9,7 +9,7 @@ import {
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
   currentTerm, defaultProduct, ownerProductsPayload, blankLongDigitRuns, refFingerprint,
-  originalTrialWindow, isActiveStrongTerm,
+  originalTrialWindow, isActiveStrongTerm, setHubTestCalendarDay,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
 import { calendarDateInTz, shiftCalendarDays } from '../src/calendar.js';
@@ -685,7 +685,7 @@ test('owner force trial reissue refuses when trial window ended', async () => {
   await e.DB.prepare(
     "UPDATE licence_requests SET status = 'delivered', code = NULL WHERE id = ?",
   ).bind(data.id).run();
-  e.LICENCE_TEST_CALENDAR_DAY = shiftCalendarDays(issued.last_day, 1);
+  setHubTestCalendarDay(e, shiftCalendarDays(issued.last_day, 1));
   await assert.rejects(() => approveRequest(e, data.id, keys, { force: true }), /trial_expired/);
 });
 
@@ -1570,7 +1570,7 @@ test('PR B: trial allowed once after paid term expires', async () => {
   const keys = await signingKeys(113, 114);
   const paidUntil = '2027-06-01';
   await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: paidUntil });
-  e.LICENCE_TEST_CALENDAR_DAY = '2028-01-01';
+  setHubTestCalendarDay(e, '2028-01-01');
   const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
     grant: 'trial', reissue: true, confirm_downgrade: true,
   });
@@ -1610,9 +1610,78 @@ test('PR B: window guard conflict rolls back trial_grants rows', async () => {
 
 test('PR B: ensureTrialGrantsBackfill runs once per database', async () => {
   const e = env();
-  const { ensureTrialGrantsBackfill, TRIAL_GRANTS_BACKFILL_MARKER } = await import('../src/trial-grants.js');
-  await ensureTrialGrantsBackfill(e);
-  await ensureTrialGrantsBackfill(e);
+  const { runTrialGrantsBackfillToCompletion, TRIAL_GRANTS_BACKFILL_MARKER } = await import('../src/trial-grants.js');
+  await runTrialGrantsBackfillToCompletion(e);
+  await runTrialGrantsBackfillToCompletion(e);
   const row = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?').bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
   assert.equal(row.id, TRIAL_GRANTS_BACKFILL_MARKER);
+});
+
+test('PR B r2: LICENCE_TEST_CALENDAR_DAY does not override hub calendar in production', async () => {
+  const e = env();
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 77));
+  e.LICENCE_TEST_CALENDAR_DAY = '2099-06-15';
+  const natural = await hubCalendarSigned(e);
+  assert.notEqual(natural.calendar_day, '2099-06-15');
+  setHubTestCalendarDay(e, '2099-06-15');
+  const pinned = await hubCalendarSigned(e);
+  assert.equal(pinned.calendar_day, '2099-06-15');
+});
+
+test('PR B r2: device d lock owned by stranger rolls back trial_grants on approve', async () => {
+  const e = env();
+  const keys = await signingKeys(201);
+  const device = 'LMNOP-QRSTV';
+  const dkey = deviceKey(device);
+  const { data } = await postRequest(e, body({ device, nonce: 'stranger-d-lock' }));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(dkey), 'stranger', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(await approveRequest(e, data.id, keys), null);
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  const retry = await postRequest(e, body({ device, nonce: 'after-stranger-d' }));
+  assert.ok((await approveRequest(e, retry.data.id, keys))?.code);
+});
+
+test('PR B r2: offline od lock owned by other-req rolls back trial_grants', async () => {
+  const e = env();
+  const keys = await signingKeys(202);
+  const device = 'WXYZ2-ABCDE';
+  const dkey = deviceKey(device);
+  const lock = offlineDeviceLockKey('trip-orders', dkey);
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(lock, 'other-req', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }),
+    /already_used/,
+  );
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(lock).run();
+  assert.ok((await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }))?.code);
+});
+
+test('PR B r2: paid-expired trial approve rolls back trial_grants when device lock is lost', async () => {
+  const e = env();
+  const keys = await signingKeys(203, 204);
+  const paidUntil = '2027-06-01';
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: paidUntil });
+  setHubTestCalendarDay(e, '2028-01-01');
+  const { data } = await postRequest(e, body({ device, nonce: 'paid-expired-lock' }));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id')
+    .bind(deviceLockKey(dkey), 'stranger-paid', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(await approveRequest(e, data.id, keys, { grant: 'trial', confirm_downgrade: true }), null);
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  await e.DB.prepare(
+    "UPDATE licence_requests SET status = 'pending', reason = '', code = NULL WHERE id = ?",
+  ).bind(data.id).run();
+  assert.ok((await approveRequest(e, data.id, keys, { grant: 'trial', confirm_downgrade: true }))?.code);
 });

@@ -2,6 +2,7 @@ import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
   REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, defaultProduct, ownerProductsPayload,
   licencePathname, deviceKey, offlineRequestId, termFromRow, pickStrongerTerm,
+  TRIAL_GRANT_CONFLICT, BACKFILL_IN_PROGRESS, runTrialGrantsBackfillToCompletion,
 } from './licence-api.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
@@ -166,9 +167,18 @@ async function ownerApi(request, env, url, session) {
       }
       if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
       if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
+      if (e?.message === BACKFILL_IN_PROGRESS) {
+        return json({ error: 'backfill_in_progress', retryable: true }, 503);
+      }
+      if (e?.message === TRIAL_GRANT_CONFLICT) return json({ error: 'trial_grant_conflict' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
+  }
+  if (path === '/backfill-trial-grants' && request.method === 'POST') {
+    const maxSteps = Number(body.max_steps ?? body.maxSteps ?? 50);
+    const out = await runTrialGrantsBackfillToCompletion(env, { maxSteps });
+    return json({ ok: true, complete: out.complete, steps: out.steps });
   }
   if (path === '/refuse') {
     await refuseRequest(env, body.id, body.reason || 'refused');
@@ -211,6 +221,10 @@ async function ownerApi(request, env, url, session) {
       }
       if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
       if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
+      if (e?.message === BACKFILL_IN_PROGRESS) {
+        return json({ error: 'backfill_in_progress', retryable: true }, 503);
+      }
+      if (e?.message === TRIAL_GRANT_CONFLICT) return json({ error: 'trial_grant_conflict' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }

@@ -2,6 +2,7 @@
 and the read-side "insights" (trust colour, km, overtime, odometer chain) for every trip.
 Each operation is ONE store commit, so it is saved completely or not at all and appears as one change in the history."""
 import datetime
+import re
 import uuid
 
 import domain
@@ -387,8 +388,31 @@ def _refuse_delete_in_use(store, entity, rid):
         raise BadRequest(f'This {label} is used by {n} trip(s). Switch it off (not active) instead of deleting it, so old trips keep their {label}.')
 
 
+NAME_MAX = 120
+NAMED_LISTS = ('drivers', 'people', 'places', 'departments', 'tripCategories')
+
+
 def _check_list_row(store, entity, row, rid):
     """Master-data sanity: no money or hours below zero, and no second copy of a category, a department or the same person."""
+    if entity in NAMED_LISTS and 'name' in row:
+        name = domain.norm_text(row.get('name') or '')
+        if not name:
+            raise BadRequest('name: write the name')
+        if len(name) > NAME_MAX:
+            raise BadRequest(f'name: at most {NAME_MAX} characters')
+    if entity in ('drivers', 'people') and row.get('mobile'):
+        raw = domain.norm_text(str(row['mobile'])).translate(domain._AR_DIGITS)
+        digits = ''.join(ch for ch in raw if ch.isdigit())
+        if re.search(r'[^0-9+\-\s().]', raw) or not 8 <= len(digits) <= 15:
+            raise BadRequest('mobile: write a phone number like 01012345678')
+    if entity == 'drivers' and row.get('licenseExpiry'):
+        v = str(row['licenseExpiry'])[:10]
+        try:
+            d = datetime.date.fromisoformat(v)
+        except ValueError:
+            raise BadRequest('licenseExpiry: write the date like 2026-10-12')
+        if d.year < 2020 or d.year > 2100:
+            raise BadRequest('licenseExpiry: this date is not possible - check it')
     if entity == 'tripCategories':
         for f in ('ratePerKm', 'ratePerOtHour', 'openLimitHours'):
             v = row.get(f)

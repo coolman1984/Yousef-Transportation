@@ -112,6 +112,9 @@
         }
         return data;
       });
+    }, function () {
+      /* the program could not be reached (PC asleep, cable out): say it in the screen's language; the open form keeps what was typed */
+      throw new ApiError(0, TO.has && TO.has('err.offline') ? TO.t('err.offline') : 'No connection to the program right now.', { key: 'err.offline', offline: true });
     });
   };
   /* The text of an error answer in the language of the screen: the server sends a stable key (and values) next to its English message. */

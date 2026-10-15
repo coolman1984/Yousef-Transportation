@@ -126,7 +126,7 @@ class Server:
         # Own session so stop/kill can signal this server without touching the test process,
         # and so a crashed test does not leave the server in the test's process group.
         self.proc = subprocess.Popen([sys.executable, APP], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                                     text=True, start_new_session=True)
+                                     text=True, errors='replace', start_new_session=True)
         threading.Thread(target=self._drain, args=(self.proc,), daemon=True).start()
         if wait:
             wait_until(lambda: self.status(), 60, what=f'{self.name} to start: ' + ''.join(self.out[-20:]))

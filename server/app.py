@@ -23,7 +23,7 @@ import uuid
 import webbrowser
 from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)  # the portable (embedded) Python does not add the script folder itself
@@ -161,9 +161,19 @@ _fh.setFormatter(logging.Formatter('%(asctime)s %(levelname)s %(message)s'))
 log.addHandler(_fh)
 
 
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(errors='replace')   # an Arabic name must never break a request on a cp1252 console
+    except (AttributeError, ValueError, OSError):
+        pass
+
+
 def say(msg):
     log.info(msg)
-    print(f'[{datetime.now():%H:%M:%S}] {msg}', flush=True)
+    try:
+        print(f'[{datetime.now():%H:%M:%S}] {msg}', flush=True)
+    except (UnicodeError, OSError, ValueError, AttributeError):
+        pass   # the console is optional; the log file (UTF-8) has the line
 
 
 INSTANCE = lock_data(DATA_DIR)  # taken before anything touches the data
@@ -177,6 +187,27 @@ else:
 GATE = ASSIST = LIC = None
 formats.OFFICE_TMP = os.path.join(DATA_DIR, 'tmp')
 OFFICE_STATE = formats.office_state()      # is Microsoft Excel / Word on this PC? (decided once at start)
+
+
+def content_disposition(name):
+    """attachment header that survives non-Latin names (RFC 5987/6266): an ASCII fallback plus filename*=UTF-8''..."""
+    ascii_name = ''.join(ch if 32 <= ord(ch) < 127 and ch not in '"\\;' else '_' for ch in name)
+    return f"attachment; filename=\"{ascii_name}\"; filename*=UTF-8''{quote(name, safe='')}"
+
+
+IMAGE_MAGIC = {'.png': (b'\x89PNG\r\n\x1a\n',), '.jpg': (b'\xff\xd8\xff',), '.jpeg': (b'\xff\xd8\xff',), '.gif': (b'GIF87a', b'GIF89a'),
+               '.bmp': (b'BM',)}
+
+
+def image_matches(data, ext):
+    """An image upload must really be that kind of image (an .exe renamed .png is refused)."""
+    if ext in IMAGE_MAGIC:
+        return any(data.startswith(m) for m in IMAGE_MAGIC[ext])
+    if ext == '.webp':
+        return data[:4] == b'RIFF' and data[8:12] == b'WEBP'
+    if ext == '.heic':
+        return data[4:8] == b'ftyp'
+    return True
 
 
 def store_bytes(data, ext, user='gateway', ip='', user_id=''):
@@ -234,7 +265,7 @@ if INSTANCE:
     LIC = licence_mod.Licence(ASSIST, ROOT, HOME, CFG, shop_name=site_shop_name)
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
-               b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\u2026</text></svg>')
+               b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\xe2\x80\xa6</text></svg>')
 COOKIE = 'to_sid'
 ABOUT = {'product': PRODUCT, 'version': VERSION, 'developer': DEVELOPER, 'copyright': COPYRIGHT, 'license': LICENSE_NOTE,
          'installed': ASSETS is not None}
@@ -755,6 +786,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.need('trips.view')
                 ctx, name = {}, 'Trip_order_blank.docx'
                 t = next((x for x in st.get('trips', []) if x['id'] == qs.get('trip')), None) if qs.get('trip') else None
+                if qs.get('trip') and not t:
+                    return self.send(404, {'error': 'Trip not found', 'key': 'err.tripNotFound', 'vars': {}})
                 if t:
                     n = reports._names(st)
                     ctx = {'no': t.get('no', ''), 'passenger': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'department': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
@@ -1105,8 +1138,8 @@ class Handler(BaseHTTPRequestHandler):
             self.need(*REPORT_PERMS)
             d = self.json_body()
             data = xlsx.build([(s.get('name', 'Sheet'), s.get('head', []), s.get('rows', [])) for s in d.get('sheets', [])])
-            name = ''.join(ch for ch in str(d.get('filename') or 'export') if ch.isalnum() or ch in ' _-.')[:80]
-            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="{name}.xlsx"'})
+            name = ''.join(ch for ch in str(d.get('filename') or 'export') if ch.isalnum() or ch in ' _-.')[:80].strip() or 'export'
+            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': content_disposition(name + '.xlsx')})
         if p == '/api/backups':
             self.need('backups.manage')
             name = BACKUPS.create('manual')
@@ -1267,6 +1300,8 @@ class Handler(BaseHTTPRequestHandler):
                 LIC.begin(d.get('kind'), str(d.get('ref') or ''), self.u['id'],
                           shop=d.get('shop') if d.get('shop') is not None else None)
             except LookupError as e:
+                if str(e) == 'have_licence':
+                    raise BadRequest('This PC already has a working licence.', 'lic.have_licence')
                 raise BadRequest('This copy cannot ask the company by itself. Send the device code and paste the code you get.', 'lic.' + str(e))
             AUTH.log(self.u['display'], self.ip, 'licence', d.get('kind'), 'Licence requested from the company')
             return self.send(200, LIC.step())
@@ -1327,6 +1362,8 @@ class Handler(BaseHTTPRequestHandler):
         data = self.body(int(CFG['max_upload_mb']) * 1048576)
         if not data:
             raise BadRequest('Empty file')
+        if ext in IMAGE_EXT and not image_matches(data, ext):
+            raise BadRequest('This file is not a real picture of its type.')
         # content-addressed: the name is the SHA-256 of the content, so the same file is stored once and every PC can check its copy
         src, _ = store_bytes(data, ext, self.user, self.ip, self.u['id'])
         log.info('UPLOAD %s (%s) %s -> %s %d bytes', self.user, self.ip, name, src, len(data))

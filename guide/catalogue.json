@@ -820,7 +820,9 @@
    "errors": [
     "err.chooseMonth",
     "err.tooLarge",
-    "err.notFound"
+    "err.notFound",
+    "err.notImage",
+    "err.fullFolder"
    ]
   },
   {
@@ -934,7 +936,10 @@
    "errors": [
     "err.inUse",
     "err.duplicate",
-    "err.dupPerson"
+    "err.dupPerson",
+    "err.nameEmpty",
+    "err.badMobile",
+    "err.badExpiry"
    ]
   },
   {
@@ -947,7 +952,8 @@
    "errors": [
     "err.clockOff",
     "err.mailboxSecret",
-    "err.mailboxReplay"
+    "err.mailboxReplay",
+    "err.httpsOnly"
    ]
   }
  ]

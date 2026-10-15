@@ -16,6 +16,7 @@ import {
 } from '../src/trial-grants.js';
 import { shiftCalendarDays } from '../src/calendar.js';
 import { applyMigrations } from '../scripts/apply-migrations.mjs';
+import { assertD1CompoundSelectCap, maxCompoundSelectTerms } from './sql-limits.js';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const PRODUCT = 'trip-orders';
@@ -37,6 +38,27 @@ function env(over = {}) {
     TRIAL_DAYS: '14',
     LICENCE_CALENDAR_TZ: 'Africa/Cairo',
     ...over,
+  };
+}
+
+function sqlCaptureEnv(innerDb, over = {}) {
+  const captured = [];
+  const inner = innerDb || newD1();
+  const DB = {
+    prepare(sql) {
+      captured.push(sql);
+      const stmt = inner.prepare(sql);
+      return {
+        bind(...args) {
+          return stmt.bind(...args);
+        },
+      };
+    },
+    batch: (stmts) => inner.batch(stmts),
+  };
+  return {
+    e: { DB, TRIAL_DAYS: '14', LICENCE_CALENDAR_TZ: 'Africa/Cairo', ...over },
+    sql: captured,
   };
 }
 
@@ -1187,4 +1209,117 @@ test('empty expiry on paid row does not block', async () => {
   });
   const r = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
   assert.equal(r.kind, 'eligible');
+});
+
+test('closure SQL stays within D1 compound SELECT cap for 99 machine seeds', async () => {
+  const base = env();
+  const machines = [];
+  for (let i = 0; i < 99; i++) {
+    machines.push(String(i).padStart(64, 'a'));
+    await insertRequest(base, {
+      id: `cmp-${i}`,
+      device: DEVICE_A,
+      dkey: DKEY_A,
+      machine: machines[i],
+      expiry: '2026-06-14',
+    });
+  }
+  const { e, sql } = sqlCaptureEnv(base.DB);
+  await resolveTrial(e, PRODUCT, DEVICE_A, machines, { today: '2026-06-01' });
+  const closureSqls = sql.filter((s) => s.includes('WITH RECURSIVE') && s.includes('seeds(kind, id)'));
+  assert.ok(closureSqls.length >= 1);
+  for (const stmt of closureSqls) {
+    assertD1CompoundSelectCap(stmt);
+    assert.ok(maxCompoundSelectTerms(stmt) <= 5);
+  }
+});
+
+for (const nDevices of [5, 6, 12, 50, 99]) {
+  test(`resolveTrial with device and ${nDevices} machine seeds respects compound SELECT cap`, async () => {
+    const base = env();
+    const machines = [];
+    for (let i = 0; i < nDevices; i++) {
+      machines.push(String(i + 1).padStart(64, 'b'));
+      await insertRequest(base, {
+        id: `dev-${nDevices}-${i}`,
+        device: DEVICE_A,
+        dkey: DKEY_A,
+        machine: machines[i],
+        expiry: '2026-06-14',
+      });
+    }
+    const { e, sql } = sqlCaptureEnv(base.DB);
+    await resolveTrial(e, PRODUCT, DEVICE_A, machines, { today: '2026-06-01' });
+    const closureSqls = sql.filter((s) => s.includes('WITH RECURSIVE'));
+    assert.ok(closureSqls.length >= 1);
+    for (const stmt of closureSqls) {
+      assertD1CompoundSelectCap(stmt);
+    }
+  });
+}
+
+async function propagateSubjectSetup(e, devicesOnShared) {
+  const shared = '9'.repeat(64);
+  const codes = [];
+  for (let i = 0; i < devicesOnShared; i++) {
+    const code = `PRP${String(i).padStart(2, '0')}-AAAAA`;
+    codes.push(code);
+    await insertRequest(e, {
+      id: `prp-${devicesOnShared}-${i}`,
+      device: code,
+      dkey: deviceKey(code),
+      machine: shared,
+      expiry: '2026-01-01',
+    });
+  }
+  return { shared, grantDevice: codes[0] };
+}
+
+for (const subjectCount of [6, 12, 50]) {
+  test(`trialGrantStatements propagate ${subjectCount} subjects within compound SELECT cap`, async () => {
+    const base = env();
+    const { shared, grantDevice } = await propagateSubjectSetup(base, subjectCount - 1);
+    const { e, sql } = sqlCaptureEnv(base.DB);
+    const win = { first_day: '2026-06-01', last_day: '2026-06-14' };
+    const stmts = await trialGrantStatements(e, PRODUCT, grantDevice, [shared], win, `prop-${subjectCount}`);
+    assert.ok(stmts.length >= 1);
+    for (const stmt of stmts) {
+      if (typeof stmt === 'object' && stmt.bind) {
+        /* D1 mock stmt — SQL already captured on prepare */
+      }
+    }
+    const propagateSqls = sql.filter((s) => s.includes('json_each') && s.includes('trial_grants'));
+    assert.ok(propagateSqls.length >= 1);
+    for (const stmt of propagateSqls) {
+      assertD1CompoundSelectCap(stmt);
+    }
+    await base.DB.batch(stmts);
+    const n = await base.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+    assert.equal(n.n, subjectCount);
+  });
+}
+
+test('customer device with underscore matches hyphenated resolveTrial', async () => {
+  const e = env();
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('us', ?, '', ?, 'paid', '2025-01-01', '2026-12-31', 'paid', '2026-12-31', 1)`,
+  ).bind(PRODUCT, '7kd2m_qx9tp').run();
+  const blocked = await resolveTrial(e, PRODUCT, DEVICE_A, [MACHINE_A], { today: '2026-03-01' });
+  assert.equal(blocked.kind, 'blocked');
+  assert.equal(blocked.reason, 'downgrade_forbidden');
+});
+
+test('customer device I/L/O aliases match normalized resolveTrial device', async () => {
+  const e = env();
+  const aliasDevice = 'IKD2M-QX9TP';
+  const canonical = '1KD2M-QX9TP';
+  assert.equal(deviceKey(aliasDevice), deviceKey(canonical));
+  await e.DB.prepare(
+    `INSERT INTO customers(id, product, shop, device, kind, first_day, last_day, licence_tier, licence_expiry, created_at)
+     VALUES('alias', ?, '', ?, 'permanent', '2025-01-01', '', 'permanent', '', 1)`,
+  ).bind(PRODUCT, aliasDevice).run();
+  const blocked = await resolveTrial(e, PRODUCT, canonical, [], { today: '2026-03-01' });
+  assert.equal(blocked.kind, 'blocked');
+  assert.equal(blocked.reason, 'downgrade_forbidden');
 });

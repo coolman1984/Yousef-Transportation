@@ -384,14 +384,14 @@ SELECT kind, id FROM closure`;
 async function runClosureChunk(env, product, dkey, machineChunk, budget) {
   const spent = spendQueryBudget(budget);
   if (!spent.ok) return { limit: true };
-  const seedParts = [`SELECT 'd' AS kind, ? AS id`];
-  const binds = [dkey];
-  for (const mh of machineChunk) {
-    seedParts.push(`SELECT 'm', ?`);
-    binds.push(mh);
-  }
-  const seedsSql = seedParts.join(' UNION ALL ');
-  binds.push(product, product);
+  const machinesJson = JSON.stringify(
+    machineChunk.map((mh) => String(mh || '').toLowerCase()).filter(Boolean),
+  );
+  const seedsSql = `SELECT 'd' AS kind, ? AS id
+    UNION ALL
+    SELECT 'm', lower(j.value)
+    FROM json_each(?) AS j`;
+  const binds = [dkey, machinesJson, product, product];
   const rows = await env.DB.prepare(closureSql(seedsSql)).bind(...binds).all();
   const deviceSet = new Set();
   const machineSet = new Set();
@@ -412,22 +412,10 @@ async function computeLinkedClosure(env, product, device, machines = [], budget 
 
   const deviceSet = new Set();
   const machineSet = new Set();
-  const reservedBinds = 3;
-  const machineChunkSize = inChunkSize(reservedBinds);
-  if (!seedMachines.length) {
-    const part = await runClosureChunk(env, product, dkey, [], budget);
-    if (part.limit) return { blocked: true, reason: 'link_limit' };
-    for (const id of part.devices) deviceSet.add(id);
-    for (const id of part.machines) machineSet.add(id);
-  } else {
-    for (let i = 0; i < seedMachines.length; i += machineChunkSize) {
-      const chunk = seedMachines.slice(i, i + machineChunkSize);
-      const part = await runClosureChunk(env, product, dkey, chunk, budget);
-      if (part.limit) return { blocked: true, reason: 'link_limit' };
-      for (const id of part.devices) deviceSet.add(id);
-      for (const id of part.machines) machineSet.add(id);
-    }
-  }
+  const part = await runClosureChunk(env, product, dkey, seedMachines, budget);
+  if (part.limit) return { blocked: true, reason: 'link_limit' };
+  for (const id of part.devices) deviceSet.add(id);
+  for (const id of part.machines) machineSet.add(id);
 
   const nodeCount = deviceSet.size + machineSet.size;
   if (nodeCount > LINK_CLOSURE_CAP) {
@@ -456,9 +444,10 @@ export async function linkedSubjects(env, productId, device, machines = []) {
   };
 }
 
-/** SQL expression: strip hyphens/whitespace and uppercase (matches `normalize()` for device codes). */
+/** SQL expression matching `afcodes.js` `normalize()` for device codes (strip, upper, O/I/L). */
 function deviceCodeNormSql(column) {
-  return `upper(replace(replace(replace(replace(${column}, '-', ''), ' ', ''), char(9), ''), char(10), ''))`;
+  const stripped = `replace(replace(replace(replace(replace(replace(replace(${column}, '-', ''), ' ', ''), char(9), ''), char(10), ''), char(13), ''), '_', ''), '.', '')`;
+  return `replace(replace(replace(upper(${stripped}), 'O', '0'), 'I', '1'), 'L', '1')`;
 }
 
 function customerDeviceMatchSql() {
@@ -645,8 +634,8 @@ export async function resolveTrial(env, productId, device, machines = [], option
  */
 export const TRIAL_GRANT_WINDOW_GUARD_LAST = true;
 
-const GRANT_ROW_BINDS = 7;
-const GRANT_PROPAGATE_ROWS_PER_STMT = Math.floor(D1_STMT_BIND_MAX / GRANT_ROW_BINDS);
+/** Max subjects per propagate INSERT (JSON payload size guard; binds stay at six). */
+const GRANT_PROPAGATE_ROWS_PER_STMT = 256;
 
 function closureGrantSubjects(devices, machines) {
   const rows = [];
@@ -684,17 +673,19 @@ function grantWindowGuardStatement(env, reqFirst, reqLast, authWin) {
 }
 
 function grantPropagateStatement(env, product, subjectRows, winFirst, winLast, createdAt, src) {
-  const unions = [];
-  const binds = [];
-  for (const row of subjectRows) {
-    unions.push(
-      `SELECT ? AS product, ? AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
-    );
-    binds.push(product, row.kind, row.subject, winFirst, winLast, createdAt, src);
-  }
+  const payload = JSON.stringify(
+    subjectRows.map((row) => ({ kind: row.kind, subject: row.subject })),
+  );
   const sql = `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-    SELECT product, subject_kind, subject, first_day, last_day, created_at, source_request
-    FROM (${unions.join(' UNION ALL ')})`;
+    SELECT ? AS product,
+           json_extract(j.value, '$.kind') AS subject_kind,
+           json_extract(j.value, '$.subject') AS subject,
+           ? AS first_day,
+           ? AS last_day,
+           ? AS created_at,
+           ? AS source_request
+    FROM json_each(?) AS j`;
+  const binds = [product, winFirst, winLast, createdAt, src, payload];
   if (binds.length > D1_STMT_BIND_MAX) {
     throw new Error('link_limit');
   }

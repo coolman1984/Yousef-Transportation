@@ -579,103 +579,71 @@ export async function resolveTrial(env, productId, device, machines = [], option
  */
 export const TRIAL_GRANT_WINDOW_GUARD_LAST = true;
 
-const GRANT_ROW_BINDS = 6;
+const GRANT_ROW_BINDS = 7;
+const GRANT_PROPAGATE_ROWS_PER_STMT = Math.floor(D1_STMT_BIND_MAX / GRANT_ROW_BINDS);
 
-function grantSubjectsWhereSql(mhList) {
-  const deviceClause = "(tg.subject_kind = 'd' AND tg.subject = ?)";
-  if (!mhList.length) {
-    return { where: `tg.product = ? AND ${deviceClause}`, binds: (product, dkey) => [product, dkey] };
+function closureGrantSubjects(devices, machines) {
+  const rows = [];
+  const seen = new Set();
+  for (const d of devices) {
+    const id = String(d || '').trim();
+    if (!id || seen.has(`d:${id}`)) continue;
+    seen.add(`d:${id}`);
+    rows.push({ kind: 'd', subject: id });
   }
-  const mPh = mhList.map(() => '?').join(', ');
-  return {
-    where: `tg.product = ? AND (${deviceClause} OR (tg.subject_kind = 'm' AND tg.subject IN (${mPh})))`,
-    binds: (product, dkey) => [product, dkey, ...mhList],
-  };
-}
-
-function authoritativeEarliestSubquery(mhList) {
-  const { where } = grantSubjectsWhereSql(mhList);
-  return `(SELECT tg.first_day, tg.last_day FROM trial_grants tg
-    WHERE ${where}
-    ORDER BY tg.first_day ASC, tg.last_day ASC LIMIT 1)`;
-}
-
-function grantAuthBindCount(mhList) {
-  return 2 + mhList.length;
-}
-
-function grantPropagateBindCount(rowCount, mhList) {
-  return GRANT_ROW_BINDS * rowCount + grantAuthBindCount(mhList);
-}
-
-function maxMachineRowsPerPropagateStmt(mhList, includeDevice) {
-  let best = -1;
-  for (let machineRows = 0; machineRows <= mhList.length; machineRows += 1) {
-    const rowCount = (includeDevice ? 1 : 0) + machineRows;
-    if (rowCount === 0) continue;
-    if (grantPropagateBindCount(rowCount, mhList) <= D1_STMT_BIND_MAX) {
-      best = machineRows;
-    }
+  for (const mh of machines) {
+    const id = String(mh || '').trim();
+    if (!id || seen.has(`m:${id}`)) continue;
+    seen.add(`m:${id}`);
+    rows.push({ kind: 'm', subject: id });
   }
-  return best;
+  return rows;
 }
 
-function grantWindowGuardStatement(env, product, dkey, mhList, reqFirst, reqLast) {
-  const { binds: authBinds } = grantSubjectsWhereSql(mhList);
-  const auth = authoritativeEarliestSubquery(mhList);
+function grantWindowGuardStatement(env, reqFirst, reqLast, authWin) {
   const sql = `INSERT INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at)
     SELECT NULL, 'd', '', '', '', ''
-    WHERE EXISTS (
-      SELECT 1 FROM ${auth} AS auth
-      WHERE auth.first_day <> ? OR auth.last_day <> ?
-    )`;
-  const bindArgs = [...authBinds(product, dkey), reqFirst, reqLast];
-  if (bindArgs.length > D1_STMT_BIND_MAX) {
-    throw new Error('link_limit');
+    WHERE ? = 1 AND (? <> ? OR ? <> ?)`;
+  if (!authWin) {
+    return env.DB.prepare(sql).bind(0, '', reqFirst, '', reqLast);
   }
-  return env.DB.prepare(sql).bind(...bindArgs);
+  const mismatch = authWin.first !== reqFirst || authWin.last !== reqLast;
+  return env.DB.prepare(sql).bind(
+    mismatch ? 1 : 0,
+    authWin.first,
+    reqFirst,
+    authWin.last,
+    reqLast,
+  );
 }
 
-function grantPropagateStatement(env, product, dkey, mhList, reqFirst, reqLast, createdAt, src, includeDevice, mhChunk) {
-  const auth = authoritativeEarliestSubquery(mhList);
-  const { binds: authBinds } = grantSubjectsWhereSql(mhList);
+function grantPropagateStatement(env, product, subjectRows, winFirst, winLast, createdAt, src) {
   const unions = [];
   const binds = [];
-  if (includeDevice) {
+  for (const row of subjectRows) {
     unions.push(
-      `SELECT ? AS product, 'd' AS subject_kind, ? AS subject, ? AS req_first, ? AS req_last, ? AS created_at, ? AS source_request`,
+      `SELECT ? AS product, ? AS subject_kind, ? AS subject, ? AS first_day, ? AS last_day, ? AS created_at, ? AS source_request`,
     );
-    binds.push(product, dkey, reqFirst, reqLast, createdAt, src);
-  }
-  for (const mh of mhChunk) {
-    unions.push(
-      `SELECT ? AS product, 'm' AS subject_kind, ? AS subject, ? AS req_first, ? AS req_last, ? AS created_at, ? AS source_request`,
-    );
-    binds.push(product, mh, reqFirst, reqLast, createdAt, src);
+    binds.push(product, row.kind, row.subject, winFirst, winLast, createdAt, src);
   }
   const sql = `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
-    SELECT planned.product, planned.subject_kind, planned.subject,
-      COALESCE(auth.first_day, planned.req_first),
-      COALESCE(auth.last_day, planned.req_last),
-      planned.created_at, planned.source_request
-    FROM (${unions.join(' UNION ALL ')}) AS planned
-    LEFT JOIN ${auth} AS auth ON 1 = 1`;
-  const bindArgs = [...binds, ...authBinds(product, dkey)];
-  if (bindArgs.length > D1_STMT_BIND_MAX) {
+    SELECT product, subject_kind, subject, first_day, last_day, created_at, source_request
+    FROM (${unions.join(' UNION ALL ')})`;
+  if (binds.length > D1_STMT_BIND_MAX) {
     throw new Error('link_limit');
   }
-  return env.DB.prepare(sql).bind(...bindArgs);
+  return env.DB.prepare(sql).bind(...binds);
 }
 
 /**
- * Insert-only trial ledger rows for a device and optional machine hashes.
- * Propagate inserts use the earliest window already stored for this device and listed hashes
- * (fallback: requested window). A final guard statement aborts the D1 batch when that
- * authoritative window still differs from the requested window after propagate (see README).
+ * Insert-only trial ledger rows for the device↔machine closure (same subject set as resolveTrial).
+ * Propagate inserts the closure-wide earliest window (min first_day, tie min last_day) for every
+ * linked subject lacking a row (INSERT OR IGNORE; later rows on other subjects are untouched).
+ * A final guard aborts the D1 batch when that authoritative window exists and differs from the
+ * requested window (see README).
  */
-export function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
+export async function trialGrantStatements(env, productId, device, machines, window, sourceRequest) {
   const product = normalizeProduct(productId);
-  const dkey = deviceKeyNorm(device);
   const first = String(window?.first_day || window?.first || '').trim();
   const last = String(window?.last_day || window?.last || '').trim();
   if (!isValidCalendarIso(first) || !isValidCalendarIso(last)) {
@@ -683,50 +651,29 @@ export function trialGrantStatements(env, productId, device, machines, window, s
   }
   const createdAt = new Date().toISOString();
   const src = sourceRequest || null;
-  const mhList = [];
-  const seen = new Set();
-  for (const raw of machines || []) {
-    const mh = normalizeMachineHash(raw);
-    if (!mh || seen.has(mh)) continue;
-    seen.add(mh);
-    mhList.push(mh);
+  const budget = { used: 0 };
+  const closure = await computeLinkedClosure(env, product, device, machines, budget);
+  if (closure.blocked) {
+    throw new Error('link_limit');
   }
-  if (grantAuthBindCount(mhList) + 2 > D1_STMT_BIND_MAX) {
+  const ledgerResult = await earliestLedgerWindow(env, product, closure.devices, closure.machines, budget);
+  if (ledgerResult.limit) {
+    throw new Error('link_limit');
+  }
+  const authWin = ledgerResult.window;
+  const insertFirst = authWin ? authWin.first : first;
+  const insertLast = authWin ? authWin.last : last;
+  const subjects = closureGrantSubjects(closure.devices, closure.machines);
+  if (!subjects.length) {
     throw new Error('link_limit');
   }
   const stmts = [];
-  if (mhList.length === 0) {
-    if (maxMachineRowsPerPropagateStmt(mhList, true) < 0) {
-      throw new Error('link_limit');
-    }
+  for (let i = 0; i < subjects.length; i += GRANT_PROPAGATE_ROWS_PER_STMT) {
+    const chunk = subjects.slice(i, i + GRANT_PROPAGATE_ROWS_PER_STMT);
     stmts.push(
-      grantPropagateStatement(env, product, dkey, mhList, first, last, createdAt, src, true, []),
+      grantPropagateStatement(env, product, chunk, insertFirst, insertLast, createdAt, src),
     );
-  } else {
-    let offset = 0;
-    const firstTake = maxMachineRowsPerPropagateStmt(mhList, true);
-    if (firstTake < 0) {
-      throw new Error('link_limit');
-    }
-    stmts.push(
-      grantPropagateStatement(
-        env, product, dkey, mhList, first, last, createdAt, src, true, mhList.slice(0, firstTake),
-      ),
-    );
-    offset = firstTake;
-    while (offset < mhList.length) {
-      const take = maxMachineRowsPerPropagateStmt(mhList, false);
-      if (take < 1) {
-        throw new Error('link_limit');
-      }
-      stmts.push(
-        grantPropagateStatement(
-          env, product, dkey, mhList, first, last, createdAt, src, false, mhList.slice(offset, offset + take),
-        ),
-      );
-      offset += take;
-    }
   }
-  stmts.push(grantWindowGuardStatement(env, product, dkey, mhList, first, last));
+  stmts.push(grantWindowGuardStatement(env, first, last, authWin));
   return stmts;
 }

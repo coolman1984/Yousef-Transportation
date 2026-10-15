@@ -359,6 +359,34 @@ export async function backfillTrialGrants(env, productFilter, options = {}) {
   return stmts.length;
 }
 
+/** Recorded in schema_migrations after one-time legacy ledger backfill (PR B). */
+export const TRIAL_GRANTS_BACKFILL_MARKER = 'trial_grants_backfill_v1';
+
+/** Run `backfillTrialGrants` once per database before the first `resolveTrial` (idempotent marker). */
+export async function ensureTrialGrantsBackfill(env) {
+  if (env._trialGrantsBackfillPromise) {
+    await env._trialGrantsBackfillPromise;
+    return;
+  }
+  env._trialGrantsBackfillPromise = (async () => {
+    const done = await env.DB.prepare(
+      'SELECT 1 FROM schema_migrations WHERE id = ?',
+    ).bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+    if (done) return;
+    await backfillTrialGrants(env, null);
+    const t = Math.floor(Date.now() / 1000);
+    await env.DB.prepare(
+      'INSERT OR IGNORE INTO schema_migrations(id, applied_at) VALUES(?, ?)',
+    ).bind(TRIAL_GRANTS_BACKFILL_MARKER, t).run();
+  })();
+  try {
+    await env._trialGrantsBackfillPromise;
+  } catch (e) {
+    env._trialGrantsBackfillPromise = null;
+    throw e;
+  }
+}
+
 function closureSql(seedsSql) {
   return `
 WITH RECURSIVE

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Trial grants ledger PR B — resolveTrial call sites (2026-10-15)
+
+**What/why:** Route every trial signing path in `licence-api.js` through `resolveTrial` + atomic `trialGrantStatements` batches; lazy `ensureTrialGrantsBackfill` before first resolve; window-guard conflicts retry or map to `trial_grant_conflict`; PR B regression tests on approve/offline/force/paid expiry.
+**Checks:** `cd licence-hub && npm test` (743 pass); `cd tests && python3 -m unittest test_licence_hub_signer test_hub_time` (2 pass).
+**Next:** Owner review PR B; deploy hub after D1 `0004` + backfill marker on production.
+
 ## Trial grants ledger PR A — review round 8 (2026-10-15)
 
 **What/why:** `trialGrantStatements` is async and uses the same device↔machine closure and earliest-window logic as `resolveTrial` (50-query budget, `link_limit`); propagate fills every closure subject missing a row with that window; guard fails only when the requested window differs from closure earliest; probes A/B + resolve→retry convergence tests.

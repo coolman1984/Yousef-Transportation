@@ -18,6 +18,7 @@
     { id: 'reports', icon: 'chart', group: 'insight', perm: 'reports.view', key: 'e', phase: 1 },
     { id: 'excel', icon: 'sheet', group: 'insight', perm: ['excel.import', 'excel.export'], key: 'x', phase: 1 },
     { id: 'activity', icon: 'activity', group: 'control', perm: 'logs.view', key: 'a', phase: 2 },
+    { id: 'licence', icon: 'shield', group: 'control', perm: 'settings.view', key: '', phase: 1 },
     { id: 'settings', icon: 'settings', group: 'control', perm: null, key: 's', phase: 1 },
     { id: 'help', icon: 'help', group: 'control', perm: null, key: 'h', phase: 1 }
   ];
@@ -119,7 +120,16 @@
     if (!shellReady) return;
     var r = TO.route();
     var page = PAGES.filter(function (p) { return p.id === r.path; })[0];
-    if (!page || !TO.can(page.perm)) { TO.go('overview'); return; }
+    if (!page || !TO.can(page.perm)) {
+      if (r.path && !PAGES.some(function (p) { return p.id === r.path; })) {
+        var host = TO.$('#view'), old = host.cloneNode(false);
+        host.replaceWith(old);
+        old.innerHTML = TO.pageHead ? TO.pageHead('err.notFound', 'err.notFound.d') : '<div class="card"><h2>' + TO.esc(TO.t('err.notFound')) + '</h2></div>';
+        document.title = TO.t('err.notFound') + ' · ' + TO.t('app.name');
+        return;
+      }
+      TO.go('overview'); return;
+    }
     TO.$$('#sidebar a[data-page]').forEach(function (a) { if (a.dataset.page === page.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     TO.$('#crumbs').innerHTML = '<span class="mut">' + TO.esc(TO.t('app.name')) + '</span><span class="mut faint">/</span><b>' + TO.esc(TO.t('nav.' + page.id)) + '</b>';
     document.title = TO.t('nav.' + page.id) + ' · ' + TO.t('app.name');
@@ -419,7 +429,7 @@
       var host = TO.$('#slides'), n = SLIDE_ICONS.length;
       TO.slides.active = true; TO.slides.i = 0;
       host.className = 'on';
-      host.innerHTML = '<button class="btn x" data-sclose aria-label="' + TO.esc(TO.t('common.close')) + '">' + TO.icon('x', 'sm') + '</button><div class="track">' +
+      host.innerHTML = '<button class="btn x" data-sclose aria-label="' + TO.esc(TO.t('common.close')) + '">' + TO.icon('x', 'sm') + '</button><p class="slide-hint muted">' + TO.esc(TO.t('slide.dismiss')) + '</p><div class="track">' +
         SLIDE_ICONS.map(function (ic, k) { return '<section><div class="big">' + TO.icon(ic) + '</div><h2>' + TO.esc(TO.t('slide.' + (k + 1) + '.t')) + '</h2><p>' + TO.esc(TO.t('slide.' + (k + 1) + '.b')) + '</p></section>'; }).join('') +
         '</div><div class="nav-s"><button class="btn" data-sprev aria-label="' + TO.esc(TO.t('common.back')) + '">' + TO.icon('left', 'sm mirror') + '</button><span class="dots">' + SLIDE_ICONS.map(function () { return '<i></i>'; }).join('') + '</span>' +
         '<button class="btn primary" data-snext>' + TO.esc(TO.t('common.next')) + '</button></div>';

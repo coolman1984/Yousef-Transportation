@@ -98,7 +98,7 @@
         var q = lic.request || { status: 'none', available: false }, ln = line(q);
         var warn = lic.state === 'warning';
         var good = !warn && lic.full && ['trial', 'active', 'grace', 'contract'].indexOf(lic.state) >= 0;
-        var showLicenceTools = canEdit && lic.enforced && (!lic.full || lic.state === 'trial' || lic.state === 'expired');
+        var showLicenceTools = canEdit && (lic.activation_ui || lic.enforced) && (!lic.full || lic.state === 'trial' || lic.state === 'expired' || lic.reason === 'no_keys');
         var canHubRequest = showLicenceTools && q.available && !lic.full && q.status === 'none';
         var showRequestLine = showLicenceTools && q.status !== 'none' && ln.html;
         var shopField = showLicenceTools && q.available ? '<div class="field"><label for="lic-shop">' + TO.esc(TO.t('lic.orgName')) + '</label><input id="lic-shop" class="input" maxlength="60" value="' + TO.esc(draftShop || defaultShop) + '"></div>' : '';
@@ -182,5 +182,12 @@
       }
       TO.get('/api/licence/preview?kind=trial').then(function (p) { defaultShop = (p.sends && p.sends.shop) || ''; refresh(); }, refresh);
     }
+  };
+
+  TO.views.licence = {
+    render: function () {
+      return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('nav.licence')) + '</h1><p>' + TO.esc(TO.t('page.licence.d')) + '</p></div></div>' + TO.licenceTab.render();
+    },
+    mount: function (root) { TO.licenceTab.mount(root); }
   };
 })();

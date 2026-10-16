@@ -15,7 +15,9 @@
   D.load = function () {
     if (D.loading) return D.loading;
     var wantInsights = TO.can('trips.view');
-    D.loading = Promise.all([TO.get('/api/state'), wantInsights ? TO.get('/api/insights') : Promise.resolve({})]).then(function (r) {
+    var stateUrl = D.version != null ? '/api/state?version=' + encodeURIComponent(D.version) : '/api/state';
+    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get('/api/insights') : Promise.resolve({})]).then(function (r) {
+      if (r[0].unchanged && D.state) { D.loading = null; return D; }
       D.state = r[0]; D.insights = r[1] || {}; D.version = r[0].version; reindex(); D.loading = null;
       TO.emit('data', D);
       return D;

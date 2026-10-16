@@ -73,7 +73,7 @@
         (u && mode === 'link' ? linkBox(u, l) : '') +
         '<div class="field"><label>' + TO.esc(TO.t('acc.perms')) + '</label><div class="row wrap"><button type="button" class="btn sm" data-all>' + TO.esc(TO.t('acc.selectAll')) + '</button><button type="button" class="btn sm ghost" data-none>' + TO.esc(TO.t('acc.clearAll')) + '</button></div></div>' + ticks(perms) +
         '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div></form>',
-      footer: (u ? '<div class="row wrap" style="margin-inline-end:auto"><button class="btn sm" data-reset>' + TO.esc(TO.t('acc.reset')) + '</button><button class="btn sm" data-logout>' + TO.esc(TO.t('acc.logout')) + '</button><button class="btn sm danger" data-del>' + TO.esc(TO.t('common.delete')) + '</button></div>' : '') +
+      footer: (u ? '<div class="row wrap" style="margin-inline-end:auto"><button class="btn sm" data-reset>' + TO.esc(TO.t('acc.reset')) + '</button><button class="btn sm" data-reset-code>' + TO.esc(TO.t('acc.resetCode')) + '</button><button class="btn sm" data-logout>' + TO.esc(TO.t('acc.logout')) + '</button><button class="btn sm danger" data-del>' + TO.esc(TO.t('common.delete')) + '</button></div>' : '') +
         '<button class="btn ghost" data-cancel>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save>' + TO.esc(TO.t('common.save')) + '</button>',
       mount: function (el) { mountUser(el, u, mode, profiles); } });
   }
@@ -98,6 +98,10 @@
       else if (b.hasAttribute('data-linkoff')) U.run(TO.post('/api/quick-links/set', { id: u.id, on: false }), 'acc.link.offdone').then(function () { return load(); }).then(function () { TO.panel.close(); openUser(cache.users.users.filter(function (x) { return x.id === u.id; })[0]); });
       else if (b.hasAttribute('data-cancel')) TO.panel.close();
       else if (b.hasAttribute('data-reset')) U.confirm({ title: TO.t('acc.reset'), body: TO.t('acc.reset.body'), reason: TO.t('auth.password'), ok: TO.t('common.save') }).then(function (pw) { if (pw) U.run(TO.post('/api/users/reset', { id: u.id, password: pw }), 'acc.reset.done'); });
+      else if (b.hasAttribute('data-reset-code')) U.run(TO.post('/api/users/reset-code', { id: u.id }), null).then(function (r) {
+        TO.dialog({ title: TO.t('acc.resetCode.title'), body: '<p>' + TO.esc(TO.t('acc.resetCode.body')) + '</p><p class="num" dir="ltr"><bdi>' + TO.esc(r.code) + '</bdi></p><p class="muted small">' + TO.esc(TO.t('acc.resetCode.expires', { when: r.expires })) + '</p>',
+          footer: '<button class="btn primary" data-close>' + TO.esc(TO.t('common.close')) + '</button>' });
+      });
       else if (b.hasAttribute('data-logout')) U.run(TO.post('/api/users/logout', { id: u.id }), 'acc.logout.done');
       else if (b.hasAttribute('data-del')) U.confirm({ title: TO.t('common.delete'), body: TO.t('acc.delete.body', { n: u.full_name }), danger: true, ok: TO.t('common.delete') }).then(function (ok) { if (ok) U.run(TO.post('/api/users/delete', { id: u.id }), 'list.deleted.toast').then(function () { TO.panel.close(); TO.rerender(); }); });
       else if (b.hasAttribute('data-save')) save();
@@ -169,6 +173,32 @@
     if (del) del.addEventListener('click', function () { U.run(TO.post('/api/profiles/delete', { id: p.id }), 'list.deleted.toast').then(function () { return load(); }).then(function () { TO.overlay.close(); TO.rerender(); }); });
   }
 
+  function pendingBlock() {
+    var pending = cache.users.users.filter(function (u) { return u.status === 'pending'; });
+    if (!pending.length) return '';
+    return '<section class="card stack" style="margin-bottom:1rem"><h3>' + TO.esc(TO.t('acc.pending.title')) + '</h3><p class="muted">' + TO.esc(TO.t('acc.pending.sub')) + '</p>' +
+      pending.map(function (u) {
+        return '<div class="row wrap card" style="background:var(--surface-2)" data-pending="' + TO.esc(u.id) + '"><div class="grow"><b>' + TO.esc(u.full_name) + '</b> <span class="muted">@' + TO.esc(u.username) + '</span>' +
+          (u.request_code ? '<div class="small muted">' + TO.esc(TO.t('acc.pending.code', { code: u.request_code })) + '</div>' : '') + '</div>' +
+          '<button class="btn sm primary" data-approve>' + TO.esc(TO.t('acc.pending.approve')) + '</button>' +
+          '<button class="btn sm danger" data-reject>' + TO.esc(TO.t('acc.pending.reject')) + '</button></div>';
+      }).join('') + '</section>';
+  }
+  function reviewPending(uid, decision) {
+    var u = cache.users.users.filter(function (x) { return x.id === uid; })[0];
+    if (!u) return;
+    if (decision === 'reject') {
+      U.confirm({ title: TO.t('acc.pending.reject'), body: TO.t('acc.pending.reject.body'), reason: TO.t('acc.pending.reason'), ok: TO.t('acc.pending.reject') }).then(function (reason) {
+        if (!reason) return;
+        U.run(TO.post('/api/users/review', { id: uid, decision: 'reject', reason: reason }), 'common.saved').then(function () { return load(); }).then(function () { TO.rerender(); });
+      });
+      return;
+    }
+    var profiles = cache.users.profiles;
+    var viewer = profiles.filter(function (p) { return p.id === 'viewer'; })[0] || profiles[0];
+    U.run(TO.post('/api/users/review', { id: uid, decision: 'approve', role: viewer.name, perms: viewer.perms }), 'acc.pending.approved').then(function () { return load(); }).then(function () { TO.rerender(); });
+  }
+
   /* ---------- the tab ---------- */
   TO.accessTab = {
     render: function () {
@@ -176,6 +206,7 @@
       if (!cache) return '<div class="skeleton" style="height:12rem"></div>';
       var auth = cache.users.authority;
       return (auth ? '' : '<div class="tip" style="margin-bottom:1rem;background:var(--warn-soft)">' + TO.icon('alert') + '<span>' + TO.esc(cache.users.authorityHint || TO.t('acc.notAuth')) + '</span></div>') +
+        pendingBlock() +
         '<div class="toolbar"><h2 class="grow">' + TO.esc(TO.t('acc.title.users')) + '</h2><button class="btn" data-profiles>' + TO.icon('layers', 'sm') + TO.esc(TO.t('acc.profiles')) + '</button>' +
         (auth ? '<button class="btn primary" data-adduser>' + TO.icon('plus', 'sm') + TO.esc(TO.t('acc.add')) + '</button>' : '') + '</div>' + table();
     },
@@ -183,6 +214,11 @@
       if (!TO.can('users.manage')) return;
       if (!cache) { load().then(function () { TO.rerender(); }, function () { root.innerHTML = U.empty('alert', TO.t('common.error')); }); return; }
       root.addEventListener('click', function (e) {
+        var row = e.target.closest('[data-pending]');
+        if (row) {
+          if (e.target.closest('[data-approve]')) { reviewPending(row.dataset.pending, 'approve'); return; }
+          if (e.target.closest('[data-reject]')) { reviewPending(row.dataset.pending, 'reject'); return; }
+        }
         if (e.target.closest('[data-adduser]')) { openUser(null); return; }
         if (e.target.closest('[data-profiles]')) { openProfiles(); return; }
         var tr = e.target.closest('tr[data-uid]'); if (tr && cache.users.authority) openUser(cache.users.users.filter(function (u) { return u.id === tr.dataset.uid; })[0]);

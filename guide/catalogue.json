@@ -23,10 +23,12 @@
   "excel",
   "activity",
   "settings",
+  "licence",
   "help"
  ],
  "unguided": [
-  "help"
+  "help",
+  "licence"
  ],
  "states": [
   "signed.in",

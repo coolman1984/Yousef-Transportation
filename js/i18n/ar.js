@@ -491,6 +491,8 @@
     'act.label.driverLinkReplaced': 'رابط السائق اتبدّل للمشوار {no}',
     'act.label.driverEvents': 'بيانات السائق للمشوار {no}: {events}',
     'act.label.driverPhoto': 'صورة السائق {kind} للمشوار {no}',
+    'act.event.note': 'ملاحظة',
+    'act.event.route': 'خط السير',
     'act.label.gaApprovedTrip': 'موافقة الشؤون العامة على مشوار {no}',
     'act.label.gaDeclinedTrip': 'رفض الشؤون العامة لمشوار {no}',
     'act.label.releasedPhone': 'فك ربط موبايل المشوار {no}',

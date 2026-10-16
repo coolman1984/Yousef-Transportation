@@ -10,13 +10,21 @@
     var k = FIELD_KEYS[name];
     return k && TO.has(k) ? TO.t(k) : name;
   }
+  function plainMessage(key, vars) {
+    var d = TO.dict[TO.lang] || {}, s = d[key];
+    if (s === undefined) s = (TO.dict.en || {})[key];
+    if (s === undefined) return key;
+    return vars ? s.replace(/\{(\w+)\}/g, function (m, n) {
+      return vars[n] === undefined ? m : String(vars[n] == null ? '' : vars[n]);
+    }) : s;
+  }
   function translatedType(type) {
-    var aliases = { start: 'start_odo', end: 'end_odo' };
-    var k = 'photo.' + (aliases[type] || type);
+    var aliases = { start: 'photo.start_odo', end: 'photo.end_odo', note: 'act.event.note', route: 'act.event.route' };
+    var k = aliases[type] || ('photo.' + type);
     return TO.has(k) ? TO.t(k) : type;
   }
   function safeMessage(key, vars, ltrNames, rich) {
-    if (!rich) return TO.t(key, vars);
+    if (!rich) return plainMessage(key, vars);
     var marked = {}, values = {}, names = Object.keys(vars || {});
     names.forEach(function (name, i) {
       var token = '\u0000' + i + '\u0000';
@@ -43,7 +51,10 @@
     m = label.match(/^GA declined trip (.+)$/); if (m) return safeMessage('act.label.gaDeclinedTrip', { no: m[1] }, ['no'], rich);
     m = label.match(/^Driver link for trip (.+?) replaced$/); if (m) return safeMessage('act.label.driverLinkReplaced', { no: m[1] }, ['no'], rich);
     m = label.match(/^Driver link for trip (.+)$/); if (m) return safeMessage('act.label.driverLink', { no: m[1] }, ['no'], rich);
-    m = label.match(/^Driver link ([^:]+): (.+)$/); if (m) return safeMessage('act.label.driverEvents', { no: m[1], events: m[2].split(',').map(function (x) { return translatedType(x.trim()); }).join('، ') }, ['no'], rich);
+    m = label.match(/^Driver link ([^:]+): (.+)$/); if (m) return safeMessage('act.label.driverEvents', {
+      no: m[1],
+      events: m[2].split(',').map(function (x) { return translatedType(x.trim()); }).join(TO.lang === 'en' ? ', ' : '، ')
+    }, ['no'], rich);
     m = label.match(/^Driver photo (.+) for (.+)$/); if (m) return safeMessage('act.label.driverPhoto', { kind: translatedType(m[1]), no: m[2] }, ['no'], rich);
     m = label.match(/^Released the phone of trip (.+)$/); if (m) return safeMessage('act.label.releasedPhone', { no: m[1] }, ['no'], rich);
     m = label.match(/^(Word|Excel) import(.*) \((\d+) trips\)$/);
@@ -70,8 +81,52 @@
     if (!needle) return true;
     needle = needle.toLocaleLowerCase();
     return [auditLabel(row.label || ''), auditEntity(row.entity || ''), auditOp(row.op || ''),
-      row.user || '', row.node_name || '', U.dt(row.ts)].some(function (value) {
+      row.user || '', row.node_name || '', plainDateTime(row.ts)].some(function (value) {
       return String(value).toLocaleLowerCase().indexOf(needle) >= 0;
+    });
+  }
+  function plainDateTime(s) {
+    if (!s) return '–';
+    var d = new Date(s);
+    return isNaN(d) ? String(s) : TO.fmt.date(d) + ' ' + TO.fmt.time(d);
+  }
+  function newestUnique(rows) {
+    var seen = Object.create(null), out = [];
+    (rows || []).forEach(function (row) {
+      var id = row && row.id;
+      if (id != null && seen[id]) return;
+      if (id != null) seen[id] = true;
+      out.push(row);
+    });
+    return out.sort(function (a, b) {
+      var byTime = String(b.ts || '').localeCompare(String(a.ts || ''));
+      return byTime || String(b.id || '').localeCompare(String(a.id || ''));
+    });
+  }
+  function translatedPages(needle) {
+    var found = [], page = 0, size = 1000, maxPages = 10;
+    function next() {
+      if (page >= maxPages) return Promise.resolve(found);
+      var offset = page * size;
+      page += 1;
+      return TO.get('/api/audit?limit=' + size + '&offset=' + offset).then(function (r) {
+        var rows = r.rows || [];
+        found = found.concat(rows.filter(function (row) { return matches(row, needle); }));
+        if (!rows.length || offset + rows.length >= Number(r.total || 0)) return found;
+        return next();
+      });
+    }
+    return next();
+  }
+  function searchRows(needle) {
+    needle = String(needle || '').trim();
+    var url = '/api/audit?limit=200' + (needle ? '&q=' + encodeURIComponent(needle) : '');
+    return TO.get(url).then(function (r) {
+      var serverRows = r.rows || [];
+      if (!needle || (!/[\u0600-\u06ff]/.test(needle) && serverRows.length)) return newestUnique(serverRows);
+      return translatedPages(needle).then(function (translatedRows) {
+        return newestUnique(serverRows.concat(translatedRows));
+      });
     });
   }
   function rowsHTML(rows) {
@@ -89,11 +144,14 @@
       return TO.pageHead('nav.activity', 'page.activity.d') + '<div class="toolbar"><input class="input" data-q type="search" placeholder="' + TO.esc(TO.t('list.search')) + '" style="max-width:22rem"></div><div data-body><div class="skeleton" style="height:12rem"></div></div>';
     },
     mount: function (root) {
-      var body = root.querySelector('[data-body]'), input = root.querySelector('[data-q]');
+      var body = root.querySelector('[data-body]'), input = root.querySelector('[data-q]'), loadSeq = 0;
       function load() {
-        TO.get('/api/audit?limit=1000').then(function (r) {
-          body.innerHTML = rowsHTML((r.rows || []).filter(function (row) { return matches(row, q); }));
-        }, function (e) { body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e)); });
+        var mine = ++loadSeq;
+        searchRows(q).then(function (rows) {
+          if (mine === loadSeq) body.innerHTML = rowsHTML(rows);
+        }, function (e) {
+          if (mine === loadSeq) body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e));
+        });
       }
       input.value = q;
       input.addEventListener('input', TO.debounce(function () { q = input.value.trim(); load(); }, 250));
@@ -102,4 +160,5 @@
   };
   TO.auditLabel = auditLabel;
   TO.activityMatches = matches;
+  TO.activitySearch = searchRows;
 })();

@@ -101,9 +101,75 @@ test('activity labels search and render the displayed Arabic safely', () => {
   assert.equal(TO.activityMatches(row, 'قفل مشوار'), true);
   assert.equal(TO.activityMatches(row, 'missing'), false);
   assert.match(TO.auditLabel('Driver link 26-A-00001: start, end', false), /عداد البداية.*عداد النهاية/);
+  assert.match(TO.auditLabel('Driver link 26-A-00001: route, note', false), /خط السير، ملاحظة/);
   assert.match(TO.auditLabel('Driver photo start_odo for 26-A-00001', false), /عداد البداية/);
   assert.match(TO.auditLabel('Excel import sheet.xlsx (3 trips)', false), /3 مشاوير/);
+  assert.equal(TO.auditLabel("New trip O'Brien & Q", false), "مشوار جديد O'Brien & Q");
+  assert.equal(TO.activityMatches({ ...row, label: "New trip O'Brien & Q" }, "O'Brien & Q"), true);
   const html = TO.auditLabel('New trip 26-A-00001<img src=x>', true);
   assert.match(html, /<bdi dir="ltr">26-A-00001&lt;img src=x&gt;<\/bdi>/);
   assert.ok(!html.includes('<img src=x>'));
+});
+
+test('English activity labels use English punctuation and keep the restore prefix space', () => {
+  const TO = startup('en');
+  assert.match(TO.auditLabel('Driver link 26-A-00001: route, note', false), /Route, Note/);
+  assert.ok(!TO.auditLabel('Driver link 26-A-00001: route, note', false).includes('،'));
+  assert.equal(TO.auditLabel('Restore backup of 2026-10-16 09:30', false), 'Restore backup of 2026-10-16 09:30');
+});
+
+test('activity search keeps server search and scans translated pages when needed', async () => {
+  const TO = startup('ar');
+  const calls = [];
+  TO.get = (url) => {
+    calls.push(url);
+    if (url.includes('&q=')) {
+      return Promise.resolve({ rows: [{ id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' }] });
+    }
+    if (url.endsWith('offset=0')) {
+      return Promise.resolve({ total: 1001, rows: [
+        { id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' },
+        { id: 'old', label: 'Closed trip 26-A-00001', ts: '2026-10-14T09:00:00Z' }
+      ] });
+    }
+    return Promise.resolve({ total: 1001, rows: [
+      { id: 'new', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
+    ] });
+  };
+  const rows = await TO.activitySearch('قفل مشوار');
+  assert.equal(calls[0], '/api/audit?limit=200&q=' + encodeURIComponent('قفل مشوار'));
+  assert.deepEqual(Array.from(rows, (r) => r.id), ['new', 'dup', 'old']);
+  assert.deepEqual(calls.slice(1), ['/api/audit?limit=1000&offset=0', '/api/audit?limit=1000&offset=1000']);
+
+  calls.length = 0;
+  TO.get = (url) => {
+    calls.push(url);
+    return Promise.resolve({ rows: [{ id: 'ancient', label: 'payload match', ts: '2020-01-01T00:00:00Z' }] });
+  };
+  assert.equal((await TO.activitySearch('payload match'))[0].id, 'ancient');
+  assert.deepEqual(calls, ['/api/audit?limit=200&q=payload%20match']);
+
+  const EN = startup('en');
+  const fallbackCalls = [];
+  EN.get = (url) => {
+    fallbackCalls.push(url);
+    if (url.includes('&q=')) return Promise.resolve({ rows: [] });
+    return Promise.resolve({ total: 1, rows: [
+      { id: 'translated', label: 'Driver link for trip 26-A-00004 replaced', ts: '2026-10-15T09:00:00Z' }
+    ] });
+  };
+  assert.equal((await EN.activitySearch('Driver link replaced for trip'))[0].id, 'translated');
+  assert.deepEqual(fallbackCalls, [
+    '/api/audit?limit=200&q=Driver%20link%20replaced%20for%20trip',
+    '/api/audit?limit=1000&offset=0'
+  ]);
+
+  let pages = 0;
+  EN.get = (url) => {
+    if (url.includes('&q=')) return Promise.resolve({ rows: [] });
+    pages += 1;
+    return Promise.resolve({ total: 20000, rows: [{ id: 'page-' + pages, label: 'No match', ts: '' }] });
+  };
+  await EN.activitySearch('translated phrase');
+  assert.equal(pages, 10, 'the translated fallback is capped');
 });

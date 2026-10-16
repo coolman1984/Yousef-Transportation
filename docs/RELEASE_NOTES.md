@@ -5,7 +5,7 @@
 
 # Trip Orders 1.1.4
 
-- **QA fixes:** the setup checklist, Arabic activity log/search, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.
+- **QA fixes:** the setup checklist, full activity-log search in Arabic and English, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.
 
 # Trip Orders 1.1.3
 

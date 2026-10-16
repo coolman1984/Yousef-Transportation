@@ -5,12 +5,14 @@ import os
 import re
 import shutil
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
 import time
 import unittest
 import warnings
+from unittest import mock
 
 from harness import ADMIN, ApiError, Server, make_authority, wait_until
 
@@ -297,6 +299,125 @@ class YT115(unittest.TestCase):
         with self.assertRaises(ApiError) as e:
             self.ac.post('/api/users/review', {'id': boss['id'], 'decision': 'suspend', 'reason': 'Test'})
         self.assertEqual(e.exception.data.get('key'), 'autherr.lastAdmin')
+
+    def test_YT115_reject_journals_clear_reset_code(self):
+        S = Server('yt115rejclr').start()
+        data_dir = S.data_dir
+        try:
+            ac = make_authority(S)
+            ac.post('/api/users/save', {'username': 'rejclr', 'full_name': 'Rej Clr', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'rejclr'][0]['id']
+            burned = ac.post('/api/users/reset-code', {'id': uid})['code']
+            auth_db = os.path.join(data_dir, 'auth.db')
+            con = sqlite3.connect(auth_db)
+            try:
+                con.execute('UPDATE users SET status=? WHERE id=?', ('pending', uid))
+                con.commit()
+            finally:
+                con.close()
+            ac.post('/api/users/review', {'id': uid, 'decision': 'reject', 'reason': 'Not on the staff list'})
+            bindings = _journal_clear_reset_bindings(data_dir)
+            self.assertTrue(bindings)
+        finally:
+            S.kill()
+        import auth as auth_mod
+        try:
+            a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('rejclr',)).fetchone()
+            self.assertFalse(row['reset_hash'])
+            with self.assertRaises(auth_mod.AuthError):
+                a.reset_with_code('rejclr', burned, 'Fresh-pass42', '127.0.0.1')
+            a.conn.close()
+        finally:
+            S.cleanup()
+
+    def test_YT115_rejected_reregister_journals_clear_reset_code(self):
+        S = Server('yt115rejreg').start()
+        data_dir = S.data_dir
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            cl.post('/api/auth/register', {'username': 'rejagain', 'full_name': 'Rej Again', 'password': 'Office-pass88'})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'rejagain'][0]['id']
+            ac.post('/api/users/review', {'id': uid, 'decision': 'reject', 'reason': 'Not on the staff list'})
+            from auth import hash_password
+            auth_db = os.path.join(data_dir, 'auth.db')
+            stale = hash_password('STALE-CODE1')
+            con = sqlite3.connect(auth_db)
+            try:
+                con.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?',
+                            (stale, '2099-01-01T00:00:00', uid))
+                con.commit()
+            finally:
+                con.close()
+            cl.post('/api/auth/register', {'username': 'rejagain', 'full_name': 'Rej Again', 'password': 'Office-pass99'})
+            bindings = _journal_clear_reset_bindings(data_dir)
+            self.assertIn(stale, bindings)
+        finally:
+            S.kill()
+        try:
+            a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('rejagain',)).fetchone()
+            self.assertFalse(row['reset_hash'])
+            a.conn.close()
+        finally:
+            S.cleanup()
+
+    def test_YT115_failed_commit_still_clears_reset_hash_after_wrong_guesses(self):
+        S = Server('yt115commit').start()
+        data_dir = S.data_dir
+        burned = None
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'commitburn', 'full_name': 'Commit Burn', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'commitburn'][0]['id']
+            burned = ac.post('/api/users/reset-code', {'id': uid})['code']
+            for _ in range(2):
+                try:
+                    cl.post('/api/auth/reset', {'username': 'commitburn', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                except ApiError:
+                    pass
+        finally:
+            S.kill()
+        import auth as auth_mod
+        from journal import Journal
+        from node import Node
+        from store import REPLICATED
+        node = Node(data_dir)
+        journal = Journal(data_dir, node, REPLICATED, log=lambda *_a, **_k: None)
+        a = auth_mod.Auth(data_dir)
+        a.attach(journal, node)
+        inner = a.conn
+
+        class _FlakyConn:
+            def execute(self, sql, *args):
+                if str(sql).strip().upper() == 'COMMIT':
+                    raise sqlite3.OperationalError('simulated commit failure')
+                return inner.execute(sql, *args)
+
+            def __getattr__(self, name):
+                return getattr(inner, name)
+
+        a.conn = _FlakyConn()
+        try:
+            try:
+                a.reset_with_code('commitburn', 'BADCODE1', 'Fresh-pass42', '127.0.0.1')
+            except (auth_mod.AuthError, sqlite3.OperationalError):
+                pass
+        finally:
+            inner.close()
+        try:
+            a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('commitburn',)).fetchone()
+            self.assertFalse(row['reset_hash'])
+            with self.assertRaises(auth_mod.AuthError):
+                a.reset_with_code('commitburn', burned, 'Fresh-pass42', '127.0.0.1')
+            a.conn.close()
+        finally:
+            S.cleanup()
 
     def test_YT115_suspend_journals_clear_reset_code(self):
         S = Server('yt115susclr').start()

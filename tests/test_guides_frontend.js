@@ -118,7 +118,7 @@ test('English activity labels use English punctuation and keep the restore prefi
   assert.equal(TO.auditLabel('Restore backup of 2026-10-16 09:30', false), 'Restore backup of 2026-10-16 09:30');
 });
 
-test('activity search keeps server search and scans translated pages when needed', async () => {
+test('activity search merges stored text with one recent translated-label fetch', async () => {
   const TO = startup('ar');
   const calls = [];
   TO.get = (url) => {
@@ -126,50 +126,101 @@ test('activity search keeps server search and scans translated pages when needed
     if (url.includes('&q=')) {
       return Promise.resolve({ rows: [{ id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' }] });
     }
-    if (url.endsWith('offset=0')) {
-      return Promise.resolve({ total: 1001, rows: [
-        { id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' },
-        { id: 'old', label: 'Closed trip 26-A-00001', ts: '2026-10-14T09:00:00Z' }
-      ] });
-    }
-    return Promise.resolve({ total: 1001, rows: [
-      { id: 'new', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
+    return Promise.resolve({ rows: [
+      { id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' },
+      { id: '9', label: 'Closed trip 26-A-00001', ts: '2026-10-17T09:00:00Z' },
+      { id: '10', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
     ] });
   };
-  const rows = await TO.activitySearch('قفل مشوار');
+  const result = await TO.activitySearch('قفل مشوار');
   assert.equal(calls[0], '/api/audit?limit=200&q=' + encodeURIComponent('قفل مشوار'));
-  assert.deepEqual(Array.from(rows, (r) => r.id), ['new', 'dup', 'old']);
-  assert.deepEqual(calls.slice(1), ['/api/audit?limit=1000&offset=0', '/api/audit?limit=1000&offset=1000']);
+  assert.deepEqual(calls, [
+    '/api/audit?limit=200&q=' + encodeURIComponent('قفل مشوار'),
+    '/api/audit?limit=1000'
+  ]);
+  assert.deepEqual(Array.from(result.rows, (r) => r.id), ['10', '9', 'dup']);
+  assert.equal(result.translatedUsed, true);
+  assert.match(TO.t('act.search.recentNote'), /1000/);
 
   calls.length = 0;
   TO.get = (url) => {
     calls.push(url);
-    return Promise.resolve({ rows: [{ id: 'ancient', label: 'payload match', ts: '2020-01-01T00:00:00Z' }] });
+    if (url.includes('&q=')) return Promise.resolve({ rows: [
+      { id: 'ancient', label: 'payload match', ts: '2020-01-01T00:00:00Z' }
+    ] });
+    return Promise.resolve({ rows: [] });
   };
-  assert.equal((await TO.activitySearch('payload match'))[0].id, 'ancient');
-  assert.deepEqual(calls, ['/api/audit?limit=200&q=payload%20match']);
+  const stored = await TO.activitySearch('payload match');
+  assert.equal(stored.rows[0].id, 'ancient');
+  assert.equal(stored.translatedUsed, false);
+  assert.deepEqual(calls, ['/api/audit?limit=200&q=payload%20match', '/api/audit?limit=1000']);
 
   const EN = startup('en');
   const fallbackCalls = [];
   EN.get = (url) => {
     fallbackCalls.push(url);
-    if (url.includes('&q=')) return Promise.resolve({ rows: [] });
-    return Promise.resolve({ total: 1, rows: [
+    if (url.includes('&q=')) return Promise.resolve({ rows: [
+      { id: 'stored', label: 'Unrelated translated phrase in stored text', ts: '2026-10-16T09:00:00Z' }
+    ] });
+    return Promise.resolve({ rows: [
       { id: 'translated', label: 'Driver link for trip 26-A-00004 replaced', ts: '2026-10-15T09:00:00Z' }
     ] });
   };
-  assert.equal((await EN.activitySearch('Driver link replaced for trip'))[0].id, 'translated');
+  const english = await EN.activitySearch('Driver link replaced for trip');
+  assert.deepEqual(Array.from(english.rows, (r) => r.id), ['stored', 'translated']);
+  assert.equal(english.translatedUsed, true);
   assert.deepEqual(fallbackCalls, [
     '/api/audit?limit=200&q=Driver%20link%20replaced%20for%20trip',
-    '/api/audit?limit=1000&offset=0'
+    '/api/audit?limit=1000'
   ]);
 
-  let pages = 0;
+  let recentFetches = 0;
   EN.get = (url) => {
     if (url.includes('&q=')) return Promise.resolve({ rows: [] });
-    pages += 1;
-    return Promise.resolve({ total: 20000, rows: [{ id: 'page-' + pages, label: 'No match', ts: '' }] });
+    recentFetches += 1;
+    return Promise.resolve({ total: 20000, rows: [{ id: 'recent', label: 'No match', ts: '' }] });
   };
   await EN.activitySearch('translated phrase');
-  assert.equal(pages, 10, 'the translated fallback is capped');
+  assert.equal(recentFetches, 1, 'translated labels use one bounded request');
+});
+
+test('activity ignores an older response after the search changes', async () => {
+  const TO = startup('ar');
+  let resolveInitial;
+  TO.get = (url) => {
+    if (url === '/api/audit?limit=200') {
+      return new Promise((resolve) => { resolveInitial = resolve; });
+    }
+    if (url.includes('&q=')) return Promise.resolve({ rows: [] });
+    return Promise.resolve({ rows: [
+      { id: '2', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
+    ] });
+  };
+  const body = { innerHTML: '' };
+  const note = { hidden: true };
+  const input = {
+    value: '',
+    addEventListener: (name, fn) => { input.onInput = fn; }
+  };
+  const root = {
+    querySelector: (selector) => ({
+      '[data-body]': body,
+      '[data-q]': input,
+      '[data-search-note]': note
+    })[selector]
+  };
+
+  TO.views.activity.mount(root);
+  input.value = 'قفل مشوار';
+  input.onInput();
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.match(body.innerHTML, /26-A-00002/);
+  assert.equal(note.hidden, false);
+
+  resolveInitial({ rows: [
+    { id: '1', label: 'New trip 26-A-00001', ts: '2026-10-16T09:00:00Z' }
+  ] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.match(body.innerHTML, /26-A-00002/);
+  assert.ok(!body.innerHTML.includes('26-A-00001'));
 });

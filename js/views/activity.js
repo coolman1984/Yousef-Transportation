@@ -100,33 +100,22 @@
     });
     return out.sort(function (a, b) {
       var byTime = String(b.ts || '').localeCompare(String(a.ts || ''));
-      return byTime || String(b.id || '').localeCompare(String(a.id || ''));
+      return byTime || Number(b.id) - Number(a.id);
     });
-  }
-  function translatedPages(needle) {
-    var found = [], page = 0, size = 1000, maxPages = 10;
-    function next() {
-      if (page >= maxPages) return Promise.resolve(found);
-      var offset = page * size;
-      page += 1;
-      return TO.get('/api/audit?limit=' + size + '&offset=' + offset).then(function (r) {
-        var rows = r.rows || [];
-        found = found.concat(rows.filter(function (row) { return matches(row, needle); }));
-        if (!rows.length || offset + rows.length >= Number(r.total || 0)) return found;
-        return next();
-      });
-    }
-    return next();
   }
   function searchRows(needle) {
     needle = String(needle || '').trim();
     var url = '/api/audit?limit=200' + (needle ? '&q=' + encodeURIComponent(needle) : '');
-    return TO.get(url).then(function (r) {
-      var serverRows = r.rows || [];
-      if (!needle || (!/[\u0600-\u06ff]/.test(needle) && serverRows.length)) return newestUnique(serverRows);
-      return translatedPages(needle).then(function (translatedRows) {
-        return newestUnique(serverRows.concat(translatedRows));
-      });
+    if (!needle) return TO.get(url).then(function (r) {
+      return { rows: newestUnique(r.rows || []), translatedUsed: false };
+    });
+    return Promise.all([TO.get(url), TO.get('/api/audit?limit=1000')]).then(function (results) {
+      var serverRows = results[0].rows || [];
+      var translatedRows = (results[1].rows || []).filter(function (row) { return matches(row, needle); });
+      return {
+        rows: newestUnique(serverRows.concat(translatedRows)),
+        translatedUsed: translatedRows.length > 0
+      };
     });
   }
   function rowsHTML(rows) {
@@ -141,16 +130,22 @@
   }
   TO.views.activity = {
     render: function () {
-      return TO.pageHead('nav.activity', 'page.activity.d') + '<div class="toolbar"><input class="input" data-q type="search" placeholder="' + TO.esc(TO.t('list.search')) + '" style="max-width:22rem"></div><div data-body><div class="skeleton" style="height:12rem"></div></div>';
+      return TO.pageHead('nav.activity', 'page.activity.d') + '<div class="toolbar"><input class="input" data-q type="search" placeholder="' + TO.esc(TO.t('list.search')) + '" style="max-width:22rem"></div><p class="faint" data-search-note hidden>' + TO.esc(TO.t('act.search.recentNote')) + '</p><div data-body><div class="skeleton" style="height:12rem"></div></div>';
     },
     mount: function (root) {
-      var body = root.querySelector('[data-body]'), input = root.querySelector('[data-q]'), loadSeq = 0;
+      var body = root.querySelector('[data-body]'), input = root.querySelector('[data-q]');
+      var note = root.querySelector('[data-search-note]'), loadSeq = 0;
       function load() {
         var mine = ++loadSeq;
-        searchRows(q).then(function (rows) {
-          if (mine === loadSeq) body.innerHTML = rowsHTML(rows);
+        searchRows(q).then(function (result) {
+          if (mine !== loadSeq) return;
+          note.hidden = !result.translatedUsed;
+          body.innerHTML = rowsHTML(result.rows);
         }, function (e) {
-          if (mine === loadSeq) body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e));
+          if (mine === loadSeq) {
+            note.hidden = true;
+            body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e));
+          }
         });
       }
       input.value = q;

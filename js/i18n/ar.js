@@ -482,6 +482,7 @@
     'review.none.b': 'كل المشاوير خضراء أو لسه شغّالة. برافو.',
     'act.none.t': 'مفيش نشاط لسه',
     'act.none.b': 'كل تغيير هيظهر هنا بمين عمله وإمتى.',
+    'act.search.recentNote': 'البحث بالعربي بيدوّر في آخر 1000 حركة بس.',
     'act.label.newTrip': 'مشوار جديد {no}',
     'act.label.closedTrip': 'قفل مشوار {no}',
     'act.label.startedTrip': 'بدء مشوار {no}',

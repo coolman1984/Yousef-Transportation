@@ -482,6 +482,7 @@
     'review.none.b': 'Every trip is green or still in progress. Well done.',
     'act.none.t': 'No activity yet',
     'act.none.b': 'Every change will appear here with who made it and when.',
+    'act.search.recentNote': 'Translated-label search only checks the newest 1,000 activities.',
     'act.label.newTrip': 'New trip {no}',
     'act.label.closedTrip': 'Closed trip {no}',
     'act.label.startedTrip': 'Started trip {no}',

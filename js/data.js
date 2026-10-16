@@ -43,7 +43,7 @@
           D.loading = null;
           TO.emit('data', D);
           return D;
-        });
+        }, function (e) { D.loading = null; throw e; });
       }
       D.version = st.version;
       applyInsights(ins, wantInsights);

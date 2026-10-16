@@ -742,7 +742,9 @@ class Handler(BaseHTTPRequestHandler):
             if qs.get('version'):
                 v = STORE.version()
                 if qs.get('version') == str(v):
-                    return self.send(200, {'version': v, 'unchanged': True})
+                    # gateway.json and the office Excel/Word probe are outside the store version
+                    return self.send(200, {'version': v, 'unchanged': True, 'gateway': bool(SECRETS.configured),
+                                           'office': OFFICE_STATE})
             st = STORE.state(self.u['scopes'])
             return self.send(200, {**project_state(st, self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
         if p == '/api/guide/state':

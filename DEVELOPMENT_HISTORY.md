@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## YT-06 gateway envelope on unchanged state (2026-10-16)
+
+**What/why:** `test_e2e_link_ui` timed out on `[data-a="wa"]` after mailbox setup: YT-06 `?version=` short-circuit returned `unchanged` without refreshing `gateway` (from `gateway.json`, not store version), so the trip panel kept `link.notset`. Slim `/api/state` now includes `gateway` and `office`; `js/data.js` merges them and polling watches `version.gateway`.
+**Checks:** Full CI Python list — 536 run, OK, skipped=3 (e2e included). Gateway 24/24. Licence-hub 762/762. `test_YT06_state_unchanged_still_carries_gateway`.
+**Next:** Owner PR review; commit local only.
+
 ## Grok review round 2 — auth guards, insights skip, YT tests (2026-10-16)
 
 **What/why:** Address `review-grok-r2.md`: replicate `failed`/`locked_until` on successful reset; sole-admin exemption on wrong reset codes; last-admin guard on approve/refuse/suspend; block suspended re-sign-up; `/api/insights?version=` short-circuit; duplicate `err.notFound` split (`err.pageNotFound`); refusal reason i18n; licence guide off Settings page; new-trip save in-flight guard.

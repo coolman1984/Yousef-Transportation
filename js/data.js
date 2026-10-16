@@ -20,7 +20,10 @@
     D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get(insightsUrl) : Promise.resolve(null)]).then(function (r) {
       var st = r[0], ins = r[1];
       if (st.unchanged && D.state) {
-        if (!wantInsights || (ins && ins.unchanged)) { D.loading = null; return D; }
+        var env = false;
+        if (st.gateway !== undefined && D.state.gateway !== st.gateway) { D.state.gateway = st.gateway; env = true; }
+        if (st.office !== undefined && JSON.stringify(D.state.office) !== JSON.stringify(st.office)) { D.state.office = st.office; env = true; }
+        if (!wantInsights || (ins && ins.unchanged)) { D.loading = null; if (env) TO.emit('data', D); return D; }
         D.insights = ins; D.loading = null; TO.emit('data', D); return D;
       }
       D.state = st; D.version = st.version; reindex();
@@ -65,7 +68,8 @@
     clearInterval(timer);
     timer = setInterval(function () {
       TO.get('/api/version').then(function (v) {
-        if (D.version !== null && v.version !== D.version) {
+        var gw = D.state && D.state.gateway, need = D.version !== null && (v.version !== D.version || v.gateway !== gw);
+        if (need) {
           D.load().then(function () { if (!TO.overlay.isOpen && !TO.panel.count()) TO.rerender(); else D.dirty = true; });
         }
       }, function () { /* offline or signed out: TO.api handles 401 */ });

@@ -123,6 +123,23 @@ class YT115(unittest.TestCase):
         self.assertTrue(ins.get('unchanged'))
         self.assertEqual(ins['version'], v)
 
+    def test_YT06_state_unchanged_still_carries_gateway(self):
+        """gateway.json is outside the store version; the slim response must refresh the flag."""
+        S = Server('yt06gw').start()
+        try:
+            ac = make_authority(S)
+            v = ac.get('/api/state')['version']
+            self.assertFalse(ac.get('/api/state?version=' + str(v))['gateway'])
+            ac.post('/api/gateway/save', {'url': '', 'pollSeconds': 60})
+            ac.post('/api/gateway/generate', {})
+            ac.post('/api/gateway/save', {'url': 'https://mailbox.example.workers.dev', 'pollSeconds': 60})
+            slim = ac.get('/api/state?version=' + str(v))
+            self.assertTrue(slim['unchanged'])
+            self.assertTrue(slim['gateway'])
+            self.assertNotIn('trips', slim)
+        finally:
+            S.cleanup()
+
     def test_YT07_server_request_queue_size(self):
         import importlib.util
         spec = importlib.util.spec_from_file_location('to_app', os.path.join(ROOT, 'server', 'app.py'))

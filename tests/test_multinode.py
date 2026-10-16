@@ -173,7 +173,7 @@ class T00_DefinitionOfSuccess(Base):
         ali.login('ali', 'Tree-green42')
         mona.login('mona', 'Sky-blue7700')
         # 2. both keep working, including attachments
-        img = os.urandom(200_000)
+        img = b'\xff\xd8\xff\xe0' + os.urandom(200_000)
         up = ali.call('POST', '/api/upload?name=canteen.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
         ali.post('/api/commit', {'label': 'photo', 'ops': [photo_op('sp1', 'S1', up['src'])]})
         edit(ali, 'S1', description='painted')
@@ -546,7 +546,7 @@ class T19_Crashes(Base):
     def test_c_attachments(self):
         """22-23. Upload on one PC; the other shows a placeholder while the file is missing, continues an interrupted
         download from where it stopped (only the rest travels), verifies it by SHA-256 and never shows a partial file."""
-        data = os.urandom(900_000)
+        data = b'\xff\xd8\xff\xe0' + os.urandom(900_000)
         sha = hashlib.sha256(data).hexdigest()
         # the administrator PC cannot be reached by pc1 while the photo is added (its rows still arrive: the administrator
         # PC pushes them), so pc1 certainly has the record but not the file yet

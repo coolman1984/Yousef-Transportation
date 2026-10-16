@@ -949,6 +949,23 @@
     "err.mailboxSecret",
     "err.mailboxReplay"
    ]
+  },
+  {
+   "id": "value-refused",
+   "cat": "trips",
+   "page": "drivers",
+   "roles": [
+    "administrator",
+    "dispatcher"
+   ],
+   "errors": [
+    "err.nameEmpty",
+    "err.badMobile",
+    "err.badExpiry",
+    "err.notImage",
+    "err.fullFolder",
+    "err.httpsOnly"
+   ]
   }
  ]
 }

@@ -185,7 +185,7 @@ class PermissionsTest(unittest.TestCase):
     # ---------------------------------------------------------------- photos
     def test_k_trip_photo_follows_its_trip(self):
         t = self.new_trip('cat1')
-        img = bytes(range(256)) * 20
+        img = b'\xff\xd8\xff\xe0' + bytes(range(256)) * 20
         up = self.ac.call('POST', '/api/upload?name=odo.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
         self.ac.post('/api/commit', {'label': 'photo', 'ops': [put('tripPhotos', 'ph1', tripId=t['id'], kind='start', src=up['src'])]})
         same = self.login_as('pia.cat1', profile='viewer', scopes=['cat1'])

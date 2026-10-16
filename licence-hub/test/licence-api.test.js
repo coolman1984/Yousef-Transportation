@@ -4,7 +4,8 @@ import { createHash, createPrivateKey } from 'node:crypto';
 import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
-  deviceKey, deviceLockKey, onlineDeviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice,
+  deviceKey, deviceLockKey, onlineDeviceLockKey, migrateLegacyTrialLocks, LEGACY_TRIAL_LOCKS_MIGRATION_MARKER,
+  trialUsedForDevice,
   trialUsedOnline, REASON_PAID_IN_STUDIO, REASON_PAID_KEY_MISSING, offlineDeviceLockKey,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
@@ -62,6 +63,76 @@ function body(over = {}) {
     version: '1.0',
     ...over,
   };
+}
+
+function countingEnv(innerDb, over = {}) {
+  let queries = 0;
+  let inBatch = false;
+  const inner = innerDb || newD1();
+  const DB = {
+    prepare(sql) {
+      const stmt = inner.prepare(sql);
+      return {
+        bind(...args) {
+          const bound = stmt.bind(...args);
+          return {
+            async run() {
+              if (!inBatch) queries += 1;
+              return bound.run();
+            },
+            async first() {
+              queries += 1;
+              return bound.first();
+            },
+            async all() {
+              queries += 1;
+              return bound.all();
+            },
+          };
+        },
+      };
+    },
+    async batch(stmts) {
+      queries += 1;
+      inBatch = true;
+      try {
+        return await inner.batch(stmts);
+      } finally {
+        inBatch = false;
+      }
+    },
+  };
+  return {
+    e: { DB, SESSION_SECRET: SECRET, LICENCE_PRODUCTS: 'trip-orders', TRIAL_DAYS: '14', LICENCE_CALENDAR_TZ: 'Africa/Cairo', PENDING_TTL_SEC: '900', ...over },
+    queryCount: () => queries,
+  };
+}
+
+function legacyDeviceCode(i) {
+  const hex = i.toString(16).padStart(8, '0').toUpperCase();
+  return `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+}
+
+async function seedLegacyUnprefixedLocks(e, count) {
+  const t = 1;
+  const dkeyAnchor = deviceKey('7KD2M-QX9TP');
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`etw|trip-orders|d|${dkeyAnchor}`, '2026-01-01|2026-06-14', t).run();
+  if (count > 0) {
+    const sharedId = 'legacy-lock-shared-req';
+    const sharedDevice = legacyDeviceCode(99);
+    const sharedDkey = deviceKey(sharedDevice);
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, 'legacy-shared', '', '', '', 'delivered', 'trial', '2026-06-14', ?, ?)`,
+    ).bind(sharedId, sharedDevice, sharedDkey, MACHINE_B, t, t).run();
+    for (let i = 0; i < count; i++) {
+      const dkey = deviceKey(legacyDeviceCode(i + 100));
+      await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+        .bind(dkey, sharedId, t).run();
+    }
+  }
 }
 
 async function postRequest(e, payload) {
@@ -1716,6 +1787,58 @@ test('PR B r3: approve already_used refuses row instead of throwing', async () =
   const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(data.id).first();
   assert.equal(row.status, 'refused');
   assert.equal(row.reason, 'already_used');
+});
+
+test('PR B r7: legacy lock migration stays within D1 query cap and runs once', async () => {
+  const { runTrialGrantsBackfillToCompletion } = await import('../src/trial-grants.js');
+  const keys = await signingKeys(220);
+  for (const legacyCount of [0, 5, 20]) {
+    const { e, queryCount } = countingEnv();
+    await seedLegacyUnprefixedLocks(e, legacyCount);
+    await runTrialGrantsBackfillToCompletion(e);
+    const pendingDevice = legacyDeviceCode(legacyCount + 500);
+    const pendingMachine = 'c'.repeat(64);
+    const reqStart = queryCount();
+    const { data } = await postRequest(e, body({
+      device: pendingDevice,
+      machine: pendingMachine,
+      nonce: `r7-req-${legacyCount}`,
+    }));
+    const reqUsed = queryCount() - reqStart;
+    assert.ok(reqUsed <= 50, `request legacy=${legacyCount} used ${reqUsed}`);
+    assert.equal(data.status, 'pending');
+    const badEtw = await e.DB.prepare('SELECT 1 FROM machine_trials WHERE machine LIKE ?')
+      .bind('d:etw|%').first();
+    assert.ok(!badEtw);
+    const migStart = queryCount();
+    await migrateLegacyTrialLocks(e);
+    assert.equal(queryCount() - migStart, 1);
+
+    const { e: eAp, queryCount: qcAp } = countingEnv();
+    await seedLegacyUnprefixedLocks(eAp, legacyCount);
+    await runTrialGrantsBackfillToCompletion(eAp);
+    const apprDevice = legacyDeviceCode(legacyCount + 700);
+    const apprMachine = 'd'.repeat(64);
+    const apprDkey = deviceKey(apprDevice);
+    const pendingId = `r7-pend-${legacyCount}`;
+    const t = 1;
+    await eAp.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'pending', ?, ?)`,
+    ).bind(pendingId, apprDevice, apprDkey, apprMachine, `r7-appr-n-${legacyCount}`, t, t).run();
+    const apprStart = qcAp();
+    const signed = await approveRequest(eAp, pendingId, keys);
+    const apprUsed = qcAp() - apprStart;
+    assert.ok(apprUsed <= 50, `approve legacy=${legacyCount} used ${apprUsed}`);
+    assert.ok(signed?.code);
+    const marker = await eAp.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+      .bind(LEGACY_TRIAL_LOCKS_MIGRATION_MARKER).first();
+    assert.equal(marker.id, LEGACY_TRIAL_LOCKS_MIGRATION_MARKER);
+    const mig2 = qcAp();
+    await migrateLegacyTrialLocks(eAp);
+    assert.equal(qcAp() - mig2, 1);
+  }
 });
 
 test('PR B r2: paid-expired trial approve rolls back trial_grants when device lock is lost', async () => {

@@ -282,27 +282,87 @@ async function trialLockRow(env, lockId) {
   return null;
 }
 
+/** Recorded after one-time d:/h: backfill from pre-prefix machine_trials rows (PR B r7). */
+export const LEGACY_TRIAL_LOCKS_MIGRATION_MARKER = 'legacy_trial_locks_migrated_v1';
+
+const LEGACY_LOCK_MIGRATION_BIND_CHUNK = 90;
+const LEGACY_LOCK_MIGRATION_PAGE_SIZE = 180;
+
+const LEGACY_LOCK_UNMIGRATED_SQL = `SELECT mt.machine, mt.request_id, mt.at FROM machine_trials mt
+  WHERE mt.machine NOT LIKE 'd:%' AND mt.machine NOT LIKE 'h:%'
+    AND mt.machine NOT LIKE 'od:%' AND mt.machine NOT LIKE 'pd:%' AND mt.machine NOT LIKE 'ph:%'
+    AND mt.machine NOT LIKE 'offline:%' AND mt.machine NOT LIKE 'etw|%'
+    AND NOT EXISTS (
+      SELECT 1 FROM machine_trials pref
+      WHERE pref.machine = ('d:' || mt.machine) AND pref.request_id = mt.request_id
+    )`;
+
 /** Backfill d:/h: locks from pre-prefix machine_trials rows (upgrade-safe). */
 export async function migrateLegacyTrialLocks(env) {
-  const rows = await env.DB.prepare(
-    `SELECT machine, request_id, at FROM machine_trials
-     WHERE machine NOT LIKE 'd:%' AND machine NOT LIKE 'h:%'
-       AND machine NOT LIKE 'od:%' AND machine NOT LIKE 'pd:%' AND machine NOT LIKE 'ph:%'
-       AND machine NOT LIKE 'offline:%'`,
-  ).bind().all();
-  for (const row of rows.results || []) {
-    const prefixed = deviceLockKey(row.machine);
+  const t = now();
+  const done = await env.DB.prepare(
+    'SELECT 1 FROM schema_migrations WHERE id = ?',
+  ).bind(LEGACY_TRIAL_LOCKS_MIGRATION_MARKER).first();
+  if (done) return;
+
+  const page = await env.DB.prepare(
+    `${LEGACY_LOCK_UNMIGRATED_SQL} ORDER BY mt.machine LIMIT ?`,
+  ).bind(LEGACY_LOCK_MIGRATION_PAGE_SIZE + 1).all();
+  const rows = page.results || [];
+  if (!rows.length) {
     await env.DB.prepare(
-      'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
-    ).bind(prefixed, row.request_id, row.at).run();
-    const req = await env.DB.prepare('SELECT machine FROM licence_requests WHERE id = ?').bind(row.request_id).first();
-    const machineHash = normalizeMachineHash(req?.machine);
-    if (machineHash) {
-      await env.DB.prepare(
-        'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
-      ).bind(machineLockKey(machineHash), row.request_id, row.at).run();
+      'INSERT OR IGNORE INTO schema_migrations(id, applied_at) VALUES(?, ?)',
+    ).bind(LEGACY_TRIAL_LOCKS_MIGRATION_MARKER, t).run();
+    return;
+  }
+
+  const work = rows.slice(0, LEGACY_LOCK_MIGRATION_PAGE_SIZE);
+  const hasMore = rows.length > LEGACY_LOCK_MIGRATION_PAGE_SIZE;
+  const requestIds = [...new Set(work.map((r) => r.request_id).filter(Boolean))];
+  const machineByReq = new Map();
+  const readChunks = Math.min(
+    2,
+    Math.ceil(requestIds.length / LEGACY_LOCK_MIGRATION_BIND_CHUNK) || 0,
+  );
+  for (let c = 0; c < readChunks; c++) {
+    const chunk = requestIds.slice(
+      c * LEGACY_LOCK_MIGRATION_BIND_CHUNK,
+      (c + 1) * LEGACY_LOCK_MIGRATION_BIND_CHUNK,
+    );
+    if (!chunk.length) break;
+    const ph = chunk.map(() => '?').join(', ');
+    const res = await env.DB.prepare(
+      `SELECT id, machine FROM licence_requests WHERE id IN (${ph})`,
+    ).bind(...chunk).all();
+    for (const r of res.results || []) {
+      machineByReq.set(r.id, r.machine);
     }
   }
+
+  const stmts = [];
+  for (const row of work) {
+    stmts.push(
+      env.DB.prepare(
+        'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
+      ).bind(deviceLockKey(row.machine), row.request_id, row.at),
+    );
+    const machineHash = normalizeMachineHash(machineByReq.get(row.request_id));
+    if (machineHash) {
+      stmts.push(
+        env.DB.prepare(
+          'INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO NOTHING',
+        ).bind(machineLockKey(machineHash), row.request_id, row.at),
+      );
+    }
+  }
+  if (!hasMore) {
+    stmts.push(
+      env.DB.prepare(
+        'INSERT OR IGNORE INTO schema_migrations(id, applied_at) VALUES(?, ?)',
+      ).bind(LEGACY_TRIAL_LOCKS_MIGRATION_MARKER, t),
+    );
+  }
+  if (stmts.length) await env.DB.batch(stmts);
 }
 
 /** Offline path: one trial per normalized device code only. */

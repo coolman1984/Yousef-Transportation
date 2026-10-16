@@ -833,6 +833,10 @@ class Handler(BaseHTTPRequestHandler):
                                                       len(BACKUPS.extra or []), SECRETS.configured))
         if p == '/api/insights':
             self.need('trips.view')
+            if qs.get('version'):
+                v = STORE.version()
+                if qs.get('version') == str(v):
+                    return self.send(200, {'version': v, 'unchanged': True})
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),

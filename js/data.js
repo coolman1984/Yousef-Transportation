@@ -16,9 +16,16 @@
     if (D.loading) return D.loading;
     var wantInsights = TO.can('trips.view');
     var stateUrl = D.version != null ? '/api/state?version=' + encodeURIComponent(D.version) : '/api/state';
-    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get('/api/insights') : Promise.resolve({})]).then(function (r) {
-      if (r[0].unchanged && D.state) { D.loading = null; return D; }
-      D.state = r[0]; D.insights = r[1] || {}; D.version = r[0].version; reindex(); D.loading = null;
+    var insightsUrl = wantInsights && D.version != null ? '/api/insights?version=' + encodeURIComponent(D.version) : '/api/insights';
+    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get(insightsUrl) : Promise.resolve(null)]).then(function (r) {
+      var st = r[0], ins = r[1];
+      if (st.unchanged && D.state) {
+        if (!wantInsights || (ins && ins.unchanged)) { D.loading = null; return D; }
+        D.insights = ins; D.loading = null; TO.emit('data', D); return D;
+      }
+      D.state = st; D.version = st.version; reindex();
+      if (wantInsights) D.insights = ins || {};
+      D.loading = null;
       TO.emit('data', D);
       return D;
     }, function (e) { D.loading = null; throw e; });

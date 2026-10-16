@@ -168,12 +168,18 @@ class Server:
 
     def kill(self):
         """Hard crash (like pulling the power cable)."""
-        if self.proc and self.proc.poll() is None:
+        proc = self.proc
+        if proc and proc.poll() is None:
             self._signal_group(signal.SIGKILL)
             try:
-                self.proc.wait(5)
+                proc.wait(5)
             except subprocess.TimeoutExpired:
-                self.proc.wait()
+                proc.wait()
+        if proc and proc.stdout:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
         self.proc = None
 
     def client(self):

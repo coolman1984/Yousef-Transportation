@@ -2,11 +2,16 @@
 import concurrent.futures
 import json
 import os
+import re
+import shutil
 import socket
+import tempfile
 import threading
+import time
 import unittest
+import warnings
 
-from harness import ADMIN, ApiError, Server, make_authority
+from harness import ADMIN, ApiError, Server, make_authority, wait_until
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -33,8 +38,11 @@ class YT115(unittest.TestCase):
         r = self.S.client().post('/api/auth/register', {'username': 'newhire', 'full_name': 'New Hire', 'password': 'Office-pass88'})
         self.assertEqual(len(r['request_code']), 6)
         with self.assertRaises(ApiError) as e:
+            self.S.client().login('newhire', 'wrong-password')
+        self.assertNotIn('waiting', str(e.exception.msg).lower())
+        with self.assertRaises(ApiError) as e2:
             self.S.client().login('newhire', 'Office-pass88')
-        self.assertIn('waiting', str(e.exception.msg).lower())
+        self.assertIn('waiting', str(e2.exception.msg).lower())
         pending = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'newhire'][0]
         self.ac.post('/api/users/review', {'id': pending['id'], 'decision': 'approve', 'role': 'Viewer', 'perms': ['overview.view']})
         self.S.client().login('newhire', 'Office-pass88')
@@ -44,8 +52,34 @@ class YT115(unittest.TestCase):
                                          'perms': ['overview.view'], 'scopes': None})
         uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'resetme'][0]['id']
         code = self.ac.post('/api/users/reset-code', {'id': uid})
-        self.S.client().post('/api/auth/reset', {'username': 'resetme', 'code': code['code'], 'password': 'Fresh-pass42'})
+        spaced = code['code'][:4] + '-' + code['code'][4:]
+        self.S.client().post('/api/auth/reset', {'username': 'resetme', 'code': spaced, 'password': 'Fresh-pass42'})
         self.S.client().login('resetme', 'Fresh-pass42')
+
+    def test_YT03_reset_code_lockout_clears_on_success(self):
+        self.ac.post('/api/users/save', {'username': 'resetlock', 'full_name': 'Reset Lock', 'password': 'Office-pass12', 'must_change': False,
+                                          'perms': ['overview.view'], 'scopes': None})
+        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'resetlock'][0]['id']
+        code = self.ac.post('/api/users/reset-code', {'id': uid})['code']
+        for _ in range(3):
+            try:
+                self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+            except ApiError:
+                pass
+        with self.assertRaises(ApiError):
+            self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': code, 'password': 'Fresh-pass42'})
+        code2 = self.ac.post('/api/users/reset-code', {'id': uid})['code']
+        self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': code2, 'password': 'Fresh-pass99'})
+        self.S.client().login('resetlock', 'Fresh-pass99')
+
+    def test_YT03_suspend_approved_user(self):
+        self.ac.post('/api/users/save', {'username': 'suspendme', 'full_name': 'Suspend Me', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'suspendme'][0]['id']
+        self.ac.post('/api/users/review', {'id': uid, 'decision': 'suspend', 'reason': 'Policy test'})
+        with self.assertRaises(ApiError) as e:
+            self.S.client().login('suspendme', 'Office-pass12')
+        self.assertIn('suspended', str(e.exception.msg).lower())
 
     def test_YT04_licence_activation_ui_flag(self):
         lic = self.ac.get('/api/licence')
@@ -53,17 +87,22 @@ class YT115(unittest.TestCase):
 
     def test_YT05_board_limits_cards(self):
         src = open(os.path.join(ROOT, 'js', 'views', 'board.js'), encoding='utf-8').read()
-        self.assertIn('BOARD_LIMIT', src)
+        m = re.search(r'BOARD_LIMIT\s*=\s*(\d+)', src)
+        self.assertTrue(m and int(m.group(1)) == 80)
 
     def test_YT06_state_unchanged_when_version_matches(self):
         v = self.ac.get('/api/state')['version']
         slim = self.ac.get('/api/state?version=' + str(v))
         self.assertTrue(slim.get('unchanged'))
         self.assertNotIn('trips', slim)
+        self.assertEqual(slim['version'], v)
 
     def test_YT07_server_request_queue_size(self):
-        src = open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read()
-        self.assertIn('request_queue_size = 128', src)
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('to_app', os.path.join(ROOT, 'server', 'app.py'))
+        app_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(app_mod)
+        self.assertEqual(getattr(app_mod.Server, 'request_queue_size', 0), 128)
 
     def test_YT08_no_times_i18n_keys(self):
         for lang in ('en', 'ar'):
@@ -75,22 +114,33 @@ class YT115(unittest.TestCase):
         tid = self.ac.post('/api/trips/new', {'categoryId': 'cat1', 'vehicleId': 'v1', 'driverId': 'd1', 'destination': 'Far'})['id']
         with self.assertRaises(ApiError):
             self.ac.post('/api/trips/close', {'id': tid, 'startKm': 100, 'endKm': 5100, 'startAt': '2026-10-12T08:00', 'endAt': '2026-10-12T09:00'})
+        tid2 = self.ac.post('/api/trips/new', {'categoryId': 'cat1', 'vehicleId': 'v1', 'driverId': 'd1', 'destination': 'Far2'})['id']
+        self.ac.post('/api/trips/close', {'id': tid2, 'startKm': 100, 'endKm': 200, 'startAt': '2026-10-12T08:00', 'endAt': '2026-10-12T09:00'})
+        with self.assertRaises(ApiError):
+            self.ac.post('/api/trips/amend', {'id': tid2, 'field': 'endKm', 'value': 5100, 'reason': 'Typo fix test'})
 
     def test_YT10_slide_dismiss_hint(self):
-        data = open(os.path.join(ROOT, 'js', 'i18n', 'en.js'), encoding='utf-8').read()
-        self.assertIn('slide.dismiss', data)
+        for lang in ('en', 'ar'):
+            data = open(os.path.join(ROOT, 'js', 'i18n', lang + '.js'), encoding='utf-8').read()
+            self.assertIn('slide.dismiss', data)
+        shell = open(os.path.join(ROOT, 'js', 'shell.js'), encoding='utf-8').read()
+        self.assertIn('slide.dismiss', shell)
 
     def test_YT11_port_busy_does_not_open_browser(self):
         src = open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read()
         self.assertNotIn('webbrowser.open', src[src.index('Port {port} is already in use'):src.index('Port {port} is already in use') + 400])
 
     def test_YT12_unknown_hash_not_silent_overview(self):
-        src = open(os.path.join(ROOT, 'js', 'shell.js'), encoding='utf-8').read()
-        self.assertIn('err.notFound', src)
+        with open(os.path.join(ROOT, 'js', 'shell.js'), encoding='utf-8') as f:
+            shell = f.read()
+        anchor = shell.index('!PAGES.some')
+        self.assertLess(shell.index('err.notFound', anchor), shell.index("TO.go('overview')", anchor))
 
     def test_YT13_new_trip_form_submits_on_enter(self):
-        src = open(os.path.join(ROOT, 'js', 'views', 'trips.js'), encoding='utf-8').read()
-        self.assertIn("form.addEventListener('submit'", src)
+        trips = open(os.path.join(ROOT, 'js', 'views', 'trips.js'), encoding='utf-8').read()
+        self.assertIn("form.addEventListener('submit'", trips)
+        self.assertIn('type="submit"', trips)
+        self.assertIn('data-save', trips)
 
     def test_YT14_passenger_cap_error(self):
         cat = 'cat1'
@@ -100,23 +150,84 @@ class YT115(unittest.TestCase):
         self.assertIn('12', str(e.exception.msg))
 
     def test_YT15_consent_documented(self):
-        self.assertTrue(os.path.isfile(os.path.join(ROOT, 'docs', 'RELEASE_NOTES.md')))
+        notes = open(os.path.join(ROOT, 'docs', 'RELEASE_NOTES.md'), encoding='utf-8').read()
+        self.assertIn('1.1.5', notes)
+        self.assertRegex(notes, r'consent|remote help|الموافقة', re.I)
 
     def test_YT16_licence_page_in_unguided_catalogue(self):
-        cat = open(os.path.join(ROOT, 'tests', 'guide_catalogue.js'), encoding='utf-8').read()
-        self.assertIn("'licence'", cat)
+        cat = json.load(open(os.path.join(ROOT, 'guide', 'catalogue.json'), encoding='utf-8'))
+        self.assertIn('licence', cat.get('unguided', []))
+        self.assertIn('licence', cat.get('pages', []))
 
     def test_YT17_harness_closes_server(self):
-        s = Server('yt17').start()
-        try:
-            s.client().get('/api/auth/status')
-        finally:
-            s.cleanup()
-        self.assertIsNone(s.proc)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always', ResourceWarning)
+            s = Server('yt17').start()
+            try:
+                s.client().get('/api/auth/status')
+            finally:
+                s.cleanup()
+            self.assertIsNone(s.proc)
+            self.assertFalse([w for w in caught if issubclass(w.category, ResourceWarning)])
 
     def test_YT18_audit_retention_doc(self):
         path = os.path.join(ROOT, 'docs', 'AUDIT_RETENTION.md')
         self.assertTrue(os.path.isfile(path))
+
+
+class YT115LicenceBackground(unittest.TestCase):
+    """Hub approval is picked up by the server licence thread without the licence screen open."""
+
+    @classmethod
+    def setUpClass(cls):
+        from test_assist import FakeHub
+        try:
+            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+        except ImportError:
+            Ed25519PrivateKey = None
+        cls._lic_poll = os.environ.get('TO_LICENCE_POLL_SEC')
+        os.environ['TO_LICENCE_POLL_SEC'] = '3'
+        cls._profile_dir = tempfile.mkdtemp(prefix='triporders-yt115lic-')
+        cls._prev_device = os.environ.get('TO_DEVICE_ID')
+        cls._prev_dpapi = os.environ.get('TRIPORDERS_DPAPI_DIR')
+        cls._prev_xdg = os.environ.get('XDG_CONFIG_HOME')
+        os.environ['TO_DEVICE_ID'] = 'test-pc-yt115lic'
+        os.environ['TRIPORDERS_DPAPI_DIR'] = cls._profile_dir
+        os.environ['XDG_CONFIG_HOME'] = cls._profile_dir
+        import atrest
+        atrest._MASTER = None
+        cls.hub = FakeHub(Ed25519PrivateKey.generate() if Ed25519PrivateKey else None)
+        pub = cls.hub.public()
+        cls.S = Server('yt115lic', extra_cfg={'licence_hub_url': cls.hub.url, 'licence_keys': [pub, f'paid:{pub}']}).start()
+        cls.ac = make_authority(cls.S, consent=None)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+        cls.hub.stop()
+        if cls._lic_poll is None:
+            os.environ.pop('TO_LICENCE_POLL_SEC', None)
+        else:
+            os.environ['TO_LICENCE_POLL_SEC'] = cls._lic_poll
+        shutil.rmtree(cls._profile_dir, ignore_errors=True)
+        for key, val in (('TO_DEVICE_ID', cls._prev_device), ('TRIPORDERS_DPAPI_DIR', cls._prev_dpapi), ('XDG_CONFIG_HOME', cls._prev_xdg)):
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+        import atrest
+        atrest._MASTER = None
+
+    def test_background_poll_activates_after_owner_issues(self):
+        self.ac.post('/api/licence/request/clear', {})
+        self.hub.mode = 'wait'
+        self.ac.post('/api/licence/request', {'kind': 'trial'})
+        self.assertEqual(self.ac.get('/api/licence/request')['status'], 'waiting')
+        self.hub.mode = 'issue'
+        def activated():
+            lic = self.ac.get('/api/licence')
+            return lic.get('full') and (lic.get('request') or {}).get('status') == 'activated'
+        self.assertTrue(wait_until(activated, timeout=30, step=0.5, what='licence background activation'))
 
 
 class YT01Lockout(unittest.TestCase):

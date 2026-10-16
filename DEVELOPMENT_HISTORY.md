@@ -1,10 +1,16 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review round 1 — auth, licence poll, YT behavioural tests (2026-10-16)
+
+**What/why:** Address independent review `review-grok-r1.md`: login and reset enumeration fixes, reset-code lockout and normalization, pending cap and re-apply, suspend/approve flows, `status`/`active` sync, state version short-circuit without full store load, km-only amend plausibility, Arabic `errkeys` + guide problem map, licence hub trial on source builds with server/client polling, access UI profile on approve.
+**Checks:** `cd tests && python3 -m unittest` (CI module list incl. `test_yt_115`) — 428 run, OK, skipped=40. Gateway 24/24. Licence-hub 762/762. No hub migration.
+**Next:** Owner re-review; commits on branch, no push.
+
 ## Yousef QA v1.1.4 fixes + auth (YT-01..18) — v1.1.5 (2026-10-16)
 
 **What/why:** Branch `feat/auth-and-qa-fixes-1.1.5`: atomic login lockout, self-service sign-up with admin approve/reject and reset codes, licence page and activation UI on source builds, board cap and state `?version=` short-circuit, trip plausibility and passenger cap, i18n and UX items from report `/workspace/yousef-qa/report-v1.1.4.md`.
-**Checks:** `cd tests && python3 -m unittest` (listed modules incl. `test_yt_115`) — 451 run, OK, skipped=40. `cd gateway && node --test test/gateway.test.js` — 24 pass. `cd licence-hub && npm test` — 762 pass. No hub D1 migration (office-only auth fields replicate via journal).
+**Checks:** superseded by Grok round 1 entry above.
 **Next:** Owner PR review; no push.
 
 ## Preserve saved licence hub on upgrade — review P2/P3 (2026-10-16)

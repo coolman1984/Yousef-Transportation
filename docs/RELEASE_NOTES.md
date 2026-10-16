@@ -11,6 +11,7 @@
 - **Performance:** Today board shows a capped number of cards per column; `/api/state` returns unchanged when the version matches (less reload traffic).
 - **Data quality:** implausible km/time combinations are refused; more than 12 passengers returns an error; Reports shows Arabic/English text for `NO_TIMES` / `NO_KM`.
 - **Other:** unknown `#/` routes show a clear not-found message; welcome slides mention Esc/Close; busy port no longer opens the browser to the wrong program.
+- **Privacy:** the first-run remote-help consent card is unchanged — it stays a small overlay and does not cover the main work area after you choose.
 
 # Trip Orders 1.1.4
 

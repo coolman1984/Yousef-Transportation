@@ -20,6 +20,18 @@ def put(e, i, **row):
     return {'e': e, 'id': i, 'op': 'put', 'row': row}
 
 
+def _journal_has_user_command(data_dir, cmd):
+    import sqlite3
+    db = os.path.join(data_dir, 'journal.db')
+    if not os.path.isfile(db):
+        return False
+    con = sqlite3.connect(db)
+    try:
+        return any(cmd in (row[0] or '') for row in con.execute('SELECT body FROM changes'))
+    finally:
+        con.close()
+
+
 class YT115(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -95,6 +107,61 @@ class YT115(unittest.TestCase):
         finally:
             S.cleanup()
 
+    def test_YT115_clear_reset_code_replicated_on_success(self):
+        S = Server('yt115clr-ok').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'clr_ok', 'full_name': 'Clr Ok', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'clr_ok'][0]['id']
+            code = ac.post('/api/users/reset-code', {'id': uid})['code']
+            cl.post('/api/auth/reset', {'username': 'clr_ok', 'code': code, 'password': 'Fresh-pass42'})
+            self.assertTrue(_journal_has_user_command(S.data_dir, 'clear-reset-code'))
+        finally:
+            S.cleanup()
+
+    def test_YT115_clear_reset_code_replicated_after_three_wrong_guesses(self):
+        S = Server('yt115clr-bad').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'clr_bad', 'full_name': 'Clr Bad', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'clr_bad'][0]['id']
+            ac.post('/api/users/reset-code', {'id': uid})
+            for _ in range(3):
+                try:
+                    cl.post('/api/auth/reset', {'username': 'clr_bad', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                except ApiError:
+                    pass
+            self.assertTrue(_journal_has_user_command(S.data_dir, 'clear-reset-code'))
+        finally:
+            S.cleanup()
+
+    def test_YT115_reissued_reset_code_survives_wrong_guess(self):
+        S = Server('yt115reissue').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'reissue', 'full_name': 'Reissue', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'reissue'][0]['id']
+            ac.post('/api/users/reset-code', {'id': uid})
+            try:
+                cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+            except ApiError:
+                pass
+            code2 = ac.post('/api/users/reset-code', {'id': uid})['code']
+            try:
+                cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+            except ApiError:
+                pass
+            cl.post('/api/auth/reset', {'username': 'reissue', 'code': code2, 'password': 'Fresh-pass55'})
+            cl.login('reissue', 'Fresh-pass55')
+        finally:
+            S.cleanup()
+
     def test_YT115_used_reset_code_not_revived_by_profile_save(self):
         S = Server('yt115code').start()
         try:
@@ -118,13 +185,19 @@ class YT115(unittest.TestCase):
             S.cleanup()
 
     def test_YT03_suspended_username_cannot_reregister(self):
-        self.ac.post('/api/users/save', {'username': 'wasactive', 'full_name': 'Was Active', 'password': 'Office-pass12', 'must_change': False,
+        S = Server('yt115suspend').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'wasactive', 'full_name': 'Was Active', 'password': 'Office-pass12', 'must_change': False,
                                          'perms': ['overview.view'], 'scopes': None})
-        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'wasactive'][0]['id']
-        self.ac.post('/api/users/review', {'id': uid, 'decision': 'suspend', 'reason': 'Policy test'})
-        with self.assertRaises(ApiError) as e:
-            self.S.client().post('/api/auth/register', {'username': 'wasactive', 'full_name': 'New Try', 'password': 'Office-pass88'})
-        self.assertIn('taken', str(e.exception.msg).lower())
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'wasactive'][0]['id']
+            ac.post('/api/users/review', {'id': uid, 'decision': 'suspend', 'reason': 'Policy test'})
+            with self.assertRaises(ApiError) as e:
+                cl.post('/api/auth/register', {'username': 'wasactive', 'full_name': 'New Try', 'password': 'Office-pass88'})
+            self.assertIn('taken', str(e.exception.msg).lower())
+        finally:
+            S.cleanup()
 
     def test_YT03_refused_signup_shows_reason(self):
         self.S.client().post('/api/auth/register', {'username': 'refused1', 'full_name': 'Refused One', 'password': 'Office-pass88'})
@@ -185,6 +258,8 @@ class YT115(unittest.TestCase):
         src = open(os.path.join(ROOT, 'js', 'data.js'), encoding='utf-8').read()
         self.assertIn('loadSeq', src)
         self.assertIn('applyInsights', src)
+        self.assertIn("TO.get('/api/insights')", src)
+        self.assertIn('ins.unchanged', src)
 
     def test_YT06_state_unchanged_still_carries_gateway(self):
         """gateway.json is outside the store version; the slim response must refresh the flag."""

@@ -782,7 +782,8 @@ class Licence:
                     'full': not _COMMERCIAL_BUILD, 'enforced': bool(_COMMERCIAL_BUILD),
                     'device': dev, 'edition': None, 'first_day': None, 'last_day': None,
                     'days_left': None, 'serial': None, 'reason': 'no_keys', 'build_channel': _BUILD_CHANNEL,
-                    'upgrade_grace': False, 'upgrade_grace_days_left': None}
+                    'upgrade_grace': False, 'upgrade_grace_days_left': None,
+                    'activation_ui': not _COMMERCIAL_BUILD}
         grace = self._commercial_upgrade_grace()
         if grace and grace.get('upgrade_grace_days_left', 0) > 0:
             return {'state': 'upgrade_grace', 'full': True, 'enforced': True, 'device': dev,
@@ -846,6 +847,7 @@ class Licence:
             result.update(state='clock_back', full=False, reason='clock_back')
         result.setdefault('upgrade_grace', False)
         result.setdefault('upgrade_grace_days_left', None)
+        result.setdefault('activation_ui', True)
         return result
 
     def _check(self, code, dev, today, keys):
@@ -1183,8 +1185,10 @@ class Licence:
         except ConnectionError:
             pass
 
-    def loop(self, every=20):
+    def loop(self, every=None):
         """Background: look for the answer while a request is open, even when nobody has the page open."""
+        if every is None:
+            every = max(3, int(os.environ.get('TO_LICENCE_POLL_SEC', '20')))
         while not self.stop:
             try:
                 st = self._state()

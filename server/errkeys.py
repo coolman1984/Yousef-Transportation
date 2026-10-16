@@ -10,6 +10,17 @@ import re
 # (pattern of the English message, key). Named groups become the `vars` of the message.
 CATALOG = [
     (r'^Wrong user name or password\.$', 'autherr.wrong'),
+    (r'^Wrong user name or reset code\.$', 'autherr.resetWrong'),
+    (r'^Your sign-up is waiting for the administrator', 'autherr.signupPending'),
+    (r'^Your sign-up was refused\. Reason: (?P<reason>.+)$', 'autherr.signupRejectedReason'),
+    (r'^Your sign-up was refused', 'autherr.signupRejected'),
+    (r'^Your account is suspended', 'autherr.signupSuspended'),
+    (r'^This account is not approved yet', 'autherr.notApproved'),
+    (r'^Too many sign-up requests are waiting', 'autherr.pendingQueueFull'),
+    (r'^Reset codes are only for approved accounts', 'autherr.resetNotApproved'),
+    (r'^At most (?P<n>\d+) passengers per trip', 'err.passengersMax'),
+    (r'^endAt: a trip cannot be longer than (?P<hours>\d+) hours', 'err.tripDuration'),
+    (r'^endKm: these kilometres and times do not match', 'err.tripSpeed'),
     (r'^This account is locked for (?P<mins>\d+) more minute', 'autherr.locked'),
     (r'^Too many wrong passwords\. The account is locked for (?P<mins>\d+) minutes', 'autherr.lockedNow'),
     (r'^This account is disabled', 'autherr.disabled'),

@@ -63,7 +63,9 @@
       if (ctx.route.q.tab === 'gateway') TO.mailboxTab.mount(root);
       if (ctx.route.q.tab === 'privacy') TO.privacyTab.mount(root);
       if (ctx.route.q.tab === 'licence') TO.licenceTab.mount(root);
-      if (ctx.route.q.tab === 'access') { TO.data.load().then(function () { TO.accessTab.mount(root); }); }
+      if (ctx.route.q.tab === 'access') {
+        (TO.data.state ? Promise.resolve() : TO.data.load()).then(function () { TO.accessTab.mount(root); });
+      }
       if (ctx.route.q.tab === 'rules') { if (!TO.data.state) { TO.data.load().then(function () { TO.rerender(); }); return; } TO.mountList(root, TO.lists.tripCategories); }
       root.addEventListener('click', function (e) {
         var b = e.target.closest('[data-pref]');

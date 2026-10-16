@@ -46,6 +46,9 @@ def _now():
 STATUSES = ('draft', 'sent', 'started', 'finished', 'closed', 'cancelled')
 DATE_WINDOW_DAYS = 60            # a trip date further than this from today is almost always a typing slip (2026-13-45, 1999, 2030)
 MAX_KM = 9_999_999
+MAX_SPEED_KMH = 250
+MAX_TRIP_HOURS = 72
+MAX_PASSENGERS = 12
 TEXT_MAX = {'destination': 200, 'purpose': 300, 'routeText': 500, 'notes': 10000}
 
 
@@ -92,10 +95,18 @@ def check_trip(row, before=None, today=None, trusted=False, window=True):
         if changed(f) and row[f] not in (None, ''):
             if domain.parse_dt(row[f]) is None:
                 raise BadRequest(f'{f}: write the time like 2026-10-12T08:30')
-    if (changed('startAt') or changed('endAt')) and row.get('startAt') and row.get('endAt'):
+    if (changed('startAt') or changed('endAt') or changed('startKm') or changed('endKm')) and row.get('startAt') and row.get('endAt'):
         a, b = domain.parse_dt(row['startAt']), domain.parse_dt(row['endAt'])
         if a and b and b < a:
             raise BadRequest('endAt: the end time cannot be before the start time')
+        dur = domain.duration(row.get('startAt'), row.get('endAt'))
+        if dur and dur > datetime.timedelta(hours=MAX_TRIP_HOURS):
+            raise BadRequest(f'endAt: a trip cannot be longer than {MAX_TRIP_HOURS} hours - check the times')
+        km = domain.km_of(row) if isinstance(row.get('startKm'), int) and isinstance(row.get('endKm'), int) else None
+        if dur and km and km > 0:
+            hrs = dur.total_seconds() / 3600
+            if hrs > 0 and km / hrs > MAX_SPEED_KMH:
+                raise BadRequest('endKm: these kilometres and times do not match - check the odometer and clock times')
     for f, top in TEXT_MAX.items():
         if changed(f) and len(str(row.get(f) or '')) > top:
             raise BadRequest(f'{f}: at most {top} characters')
@@ -135,7 +146,10 @@ def create_trip(store, journal, node_id, user, ip, user_id, data, guard=None):
         tid = new_id('tr')
         row.update({'no': no, 'status': 'draft', 'source': 'app', 'locked': False, 'gaApproved': ''})
         ops = [{'e': 'trips', 'id': tid, 'op': 'put', 'row': row}]
-        for p in (data.get('passengers') or [])[:12]:
+        passengers = data.get('passengers') or []
+        if len(passengers) > MAX_PASSENGERS:
+            raise BadRequest(f'At most {MAX_PASSENGERS} passengers per trip')
+        for p in passengers[:MAX_PASSENGERS]:
             if not isinstance(p, dict) or not (p.get('personId') or str(p.get('freeText') or '').strip()):
                 continue
             ops.append({'e': 'tripPassengers', 'id': new_id('tp'), 'op': 'put',
@@ -360,11 +374,23 @@ def insights(state, now=None, ot_threshold=12, drift_limit=10):
             exp = licences.get(t.get('driverId'), '')
             if exp and str(t.get('date') or '')[:10] > exp:
                 extra.append('Y_LICENCE_EXPIRED')
+            if dur:
+                hrs = domain.hours(dur)
+                kmv = domain.km_of(t)
+                if hrs > MAX_TRIP_HOURS:
+                    extra.append('R_IMPLAUSIBLE_DURATION')
+                if kmv and hrs > 0 and kmv / hrs > MAX_SPEED_KMH:
+                    extra.append('R_IMPLAUSIBLE_SPEED')
             reasons = reasons + [x for x in extra if x not in reasons]
-            if extra and colour in (domain.GREEN,):
+            if any(r.startswith('R_IMPLAUSIBLE') for r in extra):
+                colour = domain.RED
+            elif extra and colour in (domain.GREEN,):
                 colour = domain.YELLOW
+        ot_h = domain.hours(domain.overtime(dur, ot_threshold)) if dur else None
+        if any(str(r).startswith('R_IMPLAUSIBLE') for r in reasons):
+            ot_h = 0.0
         out[tid] = {'trust': colour, 'reasons': reasons, 'clashWith': {'vehicle': clash['vehicleId'].get(tid, []), 'driver': clash['driverId'].get(tid, [])}, 'km': domain.km_of(t), 'hours': domain.hours(dur) if dur else None,
-                    'otHours': domain.hours(domain.overtime(dur, ot_threshold)) if dur else None, 'chain': chains.get(tid)}
+                    'otHours': ot_h, 'chain': chains.get(tid)}
     return out
 
 

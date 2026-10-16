@@ -60,15 +60,20 @@
     var fields = tripFields(true);
     var last = TO.data.list('tripCategories')[0];
     var el = TO.dialog({ title: TO.t('trip.new'), wide: true,
-      body: '<form id="nt-form" data-guide="trips.form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) + '</form><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
-      footer: '<span class="faint grow">' + TO.esc(TO.t('trip.new.hint')) + '</span><button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save data-guide="trips.save">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button>' });
+      body: '<form id="nt-form" data-guide="trips.form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) +
+        '<div class="row" style="grid-column:1/-1;justify-content:flex-end;gap:.5rem;margin-top:.25rem"><span class="faint grow" style="align-self:center">' + TO.esc(TO.t('trip.new.hint')) + '</span>' +
+        '<button type="button" class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button type="submit" class="btn primary" data-save data-guide="trips.save">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button></div></form>' +
+        '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+      footer: '' });
     var form = el.querySelector('#nt-form'), err = el.querySelector('.err');
     // choosing a requester fills their department
     form.querySelector('[name="requesterId"]').addEventListener('change', function () {
       var r = U.read(form, fields).values, p = TO.data.get('people', r.requesterId), dep = form.querySelector('[name="departmentId"]');
       if (p && p.departmentId && !dep.value) dep.value = TO.data.name('departments', p.departmentId);
     });
+    var saving = false;
     function save() {
+      if (saving) return;
       var r = U.read(form, fields);
       if (r.missing.length) { err.hidden = false; err.textContent = TO.t('form.missing', { f: r.missing.join('، ') }); return; }
       var v = r.values, ops = [], made = {};
@@ -82,11 +87,12 @@
         return byKey[U.key(name)] ? { personId: byKey[U.key(name)] } : { freeText: name };
       });
       var body = Object.assign({}, v, made); delete body.passengersText; body.passengers = pax;
+      saving = true;
       var btn = el.querySelector('[data-save]'); btn.disabled = true;
       var pre = ops.length ? TO.data.commit(TO.t('trip.people.added'), ops) : Promise.resolve();
       pre.then(function () { return TO.post('/api/trips/new', body); }).then(function (res) {
-        return TO.data.load().then(function () { TO.overlay.close(); TO.toast(TO.t('trip.created', { no: res.no })); TO.rerender(); openTrip(res.id); });
-      }, function (e) { btn.disabled = false; err.hidden = false; err.textContent = U.errorText(e); });
+        return TO.data.load().then(function () { saving = false; TO.overlay.close(); TO.toast(TO.t('trip.created', { no: res.no })); TO.rerender(); openTrip(res.id); });
+      }, function (e) { saving = false; btn.disabled = false; err.hidden = false; err.textContent = U.errorText(e); });
     }
     form.addEventListener('submit', function (e) { e.preventDefault(); save(); });
     el.querySelector('[data-save]').addEventListener('click', save);
@@ -247,7 +253,11 @@
           else if (a.dataset.a === 'start') U.run(TO.post('/api/trips/start', { id: id }), 'trip.started').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'print') TO.printTrip(cur);
           else if (a.dataset.a === 'copylink') sendLink(cur, false, false, function (r) { linkDialog(r.url); });
-          else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
+          else if (a.dataset.a === 'wa') {
+            var mob = String((TO.data.get('drivers', cur.driverId) || {}).mobile || '').replace(/\D/g, '');
+            if (!mob) { TO.toast(TO.t('link.noMobile'), 'bad', 6000); return; }
+            sendLink(cur, false, true, function (r) { var d = String(r.mobile || mob).replace(/\D/g, ''); if (!d) { TO.toast(TO.t('link.noMobile'), 'bad', 6000); return; } window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
+          }
           else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
           else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'review') U.run(TO.post('/api/trips/review', { id: id }), 'trip.reviewed').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });

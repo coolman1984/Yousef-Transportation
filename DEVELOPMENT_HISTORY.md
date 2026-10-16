@@ -1,6 +1,42 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review round 4 — reset-code burn replication, insights refetch (2026-10-16)
+
+**What/why:** Address `review-grok-r4.md`: replicate burned reset codes with `clear-reset-code` userCommand on success and after three wrong guesses; decide expiry/hash inside the reset write lock; refetch full insights when state loads ahead of a slim insights reply; valid reset still clears login lock locally.
+**Checks:** Full CI Python list — 542 run, OK, skipped=3 (e2e included). Gateway 24/24. Commits local only, no push. `fix-table.md` in `/workspace/y115/` updated with Status column.
+**Next:** Owner PR review.
+
+## Grok review round 3 — local lockout, insights race, WhatsApp guard (2026-10-16)
+
+**What/why:** Address `review-grok-r3.md`: keep `failed`, `locked_until`, and reset-hash fields local (not replicated/materialized); re-verify reset hash inside the write transaction; ignore slim `{unchanged:true}` insights and drop stale parallel `D.load` replies; block WhatsApp send without driver mobile while keeping `[data-a=wa]` visible.
+**Checks:** Full CI Python list — 539 run, OK, skipped=3 (e2e included). Commits local only, no push.
+**Next:** Owner PR review.
+
+## YT-06 gateway envelope on unchanged state (2026-10-16)
+
+**What/why:** `test_e2e_link_ui` timed out on `[data-a="wa"]` after mailbox setup: YT-06 `?version=` short-circuit returned `unchanged` without refreshing `gateway` (from `gateway.json`, not store version), so the trip panel kept `link.notset`. Slim `/api/state` now includes `gateway` and `office`; `js/data.js` merges them and polling watches `version.gateway`.
+**Checks:** Full CI Python list — 536 run, OK, skipped=3 (e2e included). Gateway 24/24. Licence-hub 762/762. `test_YT06_state_unchanged_still_carries_gateway`.
+**Next:** Owner PR review; commit local only.
+
+## Grok review round 2 — auth guards, insights skip, YT tests (2026-10-16)
+
+**What/why:** Address `review-grok-r2.md`: replicate `failed`/`locked_until` on successful reset; sole-admin exemption on wrong reset codes; last-admin guard on approve/refuse/suspend; block suspended re-sign-up; `/api/insights?version=` short-circuit; duplicate `err.notFound` split (`err.pageNotFound`); refusal reason i18n; licence guide off Settings page; new-trip save in-flight guard.
+**Checks:** `cd tests && python3 -m unittest` (CI module list incl. `test_yt_115`) — 535 run, OK, skipped=40. Gateway 24/24. Licence-hub 762/762. Commits local only, no push.
+**Next:** Owner re-review Grok round 2.
+
+## Grok review round 1 — auth, licence poll, YT behavioural tests (2026-10-16)
+
+**What/why:** Address independent review `review-grok-r1.md`: login and reset enumeration fixes, reset-code lockout and normalization, pending cap and re-apply, suspend/approve flows, `status`/`active` sync, state version short-circuit without full store load, km-only amend plausibility, Arabic `errkeys` + guide problem map, licence hub trial on source builds with server/client polling, access UI profile on approve.
+**Checks:** `cd tests && python3 -m unittest` (CI module list incl. `test_yt_115`) — 428 run, OK, skipped=40. Gateway 24/24. Licence-hub 762/762. No hub migration.
+**Next:** Owner re-review; commits on branch, no push.
+
+## Yousef QA v1.1.4 fixes + auth (YT-01..18) — v1.1.5 (2026-10-16)
+
+**What/why:** Branch `feat/auth-and-qa-fixes-1.1.5`: atomic login lockout, self-service sign-up with admin approve/reject and reset codes, licence page and activation UI on source builds, board cap and state `?version=` short-circuit, trip plausibility and passenger cap, i18n and UX items from report `/workspace/yousef-qa/report-v1.1.4.md`.
+**Checks:** superseded by Grok round 1 entry above.
+**Next:** Owner PR review; no push.
+
 ## Preserve saved licence hub on upgrade — review P2/P3 (2026-10-16)
 
 **What/why:** `fix/1.1.4-qa-findings`, source `3049a8b`, L1/L3 upgrade regression: the default merged at config load hid a licence hub URL saved in `assist.db`. Resolve it last in Assist instead: environment → explicit config → saved database setting → default. Preserve disabled settings; fresh installs still use the default. Updated setup guide, release notes and test map. Lesson: defaults must not masquerade as explicit settings.

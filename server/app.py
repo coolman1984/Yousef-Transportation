@@ -739,7 +739,14 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
-            return self.send(200, {**project_state(STORE.state(self.u['scopes']), self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
+            if qs.get('version'):
+                v = STORE.version()
+                if qs.get('version') == str(v):
+                    # gateway.json and the office Excel/Word probe are outside the store version
+                    return self.send(200, {'version': v, 'unchanged': True, 'gateway': bool(SECRETS.configured),
+                                           'office': OFFICE_STATE})
+            st = STORE.state(self.u['scopes'])
+            return self.send(200, {**project_state(st, self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
         if p == '/api/guide/state':
             return self.send(200, ASSIST.guide_state(self.u, guide_facts()))
         if p == '/api/consent/prompt':
@@ -828,6 +835,10 @@ class Handler(BaseHTTPRequestHandler):
                                                       len(BACKUPS.extra or []), SECRETS.configured))
         if p == '/api/insights':
             self.need('trips.view')
+            if qs.get('version'):
+                v = STORE.version()
+                if qs.get('version') == str(v):
+                    return self.send(200, {'version': v, 'unchanged': True})
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
@@ -929,6 +940,27 @@ class Handler(BaseHTTPRequestHandler):
                 AUTH.logout(self.token, None, self.ip)  # whoever was logged in in this browser before
             say(f'Login with personal link: {u["display"]} ({self.ip})')
             return self.send(303, b'', 'text/plain', {'Location': '/', **self.set_session(token)})
+        if p == '/api/auth/register':
+            if too_many_failures(self.ip):
+                raise AuthError('Too many attempts. Wait a minute and try again.')
+            d = self.json_body()
+            try:
+                return self.send(200, AUTH.register(d.get('username'), d.get('full_name'), d.get('password'), self.ip,
+                                                    title=d.get('title'), notes=d.get('notes')))
+            except AuthError:
+                too_many_failures(self.ip, add=True)
+                time.sleep(0.4)
+                raise
+        if p == '/api/auth/reset':
+            if too_many_failures(self.ip):
+                raise AuthError('Too many attempts. Wait a minute and try again.')
+            d = self.json_body()
+            try:
+                return self.send(200, AUTH.reset_with_code(d.get('username'), d.get('code'), d.get('password'), self.ip))
+            except AuthError:
+                too_many_failures(self.ip, add=True)
+                time.sleep(0.4)
+                raise
         if p == '/api/auth/login':
             d = self.json_body()
             if too_many_failures(self.ip):
@@ -937,7 +969,8 @@ class Handler(BaseHTTPRequestHandler):
                 token, u = AUTH.login(d.get('username'), d.get('password'), self.ip, self.headers.get('User-Agent', ''))
             except AuthError:
                 too_many_failures(self.ip, add=True)
-                time.sleep(0.6)  # slows down password guessing
+                delay = 0.6 + AUTH.sole_admin_login_delay(d.get('username'))
+                time.sleep(delay)  # slows down password guessing; sole admin never hard-locks (YT-02)
                 raise
             self.u = u
             say(f'Login: {u["display"]} ({self.ip})')
@@ -1250,6 +1283,11 @@ class Handler(BaseHTTPRequestHandler):
             uid = str(d.get('id') or '')
             if action == 'reset':
                 AUTH.reset_password(self.u, self.ip, uid, d.get('password'))
+            elif action == 'reset-code':
+                return self.send(200, AUTH.issue_reset_code(self.u, self.ip, uid))
+            elif action == 'review':
+                return self.send(200, AUTH.review_signup(self.u, self.ip, uid, d.get('decision'), reason=d.get('reason'),
+                                                         role=d.get('role'), perms=d.get('perms'), scopes=d.get('scopes')))
             elif action == 'unlock':
                 AUTH.unlock(self.u, self.ip, uid)
             elif action == 'logout':
@@ -1434,6 +1472,7 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     allow_reuse_address = os.name != 'nt'  # Windows: reuse would let a second copy share the port silently; elsewhere it only skips TIME_WAIT
     daemon_threads = True
+    request_queue_size = 128  # YT-07: default backlog of 5 dropped bursts on busy offices
 
     def __init__(self, *a, **kw):
         super().__init__(*a, **kw)
@@ -1466,9 +1505,8 @@ def main(background=False):
     try:
         httpd = Server((CFG['host'], port), Handler)
     except OSError:
-        print(f'Port {port} is already in use - the system is probably already running. Opening it in the browser.')
-        if not background:  # a second start (e.g. the desktop icon while it runs in the background) just opens it
-            webbrowser.open(f'http://localhost:{port}/')
+        print(f'Port {port} is already in use. Another copy may already be running, or another program took this port.')
+        print('Close the other program or set a different port in config.json (port). Do not open the browser to the wrong version.')
         return
 
     try:

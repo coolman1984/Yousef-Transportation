@@ -3,6 +3,16 @@
 
 # Next (not released yet)
 
+# Trip Orders 1.1.5
+
+- **Sign-in:** self-service sign-up (pending until an administrator approves), administrator-issued one-time reset codes, and clearer messages for refused or suspended accounts.
+- **Security:** account lockout counts wrong passwords atomically; the sole administrator is not hard-locked (progressive delay instead). Local recovery: `reset_admin.bat` / `python server/auth.py reset-admin`.
+- **Licence:** dedicated **Licence** page in the side menu; source builds still show activation tools for QA.
+- **Performance:** Today board shows a capped number of cards per column; `/api/state` returns unchanged when the version matches (less reload traffic).
+- **Data quality:** implausible km/time combinations are refused; more than 12 passengers returns an error; Reports shows Arabic/English text for `NO_TIMES` / `NO_KM`.
+- **Other:** unknown `#/` routes show a clear not-found message; welcome slides mention Esc/Close; busy port no longer opens the browser to the wrong program.
+- **Privacy:** the first-run remote-help consent card is unchanged — it stays a small overlay and does not cover the main work area after you choose.
+
 # Trip Orders 1.1.4
 
 - **QA fixes:** the setup checklist, whole-journal stored-text activity search plus clearly marked translated-label matching over the newest 1,000 activities, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.

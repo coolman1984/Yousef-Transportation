@@ -162,7 +162,7 @@
  "problem.pc-needs-decision.do.2": "Choose whether it is the same PC or a new one.",
  "problem.licence-locked.see": "Data cannot be changed, but reading, printing and backups still work.",
  "problem.licence-locked.why": "The licence is missing, has expired, or belongs to another PC.",
- "problem.licence-locked.do.1": "Open Settings and then the Licence tab.",
+ "problem.licence-locked.do.1": "Open the [[nav.licence]] page from the side menu.",
  "problem.licence-locked.do.2": "Ask the company for a trial or a code, or paste the code you received.",
  "problem.licence-locked.still": "Send the device number shown on the page to the company.",
  "problem.trip-value-refused.see": "The program refuses a value you wrote in the trip.",

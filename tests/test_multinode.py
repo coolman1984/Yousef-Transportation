@@ -1090,8 +1090,10 @@ class T35_SecondReview(unittest.TestCase):
         t = time.time()
         with self.assertRaises(ApiError) as e:
             c.login('boss', 'wrong-password-1')
-        self.assertIn('Too many', str(e.exception.msg))
-        self.assertLess(time.time() - t, 0.5)  # refused without the slow password check
+        # Sole administrator: no hard lock (YT-02), but refusal is immediate without another slow password check.
+        self.assertLess(time.time() - t, 0.5)
+        boss = next(u for u in self.ac.get('/api/users')['users'] if u['username'] == 'boss')
+        self.assertFalse(boss['locked'])
         with self.assertRaises(ApiError) as e:  # a huge request before logging in is refused
             c.call('POST', '/api/auth/login', raw=b'{"username": "' + b'x' * 200000 + b'"}')
         self.assertEqual(e.exception.code, 400)

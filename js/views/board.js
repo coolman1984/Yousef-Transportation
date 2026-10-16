@@ -17,6 +17,7 @@
       '<div class="row">' + U.plate(vehiclePlate(t.vehicleId)) + '<span class="muted ellipsis">' + TO.esc(TO.data.name('drivers', t.driverId)) + '</span></div>' +
       '<div class="muted ellipsis">' + TO.esc(t.destination || '') + '</div></button>';
   }
+  var BOARD_LIMIT = 80;
   var COLS = [
     { k: 'todo', icon: 'clock', match: function (t) { return t.status === 'draft' || t.status === 'sent'; } },
     { k: 'road', icon: 'gauge', match: function (t) { return t.status === 'started'; } },
@@ -33,8 +34,10 @@
           (day !== U.today() ? '<button class="btn sm" data-day="0">' + TO.esc(TO.t('range.today')) + '</button>' : '') + '</div>') +
         '<div class="grid cols-4" style="align-items:start">' + COLS.map(function (c, n) {
           var rows = trips.filter(c.match);
+          var shown = rows.slice(0, BOARD_LIMIT);
+          var more = rows.length - shown.length;
           return '<section class="stack" style="gap:.7rem"><header class="row" style="padding-inline:.2rem">' + TO.icon(c.icon) + '<b>' + TO.esc(TO.t('board.' + c.k)) + '</b><span class="badge num">' + rows.length + '</span></header>' +
-            (rows.length ? rows.map(card).join('') : '<div class="preview-box muted" style="text-align:center;padding:1.4rem">' + TO.esc(TO.t('board.empty')) + '</div>') + '</section>'; }).join('') + '</div>';
+            (rows.length ? shown.map(card).join('') + (more > 0 ? '<p class="muted small" style="text-align:center">' + TO.esc(TO.t('board.more', { n: more })) + '</p>' : '') : '<div class="preview-box muted" style="text-align:center;padding:1.4rem">' + TO.esc(TO.t('board.empty')) + '</div>') + '</section>'; }).join('') + '</div>';
     },
     mount: function (root) {
       root.addEventListener('click', function (e) {

@@ -5,6 +5,12 @@
   var TO = window.TO;
   var D = TO.data = { state: null, insights: {}, version: null, loading: null };
   var index = {};
+  var loadSeq = 0;
+
+  function applyInsights(ins, want) {
+    if (!want || !ins || ins.unchanged) return;
+    D.insights = ins;
+  }
 
   function reindex() {
     index = {};
@@ -14,11 +20,39 @@
   }
   D.load = function () {
     if (D.loading) return D.loading;
+    var seq = ++loadSeq;
     var wantInsights = TO.can('trips.view');
-    D.loading = Promise.all([TO.get('/api/state'), wantInsights ? TO.get('/api/insights') : Promise.resolve({})]).then(function (r) {
-      D.state = r[0]; D.insights = r[1] || {}; D.version = r[0].version; reindex(); D.loading = null;
+    var stateUrl = D.version != null ? '/api/state?version=' + encodeURIComponent(D.version) : '/api/state';
+    var insightsUrl = wantInsights && D.version != null ? '/api/insights?version=' + encodeURIComponent(D.version) : '/api/insights';
+    function finishLoad(st, ins) {
+      if (seq !== loadSeq) { D.loading = null; return D; }
+      if (st.unchanged && D.state) {
+        var env = false;
+        if (st.gateway !== undefined && D.state.gateway !== st.gateway) { D.state.gateway = st.gateway; env = true; }
+        if (st.office !== undefined && JSON.stringify(D.state.office) !== JSON.stringify(st.office)) { D.state.office = st.office; env = true; }
+        if (!wantInsights || (ins && ins.unchanged)) { D.loading = null; if (env) TO.emit('data', D); return D; }
+        applyInsights(ins, wantInsights);
+        D.loading = null; TO.emit('data', D); return D;
+      }
+      D.state = st; reindex();
+      if (wantInsights && ins && ins.unchanged) {
+        return TO.get('/api/insights').then(function (ins2) {
+          if (seq !== loadSeq) { D.loading = null; return D; }
+          D.version = st.version;
+          applyInsights(ins2, wantInsights);
+          D.loading = null;
+          TO.emit('data', D);
+          return D;
+        }, function (e) { D.loading = null; throw e; });
+      }
+      D.version = st.version;
+      applyInsights(ins, wantInsights);
+      D.loading = null;
       TO.emit('data', D);
       return D;
+    }
+    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get(insightsUrl) : Promise.resolve(null)]).then(function (r) {
+      return finishLoad(r[0], r[1]);
     }, function (e) { D.loading = null; throw e; });
     return D.loading;
   };
@@ -56,7 +90,8 @@
     clearInterval(timer);
     timer = setInterval(function () {
       TO.get('/api/version').then(function (v) {
-        if (D.version !== null && v.version !== D.version) {
+        var gw = D.state && D.state.gateway, need = D.version !== null && (v.version !== D.version || v.gateway !== gw);
+        if (need) {
           D.load().then(function () { if (!TO.overlay.isOpen && !TO.panel.count()) TO.rerender(); else D.dirty = true; });
         }
       }, function () { /* offline or signed out: TO.api handles 401 */ });

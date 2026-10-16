@@ -23,10 +23,12 @@
   "excel",
   "activity",
   "settings",
+  "licence",
   "help"
  ],
  "unguided": [
-  "help"
+  "help",
+  "licence"
  ],
  "states": [
   "signed.in",
@@ -704,7 +706,15 @@
     "autherr.locked",
     "autherr.lockedNow",
     "autherr.disabled",
-    "autherr.tooMany"
+    "autherr.tooMany",
+    "autherr.signupPending",
+    "autherr.signupRejected",
+    "autherr.signupRejectedReason",
+    "autherr.signupSuspended",
+    "autherr.notApproved",
+    "autherr.pendingQueueFull",
+    "autherr.resetWrong",
+    "autherr.resetNotApproved"
    ]
   },
   {
@@ -870,7 +880,7 @@
   {
    "id": "licence-locked",
    "cat": "licence",
-   "page": "settings",
+   "page": "licence",
    "roles": [
     "administrator"
    ],
@@ -921,7 +931,10 @@
     "err.cancelledClose",
     "err.closeMissing",
     "err.negative",
-    "err.kmPositive"
+    "err.kmPositive",
+    "err.tripDuration",
+    "err.tripSpeed",
+    "err.passengersMax"
    ]
   },
   {

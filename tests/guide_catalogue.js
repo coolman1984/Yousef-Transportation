@@ -58,7 +58,7 @@ function texts(lang) {
     .forEach((k) => { out['other.' + k] = t(k); });
   return out;
 }
-const cat = { product: 'trip-orders', format: 1, languages: LANGS, defaultLang: 'ar', uiLanguages: LANGS, unguided: ['help'],
+const cat = { product: 'trip-orders', format: 1, languages: LANGS, defaultLang: 'ar', uiLanguages: LANGS, unguided: ['help', 'licence'],
   states, checklist: [], targets, guides, roles, problems };
 require('fs').writeFileSync(process.argv[2], JSON.stringify({ cat, texts: { ar: texts('ar'), en: texts('en') },
   ui: { ar: by.ar.dict.ar, en: by.en.dict.en } }));

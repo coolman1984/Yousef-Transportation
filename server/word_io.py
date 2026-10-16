@@ -62,6 +62,28 @@ class WordError(Exception):
         self.code = code
 
 
+def trip_form_extra(t, lang='ar'):
+    """Km, clock and end date for a filled trip order (blank when the trip has no close data)."""
+
+    def clock(iso):
+        d = domain.parse_dt(iso)
+        if not d:
+            return ''
+        h, mi = d.hour, d.minute
+        if lang == 'ar':
+            suf = 'صباحاً' if h < 12 else 'مساء'
+            return f'{h % 12 or 12}:{mi:02d} {suf}'
+        return f'{h:02d}:{mi:02d}'
+
+    def day(iso):
+        d = domain.parse_dt(iso)
+        return d.strftime('%d/%m/%Y') if d else ''
+
+    sk, ek = t.get('startKm'), t.get('endKm')
+    return {'startKm': '' if sk is None else str(sk), 'endKm': '' if ek is None else str(ek),
+            'startTime': clock(t.get('startAt')), 'endTime': clock(t.get('endAt')), 'endDate': day(t.get('endAt'))}
+
+
 # --------------------------------------------------------------------------- the form
 def form(ctx=None, lang='ar', brand=None, legal=''):
     """The trip order form as .docx bytes. ctx: {field: text} to prefill, plus 'no'. brand: {'name','title'}; legal: text under the form."""

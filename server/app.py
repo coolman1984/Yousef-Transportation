@@ -75,6 +75,7 @@ DEFAULT_CONFIG = {
     'lockout_minutes': 15,
     'min_password_length': 8,
     'device_name': '',
+    'licence_hub_url': 'https://trip-orders-licence-hub.mflma2040.workers.dev',
     'sync_port': 8453,
     'sync_interval_seconds': 5,
     'peer_addresses': {},
@@ -657,7 +658,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(409, {'error': str(e)})
         except BadRequest as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            key, vars = (e.code, {}) if str(getattr(e, 'code', '')).startswith('lic.') else errkeys.key_for(str(e))
+            code = str(getattr(e, 'code', ''))
+            key, vars = (code, {}) if code.startswith(('lic.', 'err.')) else errkeys.key_for(str(e))
             self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {}), **({'key': key, 'vars': vars} if key else {})})
         except (ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError):
             # a value the request carried in a form no handler expected (junk type, a number that is not a number ...): a calm 400,
@@ -751,7 +753,10 @@ class Handler(BaseHTTPRequestHandler):
             self.need('settings.edit')
             return self.send(200, ASSIST.receiver_public())
         if p == '/api/licence':
-            return self.send(200, {**LIC.status(), 'request': LIC.public()})
+            pub = LIC.public()
+            if pub.get('status') in ('sending', 'waiting', 'issued'):
+                pub = LIC.step()
+            return self.send(200, {**LIC.status(), 'request': pub})
         if p == '/api/licence/request':
             return self.send(200, LIC.public())
         if p == '/api/licence/preview':
@@ -792,7 +797,8 @@ class Handler(BaseHTTPRequestHandler):
                     n = reports._names(st)
                     ctx = {'no': t.get('no', ''), 'passenger': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'department': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
                            'driver': (n['drv'].get(t.get('driverId')) or {}).get('name', ''), 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''),
-                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'startDate': t.get('date', ''), 'route': t.get('destination', '')}
+                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'startDate': t.get('date', ''), 'route': t.get('destination', ''),
+                           **word_io.trip_form_extra(t, lang)}
                     name = f'Trip_order_{t.get("no") or "draft"}.docx'
                 data = word_io.form(ctx, lang, brand, cfg.get('legalText') or '')
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Word export', 'target': name}])

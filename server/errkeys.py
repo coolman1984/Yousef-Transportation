@@ -69,6 +69,7 @@ CATALOG = [
     (r'^status: not a known status', 'err.badStatus'),
     (r'^A cancelled trip cannot be opened again', 'err.cancelledFinal'),
     (r'^A closed trip can only be cancelled', 'err.closedFinal'),
+    (r'^This trip cannot be deleted', 'err.closedNoDelete'),
     (r'^General Affairs declined this trip', 'err.gaDeclined'),
     (r'^This (vehicle|driver|category|department|person) is used by (?P<n>\d+) trip', 'err.inUse'),
     (r'^\w+: write a number that is not below zero', 'err.negative'),

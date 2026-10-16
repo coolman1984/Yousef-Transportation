@@ -166,11 +166,14 @@ class Assist:
         return url if valid_hub_url(url) else ''
 
     def licence_hub_url(self):
-        url = (os.environ.get('FACTORY_LICENCE_HUB_URL') or self.cfg.get('licence_hub_url')
-               or self.kv('licence_hub_url') or '').strip().rstrip('/')
-        if valid_hub_url(url):
-            return url
-        return self.hub_url()
+        env = (os.environ.get('FACTORY_LICENCE_HUB_URL') or '').strip().rstrip('/')
+        if env:
+            return env if valid_hub_url(env) else ''
+        if 'licence_hub_url' in self.cfg:
+            url = (self.cfg.get('licence_hub_url') or '').strip().rstrip('/')
+            return url if valid_hub_url(url) else ''
+        url = (self.kv('licence_hub_url') or '').strip().rstrip('/')
+        return url if valid_hub_url(url) else ''
 
     def hub_token(self):
         return (os.environ.get('TO_HUB_TOKEN') or self.kv('hub_token') or '').strip()

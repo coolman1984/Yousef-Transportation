@@ -157,6 +157,23 @@ class YT115(unittest.TestCase):
         self.assertTrue(ins.get('unchanged'))
         self.assertEqual(ins['version'], v)
 
+    def test_YT115_insights_unchanged_does_not_replace_client_cache(self):
+        """Mirror js/data.js applyInsights: slim insights must not wipe trust colours (Grok r3 P2-2)."""
+
+        def apply_insights(cur, ins, want):
+            if not want or not ins or ins.get('unchanged'):
+                return cur
+            return ins
+
+        cached = {'trip1': {'trust': 'green', 'reasons': []}}
+        slim = {'version': 3, 'unchanged': True}
+        self.assertEqual(apply_insights(cached, slim, True), cached)
+        full = {'trip1': {'trust': 'amber', 'reasons': ['NO_KM']}}
+        self.assertEqual(apply_insights(cached, full, True), full)
+        src = open(os.path.join(ROOT, 'js', 'data.js'), encoding='utf-8').read()
+        self.assertIn('loadSeq', src)
+        self.assertIn('applyInsights', src)
+
     def test_YT06_state_unchanged_still_carries_gateway(self):
         """gateway.json is outside the store version; the slim response must refresh the flag."""
         S = Server('yt06gw').start()

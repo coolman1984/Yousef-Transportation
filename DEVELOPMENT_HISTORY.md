@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review round 2 — auth guards, insights skip, YT tests (2026-10-16)
+
+**What/why:** Address `review-grok-r2.md`: replicate `failed`/`locked_until` on successful reset; sole-admin exemption on wrong reset codes; last-admin guard on approve/refuse/suspend; block suspended re-sign-up; `/api/insights?version=` short-circuit; duplicate `err.notFound` split (`err.pageNotFound`); refusal reason i18n; licence guide off Settings page; new-trip save in-flight guard.
+**Checks:** `cd tests && python3 -m unittest` (CI module list incl. `test_yt_115`) — 535 run, OK, skipped=40. Gateway 24/24. Licence-hub 762/762. Commits local only, no push.
+**Next:** Owner re-review Grok round 2.
+
 ## Grok review round 1 — auth, licence poll, YT behavioural tests (2026-10-16)
 
 **What/why:** Address independent review `review-grok-r1.md`: login and reset enumeration fixes, reset-code lockout and normalization, pending cap and re-apply, suspend/approve flows, `status`/`active` sync, state version short-circuit without full store load, km-only amend plausibility, Arabic `errkeys` + guide problem map, licence hub trial on source builds with server/client polling, access UI profile on approve.

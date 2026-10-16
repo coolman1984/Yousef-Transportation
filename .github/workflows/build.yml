@@ -23,9 +23,6 @@ on:
 permissions:
   contents: read  # no automatic customer releases from ephemeral CI builds
 
-env:
-  FACTORY_LICENCE_HUB_URL: 'off'
-
 concurrency:
   # a newer push to the same PR cancels the older run; pushes to main and tags always finish
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

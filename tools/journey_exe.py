@@ -10,6 +10,8 @@ do not, activates a device-bound test code, adds the lists, creates a trip, take
 is not doubled, and that the program can still create a trip. Exit code 0 = good.
 The signing key is made here for this run only (needs the `cryptography` package); only its public half reaches the program.
 Also works on the source:  python tools/journey_exe.py first <home> python server/app.py
+
+Silent-install CI may read the public hub's /licence/time; an online trial request is sent only after a button press.
 """
 import base64
 import json

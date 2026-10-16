@@ -136,6 +136,9 @@ class ReviewFixes(unittest.TestCase):
             self.assertIn(needle, src)
         self.assertIn("act.label.driverLinkReplaced", src)
         self.assertIn("gaApproved: 'f.ga'", src)
+        self.assertIn("billableKm: 'f.billableKm'", src)
+        self.assertIn("act.label.driverEvents", src)
+        self.assertIn("act.label.driverPhoto", src)
         self.assertIn("act.label.releasedPhone", src)
         self.assertIn("label.slice(18)", src)
         self.assertNotIn("label.slice(19)", src)
@@ -146,9 +149,12 @@ class ReviewFixes(unittest.TestCase):
         ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
         for needle in ('ساعة الجهاز اترجعت لورا', 'إيه اللي بيتبعت؟', 'مفيش مشاوير ولا أشخاص ولا مبالغ',
                        "'act.label.driverLinkReplaced'", "'act.label.releasedPhone'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة',
-                       'النسخة دي مترخّصة', 'ابعت الرقم ده للشركة'):
+                       "'act.label.driverEvents'", "'act.label.driverPhoto'", 'النسخة دي مترخّصة', 'ابعت الرقم ده للشركة',
+                       'فترة التجربة خلصت — اضغط تفعيل', 'الترخيص اتفعّل',
+                       'المشوار ده ماينفعش يتمسح. الغيه واكتب السبب.'):
             self.assertIn(needle, ar)
-        for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة', 'هذه النسخة مرخّصة', 'أرسل هذا الرقم'):
+        for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة', 'هذه النسخة مرخّصة', 'أرسل هذا الرقم',
+                         'انتهت الفترة التجريبية', 'تم تفعيل الترخيص', 'لغيه بسبب مكتوب'):
             self.assertNotIn(leftover, ar)
 
 

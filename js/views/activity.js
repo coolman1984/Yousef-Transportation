@@ -5,7 +5,7 @@
   var q = '';
   var FIELD_KEYS = { destination: 'f.destination', status: 'f.status', startKm: 'f.startKm', endKm: 'f.endKm', startAt: 'f.startAt', endAt: 'f.endAt',
     date: 'f.date', driverId: 'f.driver', vehicleId: 'f.vehicle', requesterId: 'f.requester', departmentId: 'f.department', categoryId: 'f.category',
-    notes: 'f.notes', gaApproved: 'f.ga', purpose: 'f.purpose', seq: 'f.seq' };
+    notes: 'f.notes', gaApproved: 'f.ga', billableKm: 'f.billableKm', purpose: 'f.purpose', seq: 'f.seq' };
   function fieldLabel(name) {
     var k = FIELD_KEYS[name];
     return k && TO.has(k) ? TO.t(k) : name;
@@ -22,6 +22,8 @@
     m = label.match(/^GA declined trip (.+)$/); if (m) return TO.t('act.label.gaDeclinedTrip', { no: m[1] });
     m = label.match(/^Driver link for trip (.+?) replaced$/); if (m) return TO.t('act.label.driverLinkReplaced', { no: m[1] });
     m = label.match(/^Driver link for trip (.+)$/); if (m) return TO.t('act.label.driverLink', { no: m[1] });
+    m = label.match(/^Driver link ([^:]+): (.+)$/); if (m) return TO.t('act.label.driverEvents', { no: m[1], events: m[2] });
+    m = label.match(/^Driver photo (.+) for (.+)$/); if (m) return TO.t('act.label.driverPhoto', { kind: m[1], no: m[2] });
     m = label.match(/^Released the phone of trip (.+)$/); if (m) return TO.t('act.label.releasedPhone', { no: m[1] });
     if (label.indexOf('Restore backup of') === 0) return TO.t('act.label.restoreBackupOf') + label.slice(18);
     if (label.indexOf('Restore deleted:') === 0) return TO.t('act.label.restoreDeleted') + label.slice(16);

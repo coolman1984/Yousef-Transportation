@@ -489,6 +489,8 @@
     'act.label.reviewedTrip': 'Reviewed trip {no}',
     'act.label.driverLink': 'Driver link for trip {no}',
     'act.label.driverLinkReplaced': 'Driver link replaced for trip {no}',
+    'act.label.driverEvents': 'Driver link {no}: {events}',
+    'act.label.driverPhoto': 'Driver photo {kind} for {no}',
     'act.label.gaApprovedTrip': 'GA approved trip {no}',
     'act.label.gaDeclinedTrip': 'GA declined trip {no}',
     'act.label.releasedPhone': 'Released the phone of trip {no}',

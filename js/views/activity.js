@@ -18,19 +18,20 @@
     m = label.match(/^Started trip (.+)$/); if (m) return TO.t('act.label.startedTrip', { no: m[1] });
     m = label.match(/^Amend trip ([^:]+): (.+)$/); if (m) return TO.t('act.label.amendTrip', { no: m[1], field: fieldLabel(m[2].trim()) });
     m = label.match(/^Reviewed trip (.+)$/); if (m) return TO.t('act.label.reviewedTrip', { no: m[1] });
-    m = label.match(/^Driver link for trip (.+)$/); if (m) return TO.t('act.label.driverLink', { no: m[1] });
+    m = label.match(/^GA approved trip (.+)$/); if (m) return TO.t('act.label.gaApprovedTrip', { no: m[1] });
+    m = label.match(/^GA declined trip (.+)$/); if (m) return TO.t('act.label.gaDeclinedTrip', { no: m[1] });
+    m = label.match(/^Driver link for trip (.+?)( replaced)?$/); if (m) return TO.t('act.label.driverLink', { no: m[1] });
+    if (label.indexOf('Restore backup of') === 0) return TO.t('act.label.restoreBackupOf') + label.slice(19);
     if (label.indexOf('Restore deleted:') === 0) return TO.t('act.label.restoreDeleted') + label.slice(16);
-    if (label === 'Excel export') return TO.t('act.label.excelExport');
-    if (label === 'Word export') return TO.t('act.label.wordExport');
-    if (label === 'Full Excel export') return TO.t('act.label.fullExcelExport');
-    if (label === 'Backup created') return TO.t('act.label.backupCreated');
-    if (label.indexOf('Restored backup') === 0) return TO.t('act.label.restoredBackup');
-    if (label.indexOf('Excel import') >= 0) return TO.t('act.label.excelImport');
+    if (label.indexOf('Word import') === 0) return TO.t('act.label.wordImport') + label.slice(11);
+    if (label.indexOf('Excel import') === 0) return TO.t('act.label.excelImport') + label.slice(12);
     k = 'act.label.exact.' + label;
     return TO.has(k) ? TO.t(k) : label;
   }
   function auditEntity(entity) {
-    var k = 'err.entity.' + entity;
+    var k = 'act.entity.' + entity;
+    if (TO.has(k)) return TO.t(k);
+    k = 'err.entity.' + entity;
     return TO.has(k) ? TO.t(k) : (entity || '');
   }
   function auditOp(op) {

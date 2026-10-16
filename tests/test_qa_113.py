@@ -122,6 +122,18 @@ class B5_B9_B10_Strings(unittest.TestCase):
         self.assertEqual(errkeys.key_for('Type the full folder, for example E:\\TO-Backups.')[0], 'err.fullFolder')
 
 
+class ReviewFixes(unittest.TestCase):
+    def test_licence_view_formats_dates_with_ui_dt(self):
+        src = open(os.path.join(ROOT, 'js', 'views', 'licence.js'), encoding='utf-8').read()
+        self.assertIn('TO.ui.dt(iso)', src)
+        self.assertNotIn('TO.fmt.dt', src)
+
+    def test_activity_maps_real_audit_label_prefixes(self):
+        src = open(os.path.join(ROOT, 'js', 'views', 'activity.js'), encoding='utf-8').read()
+        for needle in ('GA approved trip', 'GA declined trip', 'Restore backup of', 'Word import', 'act.entity.'):
+            self.assertIn(needle, src)
+
+
 class N1_LicenceHubDefault(unittest.TestCase):
     def test_default_config_includes_licence_hub_url(self):
         tree = ast.parse(open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read())

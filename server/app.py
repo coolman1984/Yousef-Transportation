@@ -797,7 +797,7 @@ class Handler(BaseHTTPRequestHandler):
                     n = reports._names(st)
                     ctx = {'no': t.get('no', ''), 'passenger': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'department': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
                            'driver': (n['drv'].get(t.get('driverId')) or {}).get('name', ''), 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''),
-                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'startDate': t.get('date', ''), 'route': t.get('destination', ''),
+                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'route': t.get('destination', ''),
                            **word_io.trip_form_extra(t, lang)}
                     name = f'Trip_order_{t.get("no") or "draft"}.docx'
                 data = word_io.form(ctx, lang, brand, cfg.get('legalText') or '')

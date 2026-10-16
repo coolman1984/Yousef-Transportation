@@ -402,7 +402,7 @@ class ToolsTest(unittest.TestCase):
                                                      {'e': 'inventory', 'id': f'a{i}:tv', 'op': 'put', 'row': {'areaId': f'a{i}', 'item': 'tv', 'qty': i}}])
             sy.close()
             cfg = os.path.join(d, 'config.json')
-            json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, open(cfg, 'w'))
+            json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk'), 'licence_hub_url': ''}, open(cfg, 'w'))
             env = dict(os.environ, TO_CONFIG=cfg)
             tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
             fp1 = subprocess.run([sys.executable, tool, 'status'], env=env, capture_output=True, text=True).stdout.split('fingerprint:')[1].strip()
@@ -429,7 +429,7 @@ class ToolsTest(unittest.TestCase):
             sy.close()
             cfg = os.path.join(d, 'config.json')
             with open(cfg, 'w') as f:
-                json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, f)
+                json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk'), 'licence_hub_url': ''}, f)
             tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
             dbs = lambda: sorted(n for n in os.listdir(data) if n.endswith('.db') or '.broken-' in n)  # program.lock is created by the tool itself
             before = dbs()

@@ -80,8 +80,10 @@ def trip_form_extra(t, lang='ar'):
         return d.strftime('%d/%m/%Y') if d else ''
 
     sk, ek = t.get('startKm'), t.get('endKm')
+    start_day = day(t.get('startAt')) or day(t.get('date'))
     return {'startKm': '' if sk is None else str(sk), 'endKm': '' if ek is None else str(ek),
-            'startTime': clock(t.get('startAt')), 'endTime': clock(t.get('endAt')), 'endDate': day(t.get('endAt'))}
+            'startTime': clock(t.get('startAt')), 'endTime': clock(t.get('endAt')),
+            'startDate': start_day, 'endDate': day(t.get('endAt'))}
 
 
 # --------------------------------------------------------------------------- the form

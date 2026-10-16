@@ -120,6 +120,8 @@ class ApiTest(unittest.TestCase):
         self.assertEqual((closed_form.get('startKm'), closed_form.get('endKm')), ('100', '180'))
         self.assertIn('8:00', closed_form.get('startTime', ''))
         self.assertIn('11:30', closed_form.get('endTime', ''))
+        parts = day.split('-')
+        self.assertEqual(closed_form.get('startDate'), f'{parts[2]}/{parts[1]}/{parts[0]}')
         rep = ac.call('GET', '/api/word/report?ym=2026-09&lang=ar')
         text = ' '.join(c for tb in docx_read.read(rep)['tables'] for r in tb for c in r)
         self.assertIn('Ali Hassan', text)

@@ -56,7 +56,7 @@
       }
       function whenText(iso) {
         if (!iso) return '';
-        try { return TO.fmt.dt(iso); } catch (e) { return iso; }
+        try { return TO.ui.dt(iso); } catch (e) { return iso; }
       }
       function line(q) {
         var wait = q.status === 'sending' || q.status === 'waiting' || q.status === 'issued' || (q.status === 'failed' && transientError(q.error));
@@ -65,6 +65,11 @@
         else if (q.status === 'sending') text = TO.t('lic.req.sending');
         else if (q.status === 'waiting' && !q.error) {
           text = TO.t(q.stage === 'approved' ? 'lic.req.approved' : 'lic.req.sentWaiting');
+          if (q.created_at) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.sentAt', { when: whenText(q.created_at) })) + '</div>';
+          if (q.next_try) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.nextCheck', { when: whenText(q.next_try) })) + '</div>';
+        }
+        else if (q.status === 'issued' && !q.error) {
+          text = TO.t('lic.req.approved');
           if (q.created_at) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.sentAt', { when: whenText(q.created_at) })) + '</div>';
           if (q.next_try) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.nextCheck', { when: whenText(q.next_try) })) + '</div>';
         }

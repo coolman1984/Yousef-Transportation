@@ -12,6 +12,7 @@ CATALOG = [
     (r'^Wrong user name or password\.$', 'autherr.wrong'),
     (r'^Wrong user name or reset code\.$', 'autherr.resetWrong'),
     (r'^Your sign-up is waiting for the administrator', 'autherr.signupPending'),
+    (r'^Your sign-up was refused\. Reason: (?P<reason>.+)$', 'autherr.signupRejectedReason'),
     (r'^Your sign-up was refused', 'autherr.signupRejected'),
     (r'^Your account is suspended', 'autherr.signupSuspended'),
     (r'^This account is not approved yet', 'autherr.notApproved'),

@@ -155,7 +155,8 @@ T, J, B = 'text', 'json', 'bool'
 USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('pw_pub', T), ('perms', J), ('scopes', J), ('role', T),
                ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
                ('created_by', T), ('updated_at', T), ('updated_by', T), ('link_hash', T), ('link_nonce', T), ('link_at', T), ('link_by', T), ('login', T),
-               ('status', T), ('status_reason', T), ('status_at', T), ('status_by', T), ('request_code', T), ('reset_hash', T), ('reset_expires', T)]
+               ('status', T), ('status_reason', T), ('status_at', T), ('status_by', T), ('request_code', T), ('reset_hash', T), ('reset_expires', T),
+               ('failed', T), ('locked_until', T)]
 USER_STATUSES = ('pending', 'approved', 'rejected', 'suspended')
 RESET_CODE_HOURS = 24
 RESET_CODE_MAX_ATTEMPTS = 3
@@ -741,9 +742,7 @@ class Auth:
         if existing and not existing['deleted']:
             old = self._user(existing)
             st = old.get('status') or 'approved'
-            if st in ('approved', 'pending'):
-                raise AuthError('This user name is already taken.')
-            if st not in ('rejected', 'suspended'):
+            if st != 'rejected':
                 raise AuthError('This user name is already taken.')
             uid = old['id']
             row = {'full_name': full_name, 'title': (title or '')[:80], 'pw_hash': h, 'pw_pub': account_pub(password, uid),
@@ -756,7 +755,7 @@ class Auth:
                 if c.execute("SELECT COUNT(*) FROM users WHERE deleted=0 AND status='pending'").fetchone()[0] >= MAX_PENDING_SIGNUPS:
                     raise AuthError('Too many sign-up requests are waiting. Ask the administrator to clear the queue.')
                 cur = c.execute('SELECT status FROM users WHERE id=? AND deleted=0', (uid,)).fetchone()
-                if not cur or (cur['status'] or 'approved') not in ('rejected', 'suspended'):
+                if not cur or (cur['status'] or 'approved') != 'rejected':
                     raise AuthError('This sign-up request is no longer waiting.')
                 return [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'pending']}}]
             self._write('Self sign-up', ip, f'Sign-up request {username}', [], check=check)
@@ -807,13 +806,18 @@ class Auth:
                         raise AuthError(f'This account is locked for {mins} more minute(s) after too many wrong passwords. '
                                         'Wait, or ask the administrator to unlock it.')
                     failed = int(row['failed'] or 0) + 1
+                    sole = self._sole_admin_id(self.conn) == u['id'] and 'users.manage' in u['perms']
                     locked = None
-                    if failed >= self.max_failed:
+                    if not sole and failed >= self.max_failed:
                         locked = (datetime.now() + timedelta(minutes=self.lock_minutes)).isoformat(timespec='seconds')
                     clear_reset = failed >= RESET_CODE_MAX_ATTEMPTS or expired
-                    self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
-                                      (0 if locked else failed, locked,
-                                       '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
+                    if sole:
+                        self.conn.execute('UPDATE users SET failed=?, reset_hash=?, reset_expires=? WHERE id=?',
+                                          (failed, '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
+                    else:
+                        self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
+                                          (0 if locked else failed, locked,
+                                           '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
                     self.conn.execute('COMMIT')
                 except AuthError:
                     raise
@@ -828,7 +832,7 @@ class Auth:
         self._write('Password reset', ip, 'Reset password of ' + username, [
             {'e': 'users', 'id': uid, 'op': 'update',
              's': {'pw_hash': hash_password(new_password), 'pw_pub': account_pub(new_password, uid), 'must_change': False,
-                   'pw_changed_at': ts, 'reset_hash': '', 'reset_expires': '', 'failed': 0, 'locked_until': None,
+                   'pw_changed_at': ts, 'reset_hash': '', 'reset_expires': '', 'failed': '0', 'locked_until': '',
                    'updated_at': ts, 'updated_by': 'Reset code'},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}},
             {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}])
@@ -870,6 +874,7 @@ class Auth:
         reason = str(reason or '').strip()[:400]
         if decision == 'reject' and len(reason) < 3:
             raise AuthError('Write the reason for refusing the sign-up.')
+        use_perms = None
         if decision == 'approve':
             prof = next((p for p in self.profiles() if p['name'] == role), None)
             use_perms = sorted({p for p in (perms or (prof['perms'] if prof else ['overview.view'])) if p in ALL})
@@ -889,7 +894,16 @@ class Auth:
             ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'suspended'], 'active': [bool(u['active']), False]}},
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
             label = 'Suspend ' + u['username']
-        self._write(actor, ip, label, ops)
+
+        def check(c):
+            if decision == 'approve':
+                if self._loses_last_admin(c, uid, True, use_perms):
+                    raise AuthError('At least one active user must keep the right to manage users.')
+            elif decision in ('reject', 'suspend') and self._loses_last_admin(c, uid, False):
+                raise AuthError('At least one active user must keep the right to manage users.')
+            return None
+
+        self._write(actor, ip, label, ops, check=check)
         self.log(actor['display'], ip, 'signup-' + decision, u['display'], reason or decision)
         return self.public(self.get(uid))
 
@@ -1028,6 +1042,18 @@ class Auth:
             if r['id'] != exclude and 'users.manage' in json.loads(r['perms'] or '[]'):
                 n += 1
         return n
+
+    def _loses_last_admin(self, c, uid, new_active, new_perms=None):
+        row = c.execute('SELECT perms, active FROM users WHERE id=? AND deleted=0', (uid,)).fetchone()
+        if not row or not row['active']:
+            return False
+        old_perms = json.loads(row['perms'] or '[]')
+        if 'users.manage' not in old_perms:
+            return False
+        perms = new_perms if new_perms is not None else old_perms
+        if new_active and 'users.manage' in perms:
+            return False
+        return not self._admins(c, exclude=uid)
 
     def save_user(self, actor, ip, d):
         uid = d.get('id')

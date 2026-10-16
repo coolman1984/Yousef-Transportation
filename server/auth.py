@@ -807,13 +807,13 @@ class Auth:
                     verify_password(code or 'x', _DUMMY)
                     self.conn.execute('ROLLBACK')
                     raise AuthError(generic)
-                if row['locked_until'] and _parse(row['locked_until']) > datetime.now():
+                expired = _parse(row['reset_expires']) < datetime.now()
+                ok_code = not expired and verify_password(code, row['reset_hash'])
+                if row['locked_until'] and _parse(row['locked_until']) > datetime.now() and not ok_code:
                     self.conn.execute('ROLLBACK')
                     mins = max(1, round((_parse(row['locked_until']) - datetime.now()).total_seconds() / 60))
                     raise AuthError(f'This account is locked for {mins} more minute(s) after too many wrong passwords. '
                                     'Wait, or ask the administrator to unlock it.')
-                expired = _parse(row['reset_expires']) < datetime.now()
-                ok_code = not expired and verify_password(code, row['reset_hash'])
                 if ok_code:
                     self.conn.execute('ROLLBACK')
                 else:

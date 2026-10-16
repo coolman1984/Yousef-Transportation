@@ -24,9 +24,7 @@ function wrapStmt(stmt) {
   };
 }
 
-export function newD1() {
-  const db = new DatabaseSync(':memory:');
-  db.exec(readFileSync(schemaPath, 'utf8'));
+export function d1FromDb(db) {
   return {
     prepare(sql) {
       return wrapStmt(db.prepare(sql));
@@ -46,4 +44,10 @@ export function newD1() {
       }
     },
   };
+}
+
+export function newD1() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(readFileSync(schemaPath, 'utf8'));
+  return d1FromDb(db);
 }

@@ -1,10 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPrivateKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import worker from '../src/worker.js';
-import { newD1 } from './d1-mock.js';
+import { d1FromDb, newD1 } from './d1-mock.js';
 import { CSRF_COOKIE, signSession } from '../src/auth.js';
 import { deviceKey } from '../src/licence-api.js';
+import { TRIAL_GRANTS_BACKFILL_MARKER } from '../src/trial-grants.js';
+
+const hubRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function pemFromSeed(seed32) {
   const seed = Buffer.from(seed32);
@@ -50,6 +57,46 @@ function env(over = {}) {
     SESSION_SECRET: 'sess',
     ...over,
   };
+}
+
+function pre0004SchemaSqlWithoutMigrations() {
+  const full = readFileSync(join(hubRoot, 'schema.sql'), 'utf8');
+  const trialIdx = full.indexOf('CREATE TABLE IF NOT EXISTS trial_grants');
+  assert.ok(trialIdx > 0);
+  return full.slice(0, trialIdx).replace(
+    /CREATE TABLE IF NOT EXISTS schema_migrations[\s\S]*?;\s*\n/,
+    '',
+  );
+}
+
+function d1AfterWrangler0004And0005() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(pre0004SchemaSqlWithoutMigrations());
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get(),
+    undefined,
+  );
+  db.exec(readFileSync(join(hubRoot, 'migrations/0004_trial_grants.sql'), 'utf8'));
+  db.exec(readFileSync(join(hubRoot, 'migrations/0005_trial_grants_backfill_staging.sql'), 'utf8'));
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get());
+  return d1FromDb(db);
+}
+
+async function postTrialRequest(e, nonce) {
+  return worker.fetch(new Request('https://hub.test/licence/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' },
+    body: JSON.stringify({
+      product: 'trip-orders',
+      kind: 'trial',
+      device: '7KD2M-QX9TP',
+      machine: 'a'.repeat(64),
+      nonce,
+      shop: 'Shop',
+      ref: '',
+      version: '1.0',
+    }),
+  }), e);
 }
 
 test('owner dashboard is served at /owner/ with security headers', async () => {
@@ -242,6 +289,76 @@ test('owner offline API signs with the product sent in the body', async () => {
   assert.equal(row.product, 'al-store');
 });
 
+test('PR B r3: owner backfill route caps max_steps per invocation', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  const win = { last: '2026-06-14' };
+  for (let i = 0; i < 60; i++) {
+    const device = `CAP${String(i).padStart(2, '0')}-DEV${String(i).padStart(2, '0')}`;
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'delivered', 'trial', ?, 1, 1)`,
+    ).bind(`cap-${i}`, device, deviceKey(device), 'a'.repeat(64), `n-${i}`, win.last).run();
+  }
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', {
+    method: 'POST',
+    body: { max_steps: 500 },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.ok(data.steps <= 2);
+});
+
+test('PR B r3: owner approve maps already_used to 400', async () => {
+  const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 88)), LICENCE_PRODUCTS: 'trip-orders' });
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const machine = 'a'.repeat(64);
+  const reqId = 'req-already-used-owner';
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(reqId, 'h', 'trip-orders', 'trial', device, dkey, machine, 'n-au', 'Shop', '', '', 'pending', 1, 1).run();
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  const { machineLockKey, onlineDeviceLockKey } = await import('../src/licence-api.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [machine], { first_day: '2020-01-01', last_day: '2020-01-14' }, reqId,
+  ));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(onlineDeviceLockKey('trip-orders', dkey), reqId, 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(machineLockKey(machine), reqId, 1).run();
+  const res = await ownerFetch(e, '/owner/api/approve', {
+    method: 'POST',
+    body: { id: reqId, grant: 'trial' },
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: 'already_used', message: 'already_used' });
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(reqId).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'already_used');
+});
+
+test('PR B r5: owner approve of 2nd pending trial on a machine whose window ended -> 409 trial_expired, not 404', async () => {
+  const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 88)), LICENCE_PRODUCTS: 'trip-orders' });
+  const device = '7KD2M-QX9TP';
+  const machine = 'b'.repeat(64);
+  const reqId = 'req-second-on-machine';
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(reqId, 'h', 'trip-orders', 'trial', device, deviceKey(device), machine, 'n-2nd', 'Shop', '', '', 'pending', 1, 1).run();
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [machine], { first_day: '2020-01-01', last_day: '2020-01-14' }, 'req-first-on-machine',
+  ));
+  const res = await ownerFetch(e, '/owner/api/approve', { method: 'POST', body: { id: reqId, grant: 'trial' } });
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: 'trial_expired' });
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(reqId).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'trial_expired');
+});
+
 test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending', async () => {
   const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 97)) });
   const device = 'ABCD2EFGH3';
@@ -257,6 +374,36 @@ test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending'
   assert.deepEqual(await res.json(), { error: 'paid_key_missing' });
   const row = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('req-paid-miss').first();
   assert.equal(row.status, 'pending');
+});
+
+test('PR B r5: wrangler 0004+0005 on legacy db without schema_migrations enables trial and owner backfill', async () => {
+  const e = env({
+    LICENCE_PRODUCTS: 'trip-orders',
+    TRIAL_DAYS: '14',
+    LICENCE_CALENDAR_TZ: 'Africa/Cairo',
+    PENDING_TTL_SEC: '900',
+  });
+  e.DB = d1AfterWrangler0004And0005();
+  const { isTrialGrantsBackfillComplete } = await import('../src/trial-grants.js');
+  assert.equal(await isTrialGrantsBackfillComplete(e), false);
+
+  let complete = false;
+  for (let i = 0; i < 20 && !complete; i++) {
+    const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', { method: 'POST', body: {} });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    complete = data.complete;
+  }
+  assert.equal(complete, true);
+  assert.equal(await isTrialGrantsBackfillComplete(e), true);
+  const marker = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+    .bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(marker.id, TRIAL_GRANTS_BACKFILL_MARKER);
+
+  const ok = await postTrialRequest(e, 'wrangler-after-backfill');
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).status, 'pending');
 });
 
 test('calendar limiter bounds stored IPs and frees them at the next window', async (t) => {

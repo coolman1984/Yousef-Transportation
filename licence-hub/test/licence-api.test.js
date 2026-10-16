@@ -4,15 +4,16 @@ import { createHash, createPrivateKey } from 'node:crypto';
 import { newD1 } from './d1-mock.js';
 import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, derivePollToken, purgeStaleCodes,
-  deviceKey, deviceLockKey, onlineDeviceLockKey, migrateLegacyTrialLocks, trialUsedForDevice,
+  deviceKey, deviceLockKey, onlineDeviceLockKey, migrateLegacyTrialLocks, LEGACY_TRIAL_LOCKS_MIGRATION_MARKER,
+  trialUsedForDevice,
   trialUsedOnline, REASON_PAID_IN_STUDIO, REASON_PAID_KEY_MISSING, offlineDeviceLockKey,
   hubCalendarSigned, hubTimeSigningMaterial, ownerCapabilities, loadSigningKeys,
   offlineRequestId, storedGrantMatches, trialUsedForOfflineProduct, wouldDowngradeGrant,
   currentTerm, defaultProduct, ownerProductsPayload, blankLongDigitRuns, refFingerprint,
-  originalTrialWindow, isActiveStrongTerm,
+  originalTrialWindow, isActiveStrongTerm, setHubTestCalendarDay,
 } from '../src/licence-api.js';
 import { importSigningKey } from '../src/afcodes.js';
-import { calendarDateInTz } from '../src/calendar.js';
+import { calendarDateInTz, shiftCalendarDays } from '../src/calendar.js';
 
 const SECRET = 'test-session-secret-0123456789abcdef';
 const MACHINE_A = 'a'.repeat(64);
@@ -62,6 +63,76 @@ function body(over = {}) {
     version: '1.0',
     ...over,
   };
+}
+
+function countingEnv(innerDb, over = {}) {
+  let queries = 0;
+  let inBatch = false;
+  const inner = innerDb || newD1();
+  const DB = {
+    prepare(sql) {
+      const stmt = inner.prepare(sql);
+      return {
+        bind(...args) {
+          const bound = stmt.bind(...args);
+          return {
+            async run() {
+              if (!inBatch) queries += 1;
+              return bound.run();
+            },
+            async first() {
+              queries += 1;
+              return bound.first();
+            },
+            async all() {
+              queries += 1;
+              return bound.all();
+            },
+          };
+        },
+      };
+    },
+    async batch(stmts) {
+      queries += 1;
+      inBatch = true;
+      try {
+        return await inner.batch(stmts);
+      } finally {
+        inBatch = false;
+      }
+    },
+  };
+  return {
+    e: { DB, SESSION_SECRET: SECRET, LICENCE_PRODUCTS: 'trip-orders', TRIAL_DAYS: '14', LICENCE_CALENDAR_TZ: 'Africa/Cairo', PENDING_TTL_SEC: '900', ...over },
+    queryCount: () => queries,
+  };
+}
+
+function legacyDeviceCode(i) {
+  const hex = i.toString(16).padStart(8, '0').toUpperCase();
+  return `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+}
+
+async function seedLegacyUnprefixedLocks(e, count) {
+  const t = 1;
+  const dkeyAnchor = deviceKey('7KD2M-QX9TP');
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(`etw|trip-orders|d|${dkeyAnchor}`, '2026-01-01|2026-06-14', t).run();
+  if (count > 0) {
+    const sharedId = 'legacy-lock-shared-req';
+    const sharedDevice = legacyDeviceCode(99);
+    const sharedDkey = deviceKey(sharedDevice);
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, 'legacy-shared', '', '', '', 'delivered', 'trial', '2026-06-14', ?, ?)`,
+    ).bind(sharedId, sharedDevice, sharedDkey, MACHINE_B, t, t).run();
+    for (let i = 0; i < count; i++) {
+      const dkey = deviceKey(legacyDeviceCode(i + 100));
+      await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+        .bind(dkey, sharedId, t).run();
+    }
+  }
 }
 
 async function postRequest(e, payload) {
@@ -553,8 +624,8 @@ test('legacy migration backfills machine hash lock from delivered request', asyn
   const dkey = deviceKey(device);
   const t = 1;
   await e.DB.prepare(
-    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-  ).bind('legacy-req', 'h', 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n', '', '', '', 'issued', 'CODE', t, t).run();
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, code, licence_tier, licence_expiry, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind('legacy-req', 'h', 'trip-orders', 'trial', device, dkey, MACHINE_A, 'n', '', '', '', 'issued', 'CODE', 'trial', '2026-06-14', t, t).run();
   await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)').bind(dkey, 'legacy-req', t).run();
   e.DB = wrapAsyncD1(e.DB);
   await migrateLegacyTrialLocks(e);
@@ -586,7 +657,7 @@ test('losing concurrent approval releases partial device locks', async () => {
   const loserDevice = a?.code ? devB : devA;
   const winnerDevice = a?.code ? devA : devB;
   assert.equal(deviceLocks[0].machine, deviceLockKey(deviceKey(winnerDevice)));
-  const online = await postRequest(e, body({ device: loserDevice, machine: MACHINE_B, nonce: 'n-free' }));
+  const online = await postRequest(e, body({ device: 'LMNOP-QRSTV', machine: MACHINE_B, nonce: 'n-free' }));
   assert.equal(online.data.status, 'pending');
 });
 
@@ -681,13 +752,11 @@ test('owner force trial reissue refuses when trial window ended', async () => {
   const e = env();
   const keys = await signingKeys(63);
   const { data } = await postRequest(e, body({ nonce: 'force-expired-1' }));
-  await approveRequest(e, data.id, keys);
+  const issued = await approveRequest(e, data.id, keys);
   await e.DB.prepare(
-    "UPDATE customers SET first_day = '2020-01-01', last_day = '2020-01-14', licence_expiry = '2020-01-14'",
-  ).bind().run();
-  await e.DB.prepare(
-    "UPDATE licence_requests SET licence_expiry = '2020-01-14', status = 'delivered', code = NULL WHERE id = ?",
+    "UPDATE licence_requests SET status = 'delivered', code = NULL WHERE id = ?",
   ).bind(data.id).run();
+  setHubTestCalendarDay(e, shiftCalendarDays(issued.last_day, 1));
   await assert.rejects(() => approveRequest(e, data.id, keys, { force: true }), /trial_expired/);
 });
 
@@ -1523,4 +1592,273 @@ test('comb8: failed paid offline issue on delivered trial does not block trial r
   assert.notEqual(row.kind, 'monthly');
   const again = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial', reissue: true });
   assert.ok(again.code);
+});
+
+test('PR B: approve writes trial_grants in the same issue batch', async () => {
+  const e = env();
+  const keys = await signingKeys(110);
+  const { data } = await postRequest(e, body({ nonce: 'ledger-approve' }));
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(before.n, 0);
+  await approveRequest(e, data.id, keys);
+  const rows = await e.DB.prepare(
+    'SELECT subject_kind, subject FROM trial_grants WHERE product = ?',
+  ).bind('trip-orders').all();
+  const kinds = (rows.results || []).map((r) => r.subject_kind).sort();
+  assert.ok(kinds.includes('d'));
+  assert.ok(kinds.includes('m'));
+});
+
+test('PR B: offline issue writes device trial_grants row', async () => {
+  const e = env();
+  const keys = await signingKeys(111);
+  const device = 'ABCDE-FGHJK';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' });
+  const dkey = deviceKey(device);
+  const row = await e.DB.prepare(
+    'SELECT first_day, last_day FROM trial_grants WHERE product = ? AND subject_kind = ? AND subject = ?',
+  ).bind('trip-orders', 'd', dkey).first();
+  assert.ok(row?.first_day);
+  assert.ok(row?.last_day);
+});
+
+test('PR B: second device on shared machine reuses trial window on approve', async () => {
+  const e = env();
+  const keys = await signingKeys(112);
+  const first = await postRequest(e, body({ device: '7KD2M-QX9TP', machine: MACHINE_A, nonce: 'shared-m-1' }));
+  const win = await approveRequest(e, first.data.id, keys);
+  const second = await postRequest(e, body({ device: 'ABCDE-FGHJK', machine: MACHINE_A, nonce: 'shared-m-2' }));
+  assert.equal(second.data.status, 'refused');
+  assert.equal(second.data.reason, 'already_used');
+  const forced = await approveRequest(e, first.data.id, keys, { force: true });
+  assert.equal(forced.first_day, win.first_day);
+  assert.equal(forced.last_day, win.last_day);
+});
+
+test('PR B: trial allowed once after paid term expires', async () => {
+  const e = env();
+  const device = 'LMNOP-QRSTV';
+  const keys = await signingKeys(113, 114);
+  const paidUntil = '2027-06-01';
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: paidUntil });
+  setHubTestCalendarDay(e, '2028-01-01');
+  const trial = await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', {
+    grant: 'trial', reissue: true, confirm_downgrade: true,
+  });
+  assert.ok(trial.code);
+  const row = await e.DB.prepare(
+    'SELECT COUNT(*) AS n FROM trial_grants WHERE product = ? AND subject_kind = ?',
+  ).bind('trip-orders', 'd').first();
+  assert.ok(row.n >= 1);
+});
+
+test('PR B: active paid blocks trial approve via resolveTrial', async () => {
+  const e = env();
+  const keys = await signingKeys(115, 116);
+  const { data } = await postRequest(e, body({ nonce: 'paid-block-trial' }));
+  await approveRequest(e, data.id, keys, { grant: 'paid', paid_until: '2028-12-31' });
+  await assert.rejects(
+    () => approveRequest(e, data.id, keys, { grant: 'trial' }),
+    (err) => err.message === 'downgrade_forbidden',
+  );
+});
+
+test('PR B: window guard conflict rolls back trial_grants rows', async () => {
+  const e = env();
+  const keys = await signingKeys(117);
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  const winJune = { first_day: '2026-06-01', last_day: '2026-06-14' };
+  const winJuly = { first_day: '2026-07-01', last_day: '2026-07-14' };
+  await e.DB.batch(await trialGrantStatements(e, 'trip-orders', '7KD2M-QX9TP', [MACHINE_A], winJune, 'anchor'));
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  await assert.rejects(
+    async () => e.DB.batch(await trialGrantStatements(e, 'trip-orders', 'ABCDE-FGHJK', [MACHINE_A], winJuly, 'bad')),
+    /NOT NULL constraint failed/i,
+  );
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+});
+
+test('PR B: ensureTrialGrantsBackfill runs once per database', async () => {
+  const e = env();
+  const { runTrialGrantsBackfillToCompletion, TRIAL_GRANTS_BACKFILL_MARKER } = await import('../src/trial-grants.js');
+  await runTrialGrantsBackfillToCompletion(e);
+  await runTrialGrantsBackfillToCompletion(e);
+  const row = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?').bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(row.id, TRIAL_GRANTS_BACKFILL_MARKER);
+});
+
+test('PR B r2: LICENCE_TEST_CALENDAR_DAY does not override hub calendar in production', async () => {
+  const e = env();
+  e.LICENCE_SIGNING_KEY = pemFromSeed(Buffer.alloc(32, 77));
+  e.LICENCE_TEST_CALENDAR_DAY = '2099-06-15';
+  const natural = await hubCalendarSigned(e);
+  assert.notEqual(natural.calendar_day, '2099-06-15');
+  setHubTestCalendarDay(e, '2099-06-15');
+  const pinned = await hubCalendarSigned(e);
+  assert.equal(pinned.calendar_day, '2099-06-15');
+});
+
+test('PR B r2: device d lock owned by stranger rolls back trial_grants on approve', async () => {
+  const e = env();
+  const keys = await signingKeys(201);
+  const device = 'LMNOP-QRSTV';
+  const dkey = deviceKey(device);
+  const { data } = await postRequest(e, body({ device, nonce: 'stranger-d-lock' }));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(deviceLockKey(dkey), 'stranger', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(await approveRequest(e, data.id, keys), null);
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  const retry = await postRequest(e, body({ device, nonce: 'after-stranger-d' }));
+  assert.ok((await approveRequest(e, retry.data.id, keys))?.code);
+});
+
+test('PR B r2: offline od lock owned by other-req rolls back trial_grants', async () => {
+  const e = env();
+  const keys = await signingKeys(202);
+  const device = 'WXYZ2-ABCDE';
+  const dkey = deviceKey(device);
+  const lock = offlineDeviceLockKey('trip-orders', dkey);
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(lock, 'other-req', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  await assert.rejects(
+    () => issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }),
+    /already_used/,
+  );
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(lock).run();
+  assert.ok((await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }))?.code);
+});
+
+test('PR B r3: online trial during unfinished backfill returns 503 without storing refusal', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const bulkDevice = (i) => {
+    const hex = i.toString(16).padStart(8, '0').toUpperCase();
+    return `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+  };
+  for (let i = 0; i < 80; i++) {
+    const dev = bulkDevice(i);
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'delivered', 'trial', '2026-01-14', 1, 1)`,
+    ).bind(`bulk-bf-${i}`, dev, deviceKey(dev), MACHINE_A, `bulk-nonce-${i}`).run();
+  }
+  const nonce = 'backfill-retry-online';
+  const trialBody = { device, nonce, machine: MACHINE_B };
+  const first = await postRequest(e, body(trialBody));
+  assert.equal(first.res.status, 503);
+  assert.equal(first.data.error, 'backfill_in_progress');
+  assert.equal(first.data.retryable, true);
+  assert.equal(await e.DB.prepare('SELECT id FROM licence_requests WHERE nonce = ?').bind(nonce).first(), null);
+  const { runTrialGrantsBackfillToCompletion, isTrialGrantsBackfillComplete } = await import('../src/trial-grants.js');
+  while (!(await isTrialGrantsBackfillComplete(e))) {
+    await runTrialGrantsBackfillToCompletion(e, { maxSteps: 500 });
+  }
+  const second = await postRequest(e, body(trialBody));
+  assert.equal(second.data.status, 'pending');
+});
+
+test('PR B r3: approve already_used refuses row instead of throwing', async () => {
+  const e = env();
+  const keys = await signingKeys(210);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const { data } = await postRequest(e, body({ nonce: 'approve-already-used-r3' }));
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  const { machineLockKey, onlineDeviceLockKey } = await import('../src/licence-api.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [MACHINE_A], { first_day: '2020-01-01', last_day: '2020-01-14' }, data.id,
+  ));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(onlineDeviceLockKey('trip-orders', dkey), data.id, 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(machineLockKey(MACHINE_A), data.id, 1).run();
+  setHubTestCalendarDay(e, '2026-06-01');
+  const out = await approveRequest(e, data.id, keys);
+  assert.equal(out?.refused, true);
+  assert.equal(out?.reason, 'already_used');
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'already_used');
+});
+
+test('PR B r7: legacy lock migration stays within D1 query cap and runs once', async () => {
+  const { runTrialGrantsBackfillToCompletion } = await import('../src/trial-grants.js');
+  const keys = await signingKeys(220);
+  for (const legacyCount of [0, 5, 20]) {
+    const { e, queryCount } = countingEnv();
+    await seedLegacyUnprefixedLocks(e, legacyCount);
+    await runTrialGrantsBackfillToCompletion(e);
+    const pendingDevice = legacyDeviceCode(legacyCount + 500);
+    const pendingMachine = 'c'.repeat(64);
+    const reqStart = queryCount();
+    const { data } = await postRequest(e, body({
+      device: pendingDevice,
+      machine: pendingMachine,
+      nonce: `r7-req-${legacyCount}`,
+    }));
+    const reqUsed = queryCount() - reqStart;
+    assert.ok(reqUsed <= 50, `request legacy=${legacyCount} used ${reqUsed}`);
+    assert.equal(data.status, 'pending');
+    const badEtw = await e.DB.prepare('SELECT 1 FROM machine_trials WHERE machine LIKE ?')
+      .bind('d:etw|%').first();
+    assert.ok(!badEtw);
+    const migStart = queryCount();
+    await migrateLegacyTrialLocks(e);
+    assert.equal(queryCount() - migStart, 1);
+
+    const { e: eAp, queryCount: qcAp } = countingEnv();
+    await seedLegacyUnprefixedLocks(eAp, legacyCount);
+    await runTrialGrantsBackfillToCompletion(eAp);
+    const apprDevice = legacyDeviceCode(legacyCount + 700);
+    const apprMachine = 'd'.repeat(64);
+    const apprDkey = deviceKey(apprDevice);
+    const pendingId = `r7-pend-${legacyCount}`;
+    const t = 1;
+    await eAp.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'pending', ?, ?)`,
+    ).bind(pendingId, apprDevice, apprDkey, apprMachine, `r7-appr-n-${legacyCount}`, t, t).run();
+    const apprStart = qcAp();
+    const signed = await approveRequest(eAp, pendingId, keys);
+    const apprUsed = qcAp() - apprStart;
+    assert.ok(apprUsed <= 50, `approve legacy=${legacyCount} used ${apprUsed}`);
+    assert.ok(signed?.code);
+    const marker = await eAp.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+      .bind(LEGACY_TRIAL_LOCKS_MIGRATION_MARKER).first();
+    assert.equal(marker.id, LEGACY_TRIAL_LOCKS_MIGRATION_MARKER);
+    const mig2 = qcAp();
+    await migrateLegacyTrialLocks(eAp);
+    assert.equal(qcAp() - mig2, 1);
+  }
+});
+
+test('PR B r2: paid-expired trial approve rolls back trial_grants when device lock is lost', async () => {
+  const e = env();
+  const keys = await signingKeys(203, 204);
+  const paidUntil = '2027-06-01';
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'paid', paid_until: paidUntil });
+  setHubTestCalendarDay(e, '2028-01-01');
+  const { data } = await postRequest(e, body({ device, nonce: 'paid-expired-lock' }));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?) ON CONFLICT(machine) DO UPDATE SET request_id = excluded.request_id')
+    .bind(deviceLockKey(dkey), 'stranger-paid', 1).run();
+  const before = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(await approveRequest(e, data.id, keys, { grant: 'trial', confirm_downgrade: true }), null);
+  const after = await e.DB.prepare('SELECT COUNT(*) AS n FROM trial_grants').bind().first();
+  assert.equal(after.n, before.n);
+  await e.DB.prepare('DELETE FROM machine_trials WHERE machine = ?').bind(deviceLockKey(dkey)).run();
+  await e.DB.prepare(
+    "UPDATE licence_requests SET status = 'pending', reason = '', code = NULL WHERE id = ?",
+  ).bind(data.id).run();
+  assert.ok((await approveRequest(e, data.id, keys, { grant: 'trial', confirm_downgrade: true }))?.code);
 });

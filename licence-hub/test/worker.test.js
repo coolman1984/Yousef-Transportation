@@ -1,10 +1,17 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createPrivateKey } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { DatabaseSync } from 'node:sqlite';
 import worker from '../src/worker.js';
-import { newD1 } from './d1-mock.js';
+import { d1FromDb, newD1 } from './d1-mock.js';
 import { CSRF_COOKIE, signSession } from '../src/auth.js';
 import { deviceKey } from '../src/licence-api.js';
+import { TRIAL_GRANTS_BACKFILL_MARKER } from '../src/trial-grants.js';
+
+const hubRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
 function pemFromSeed(seed32) {
   const seed = Buffer.from(seed32);
@@ -50,6 +57,46 @@ function env(over = {}) {
     SESSION_SECRET: 'sess',
     ...over,
   };
+}
+
+function pre0004SchemaSqlWithoutMigrations() {
+  const full = readFileSync(join(hubRoot, 'schema.sql'), 'utf8');
+  const trialIdx = full.indexOf('CREATE TABLE IF NOT EXISTS trial_grants');
+  assert.ok(trialIdx > 0);
+  return full.slice(0, trialIdx).replace(
+    /CREATE TABLE IF NOT EXISTS schema_migrations[\s\S]*?;\s*\n/,
+    '',
+  );
+}
+
+function d1AfterWrangler0004And0005() {
+  const db = new DatabaseSync(':memory:');
+  db.exec(pre0004SchemaSqlWithoutMigrations());
+  assert.equal(
+    db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get(),
+    undefined,
+  );
+  db.exec(readFileSync(join(hubRoot, 'migrations/0004_trial_grants.sql'), 'utf8'));
+  db.exec(readFileSync(join(hubRoot, 'migrations/0005_trial_grants_backfill_staging.sql'), 'utf8'));
+  assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'").get());
+  return d1FromDb(db);
+}
+
+async function postTrialRequest(e, nonce) {
+  return worker.fetch(new Request('https://hub.test/licence/request', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'CF-Connecting-IP': '1.2.3.4' },
+    body: JSON.stringify({
+      product: 'trip-orders',
+      kind: 'trial',
+      device: '7KD2M-QX9TP',
+      machine: 'a'.repeat(64),
+      nonce,
+      shop: 'Shop',
+      ref: '',
+      version: '1.0',
+    }),
+  }), e);
 }
 
 test('owner dashboard is served at /owner/ with security headers', async () => {
@@ -307,6 +354,36 @@ test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending'
   assert.deepEqual(await res.json(), { error: 'paid_key_missing' });
   const row = await e.DB.prepare('SELECT status FROM licence_requests WHERE id = ?').bind('req-paid-miss').first();
   assert.equal(row.status, 'pending');
+});
+
+test('PR B r5: wrangler 0004+0005 on legacy db without schema_migrations enables trial and owner backfill', async () => {
+  const e = env({
+    LICENCE_PRODUCTS: 'trip-orders',
+    TRIAL_DAYS: '14',
+    LICENCE_CALENDAR_TZ: 'Africa/Cairo',
+    PENDING_TTL_SEC: '900',
+  });
+  e.DB = d1AfterWrangler0004And0005();
+  const { isTrialGrantsBackfillComplete } = await import('../src/trial-grants.js');
+  assert.equal(await isTrialGrantsBackfillComplete(e), false);
+
+  let complete = false;
+  for (let i = 0; i < 20 && !complete; i++) {
+    const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', { method: 'POST', body: {} });
+    assert.equal(res.status, 200);
+    const data = await res.json();
+    assert.equal(data.ok, true);
+    complete = data.complete;
+  }
+  assert.equal(complete, true);
+  assert.equal(await isTrialGrantsBackfillComplete(e), true);
+  const marker = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+    .bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(marker.id, TRIAL_GRANTS_BACKFILL_MARKER);
+
+  const ok = await postTrialRequest(e, 'wrangler-after-backfill');
+  assert.equal(ok.status, 200);
+  assert.equal((await ok.json()).status, 'pending');
 });
 
 test('calendar limiter bounds stored IPs and frees them at the next window', async (t) => {

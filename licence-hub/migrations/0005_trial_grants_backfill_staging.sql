@@ -1,5 +1,10 @@
 -- Resumable legacy trial_grants backfill (PR B r2). Safe to re-run.
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id         TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trial_grants_backfill_staging (
   product        TEXT NOT NULL,
   subject_kind   TEXT NOT NULL CHECK (subject_kind IN ('m', 'd')),

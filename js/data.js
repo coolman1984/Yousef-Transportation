@@ -24,9 +24,8 @@
     var wantInsights = TO.can('trips.view');
     var stateUrl = D.version != null ? '/api/state?version=' + encodeURIComponent(D.version) : '/api/state';
     var insightsUrl = wantInsights && D.version != null ? '/api/insights?version=' + encodeURIComponent(D.version) : '/api/insights';
-    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get(insightsUrl) : Promise.resolve(null)]).then(function (r) {
+    function finishLoad(st, ins) {
       if (seq !== loadSeq) { D.loading = null; return D; }
-      var st = r[0], ins = r[1];
       if (st.unchanged && D.state) {
         var env = false;
         if (st.gateway !== undefined && D.state.gateway !== st.gateway) { D.state.gateway = st.gateway; env = true; }
@@ -35,11 +34,25 @@
         applyInsights(ins, wantInsights);
         D.loading = null; TO.emit('data', D); return D;
       }
-      D.state = st; D.version = st.version; reindex();
+      D.state = st; reindex();
+      if (wantInsights && ins && ins.unchanged) {
+        return TO.get('/api/insights').then(function (ins2) {
+          if (seq !== loadSeq) { D.loading = null; return D; }
+          D.version = st.version;
+          applyInsights(ins2, wantInsights);
+          D.loading = null;
+          TO.emit('data', D);
+          return D;
+        });
+      }
+      D.version = st.version;
       applyInsights(ins, wantInsights);
       D.loading = null;
       TO.emit('data', D);
       return D;
+    }
+    D.loading = Promise.all([TO.get(stateUrl), wantInsights ? TO.get(insightsUrl) : Promise.resolve(null)]).then(function (r) {
+      return finishLoad(r[0], r[1]);
     }, function (e) { D.loading = null; throw e; });
     return D.loading;
   };

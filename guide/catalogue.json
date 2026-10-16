@@ -709,6 +709,7 @@
     "autherr.tooMany",
     "autherr.signupPending",
     "autherr.signupRejected",
+    "autherr.signupRejectedReason",
     "autherr.signupSuspended",
     "autherr.notApproved",
     "autherr.pendingQueueFull",
@@ -879,7 +880,7 @@
   {
    "id": "licence-locked",
    "cat": "licence",
-   "page": "settings",
+   "page": "licence",
    "roles": [
     "administrator"
    ],

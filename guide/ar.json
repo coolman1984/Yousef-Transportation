@@ -162,7 +162,7 @@
  "problem.pc-needs-decision.do.2": "اختر إن كان هو نفس الجهاز أو جهاز جديد.",
  "problem.licence-locked.see": "لا يمكن تغيير البيانات، لكن القراءة والطباعة والنسخ الاحتياطي تعمل.",
  "problem.licence-locked.why": "الترخيص غير موجود أو انتهى أو هو لجهاز آخر.",
- "problem.licence-locked.do.1": "افتح الإعدادات ثم صفحة الترخيص.",
+ "problem.licence-locked.do.1": "افتح صفحة [[nav.licence]] من القائمة الجانبية.",
  "problem.licence-locked.do.2": "اطلب تجربة أو كودًا من الشركة، أو الصق الكود الذي وصلك.",
  "problem.licence-locked.still": "أرسل رقم الجهاز المكتوب في الصفحة إلى الشركة.",
  "problem.trip-value-refused.see": "يرفض البرنامج قيمة كتبتها في المشوار.",

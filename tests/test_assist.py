@@ -123,6 +123,7 @@ class Base(unittest.TestCase):
         extra = {}
         if with_hub:
             extra['hub_url'] = cls.hub.url
+            extra['licence_hub_url'] = cls.hub.url
         if with_keys:
             pub = cls.hub.public()
             extra['licence_keys'] = [pub, f'paid:{pub}']

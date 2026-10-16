@@ -10,6 +10,8 @@ do not, activates a device-bound test code, adds the lists, creates a trip, take
 is not doubled, and that the program can still create a trip. Exit code 0 = good.
 The signing key is made here for this run only (needs the `cryptography` package); only its public half reaches the program.
 Also works on the source:  python tools/journey_exe.py first <home> python server/app.py
+
+Silent-install CI may read the public hub's /licence/time; an online trial request is sent only after a button press.
 """
 import base64
 import json
@@ -65,7 +67,7 @@ def free_port():
 def start(cmd, home, env):
     port = free_port()
     with open(os.path.join(home, 'config.json'), 'w', encoding='utf-8') as f:
-        json.dump({'port': port, 'sync_port': free_port(), 'open_browser': False, 'host': '127.0.0.1'}, f)
+        json.dump({'port': port, 'sync_port': free_port(), 'open_browser': False, 'host': '127.0.0.1', 'licence_hub_url': ''}, f)
     log = open(os.path.join(home, 'journey-output.txt'), 'a', encoding='utf-8', errors='replace')
     args = list(cmd) + (['--background'] if cmd[0].lower().endswith('.exe') else [])
     proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env={**os.environ, 'TO_HOME': home, **env})

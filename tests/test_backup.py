@@ -426,7 +426,7 @@ class RestoreToolTest(BackupBase):
         import subprocess
         cfg = os.path.join(cfg_dir, 'config.json')
         with open(cfg, 'w') as f:
-            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk'), 'open_browser': False}, f)
+            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk'), 'open_browser': False, 'licence_hub_url': ''}, f)
         env = dict(os.environ, TO_CONFIG=cfg, PYTHONUNBUFFERED='1')
         r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py'), *args],
                            env=env, capture_output=True, text=True, timeout=120)
@@ -529,7 +529,7 @@ class RestoreToolTest(BackupBase):
         import nodectl
         cfg = os.path.join(cfg_dir, 'config.json')
         with open(cfg, 'w') as f:
-            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk')}, f)
+            json.dump({'data_dir': os.path.join(cfg_dir, 'data'), 'backup_dir': os.path.join(cfg_dir, 'bk'), 'licence_hub_url': ''}, f)
         os.environ['TO_CONFIG'] = cfg
         real_copy, real_replace = shutil.copy2, os.replace
         calls = {'copy': 0, 'replace': 0}

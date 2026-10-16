@@ -12,7 +12,7 @@ import ed25519  # noqa: E402
 import tlscert  # noqa: E402
 from journal import canonical, chash  # noqa: E402
 from node import Node  # noqa: E402
-from store import Conflict  # noqa: E402
+from store import BadRequest, Conflict  # noqa: E402
 
 RFC8032 = [
     ('9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60', 'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a', '',
@@ -402,7 +402,7 @@ class ToolsTest(unittest.TestCase):
                                                      {'e': 'inventory', 'id': f'a{i}:tv', 'op': 'put', 'row': {'areaId': f'a{i}', 'item': 'tv', 'qty': i}}])
             sy.close()
             cfg = os.path.join(d, 'config.json')
-            json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, open(cfg, 'w'))
+            json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk'), 'licence_hub_url': ''}, open(cfg, 'w'))
             env = dict(os.environ, TO_CONFIG=cfg)
             tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
             fp1 = subprocess.run([sys.executable, tool, 'status'], env=env, capture_output=True, text=True).stdout.split('fingerprint:')[1].strip()
@@ -429,7 +429,7 @@ class ToolsTest(unittest.TestCase):
             sy.close()
             cfg = os.path.join(d, 'config.json')
             with open(cfg, 'w') as f:
-                json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk')}, f)
+                json.dump({'data_dir': data, 'backup_dir': os.path.join(d, 'bk'), 'licence_hub_url': ''}, f)
             tool = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'server', 'nodectl.py')
             dbs = lambda: sorted(n for n in os.listdir(data) if n.endswith('.db') or '.broken-' in n)  # program.lock is created by the tool itself
             before = dbs()
@@ -609,3 +609,162 @@ class SecondReviewTest(unittest.TestCase):
         finally:
             shutil.rmtree(root, ignore_errors=True)
         self.assertTrue(c.now() > 0)
+
+
+class AuditListColumnsTest(unittest.TestCase):
+    """Narrow activity-list columns. A missing list still returns the full row, including stored text."""
+
+    FIELDS = ('id', 'ts', 'user', 'node', 'label', 'entity', 'op', 'entity_id')
+    HIDDEN = ('changes', 'before', 'after', 'ip', 'user_id', 'lsn', 'origin', 'cseq', 'txn', 'scope_id', 'kind')
+    MARKER = 'hidden-column-marker'
+
+    def setUp(self):
+        import journal
+        self.journal = journal
+        self.root = tempfile.mkdtemp(prefix='to-audit-cols-')
+        self.peer = Peer(self.root, 'pc')
+        self.j = self.peer.journal
+        self.node = self.peer.node.id
+        self.j.conn.execute('INSERT INTO nodes (id, name, status) VALUES (?,?,?)', (self.node, 'Office PC', 'active'))
+
+    def tearDown(self):
+        self.peer.close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    def add(self, **kw):
+        row = {
+            'origin': 'o', 'cseq': 1, 'node': self.node, 'kind': 'data', 'ts': '2026-10-16T09:00:00',
+            'txn': 't', 'user': 'clerk', 'user_id': 'uid', 'ip': '203.0.113.9', 'label': 'Closed trip 26-A-00001',
+            'entity': 'trips', 'entity_id': 'trip1', 'scope_id': 'cat1', 'op': 'update',
+            'changes': '{}', 'before': None, 'after': None,
+        }
+        row.update(kw)
+        cols = list(row)
+        self.j.conn.execute(
+            'INSERT INTO audit (' + ','.join(cols) + ') VALUES (' + ','.join('?' * len(cols)) + ')',
+            [row[c] for c in cols])
+        return self.j.conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+
+    def assert_hidden(self, payload):
+        if self.MARKER in json.dumps(payload, ensure_ascii=False):
+            raise AssertionError('projected audit response included a hidden column')
+
+    def assert_kept(self, payload):
+        if self.MARKER not in json.dumps(payload, ensure_ascii=False):
+            raise AssertionError('full audit response did not keep the stored column')
+
+    def test_whitelist_is_exact_and_the_screen_requests_only_that_list(self):
+        self.assertEqual(self.journal.AUDIT_LIST_COLUMNS, self.FIELDS)
+        for name in self.HIDDEN:
+            self.assertNotIn(name, self.journal.AUDIT_LIST_COLUMNS)
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(root, 'js', 'views', 'activity.js'), encoding='utf-8') as fh:
+            src = fh.read()
+        self.assertIn("'" + ','.join(self.FIELDS) + "'", src)
+        self.assertIn('&fields=', src)
+        self.assertNotIn(','.join(self.FIELDS) + ',changes', src)
+
+    def test_unknown_duplicate_and_hidden_columns_are_refused(self):
+        self.add(changes='{"v":"%s"}' % self.MARKER)
+        before = self.j.query('audit')['total']
+        for raw in ('before', 'after', 'changes', 'ip', 'user_id', '*', 'id,before', 'id,id', 'id,', ',', '',
+                    'id;DROP TABLE audit', 'ID', 'node_name', 'id ts'):
+            with self.assertRaises(BadRequest):
+                self.j.query('audit', columns=raw)
+            self.assertEqual(self.j.query('audit')['total'], before)
+        with self.assertRaises(BadRequest):
+            self.j.query('activity', columns='id,ts,user,node,label,entity,op,entity_id')
+        with self.assertRaises(BadRequest):
+            self.j.query('security', columns=self.FIELDS)
+        self.assertIsNone(self.journal.log_list_columns({}))
+        self.assertIsNone(self.journal.log_list_columns({'limit': '200'}))
+        with self.assertRaises(BadRequest):
+            self.journal.log_list_columns({'fields': ''})
+        with self.assertRaises(BadRequest):
+            self.journal.log_list_columns({'fields': 'id', 'columns': 'label'})
+        with self.assertRaises(BadRequest):
+            self.journal.log_list_columns({'columns': 'before'})
+        self.assertEqual(self.journal.log_list_columns({'fields': 'id, label', 'columns': 'id, label'}), ('id', 'label'))
+        self.assertEqual(self.journal.log_list_columns({'columns': ','.join(self.FIELDS)}), self.FIELDS)
+        self.assert_kept(self.j.query('audit'))
+
+    def test_default_row_stays_full_and_projection_drops_stored_text(self):
+        self.add(changes='{"note":"%s"}' % self.MARKER, before='{"was":"old"}', after='{"now":"new"}')
+        full = self.j.query('audit')
+        row = full['rows'][0]
+        for key in ('changes', 'before', 'after', 'ip', 'user_id', 'label', 'node_name'):
+            self.assertIn(key, row)
+        self.assert_kept(row)
+        projected = self.j.query('audit', columns=self.FIELDS)
+        shown = projected['rows'][0]
+        self.assertEqual(set(shown), set(self.FIELDS))
+        self.assertNotIn('node_name', shown)
+        self.assertEqual(shown['node'], self.node)
+        self.assertTrue(any(n.get('id') == self.node and n.get('name') == 'Office PC' for n in projected['nodes']))
+        self.assertEqual(shown['label'], 'Closed trip 26-A-00001')
+        self.assert_hidden(projected)
+        self.assertEqual(projected['total'], full['total'])
+        self.assertEqual(set(projected), {'total', 'rows', 'users', 'nodes'})
+        narrow = self.j.query('audit', columns=('id', 'label'))
+        self.assertEqual(set(narrow['rows'][0]), {'id', 'label'})
+        self.assert_hidden(narrow)
+        self.j.conn.execute(
+            'INSERT INTO activity (node, ts, user, ip, type, action, target, page, detail) VALUES (?,?,?,?,?,?,?,?,?)',
+            (self.node, '2026-10-16T09:00:00', 'clerk', '203.0.113.9', 'view', 'Opened', 'trips', 'trips', self.MARKER))
+        activity = self.j.query('activity')
+        self.assertIn('detail', activity['rows'][0])
+        self.assert_kept(activity['rows'][0])
+        with self.assertRaises(BadRequest):
+            self.j.query('activity', columns='id')
+
+    def test_search_still_matches_stored_text_and_count_ignores_the_column_list(self):
+        label_id = self.add(label='label-token', entity='trips', entity_id='e-label', ts='2026-10-16T09:00:00', changes='{}')
+        entity_id = self.add(label='plain', entity='entity-token', entity_id='e-entity', ts='2026-10-16T09:00:01', changes='{}')
+        eid = self.add(label='plain', entity='trips', entity_id='entity-id-token', ts='2026-10-16T09:00:02', changes='{}')
+        changes_id = self.add(label='plain', entity='trips', entity_id='e-changes', ts='2026-10-16T09:00:03',
+                               changes='{"v":"%s"}' % self.MARKER)
+        before_id = self.add(label='plain', entity='trips', entity_id='e-before', ts='2026-10-16T09:00:04',
+                              before='{"v":"marker-before"}', changes='{}')
+        after_id = self.add(label='plain', entity='trips', entity_id='e-after', ts='2026-10-16T09:00:05',
+                             after='{"v":"marker-after"}', changes='{}')
+        for needle, rid in (('label-token', label_id), ('entity-token', entity_id), ('entity-id-token', eid),
+                            (self.MARKER, changes_id), ('marker-before', before_id), ('marker-after', after_id)):
+            full = self.j.query('audit', q=needle)
+            projected = self.j.query('audit', q=needle, columns=self.FIELDS)
+            self.assertEqual(full['total'], 1)
+            self.assertEqual(projected['total'], 1)
+            self.assertEqual(full['rows'][0]['id'], rid)
+            self.assertEqual(projected['rows'][0]['id'], rid)
+        hit = self.j.query('audit', q=self.MARKER, columns=self.FIELDS)
+        self.assert_hidden(hit)
+        self.assert_kept(self.j.query('audit', q=self.MARKER))
+        self.assert_hidden(self.j.query('audit', q='marker-before', columns=('id', 'label')))
+        self.assert_hidden(self.j.query('audit', q='marker-after', columns=('id', 'entity_id')))
+        limited = self.j.query('audit', limit=1, columns=self.FIELDS)
+        self.assertEqual(len(limited['rows']), 1)
+        self.assertEqual(limited['total'], 6)
+        self.assertEqual(self.j.query('audit', limit=1)['total'], 6)
+        same = self.j.query('audit', q='plain')
+        projected_same = self.j.query('audit', q='plain', columns=('id', 'ts'))
+        self.assertEqual([r['id'] for r in projected_same['rows']], [r['id'] for r in same['rows']])
+        self.assertGreater(same['rows'][0]['id'], same['rows'][-1]['id'])
+
+    def test_scope_and_business_filters_still_apply_when_columns_are_narrow(self):
+        self.add(entity='trips', entity_id='t-cat1', scope_id='cat1', label='in cat')
+        self.add(entity='trips', entity_id='t-cat2', scope_id='cat2', label='other cat', ts='2026-10-16T10:00:00')
+        self.add(entity='users', entity_id='u1', scope_id=None, label='Add user', ts='2026-10-16T11:00:00',
+                 changes='{"name":"%s"}' % self.MARKER)
+        admin = self.j.query('audit', columns=self.FIELDS)
+        business = self.j.query('audit', columns=self.FIELDS, business_only=True)
+        scoped = self.j.query('audit', columns=self.FIELDS, scopes=['cat1'])
+        self.assertEqual(admin['total'], 3)
+        self.assertEqual(business['total'], 2)
+        self.assertTrue(all(row['entity'] != 'users' for row in business['rows']))
+        self.assertEqual(scoped['total'], 1)
+        self.assertEqual(scoped['rows'][0]['entity_id'], 't-cat1')
+        self.assertNotIn('scope_id', scoped['rows'][0])
+        self.assert_hidden(business)
+        self.assert_hidden(admin)
+        self.assertEqual(self.j.query('audit', business_only=True)['total'], business['total'])
+        self.assertEqual(self.j.query('audit', scopes=['cat1'])['total'], scoped['total'])
+        self.assertTrue(any(row['entity'] == 'users' for row in admin['rows']))

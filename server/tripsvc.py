@@ -373,6 +373,14 @@ USED_BY_TRIPS = {'vehicles': ('vehicle_id', 'vehicle'), 'drivers': ('driver_id',
                  'departments': ('department_id', 'department'), 'people': ('requester_id', 'person')}
 
 
+def _refuse_delete_trip(store, rid):
+    t = _row(store, 'trips', rid)
+    if not t:
+        return
+    if t.get('locked') or t.get('reviewedBy') or (t.get('status') or 'draft') != 'draft':
+        raise BadRequest('This trip cannot be deleted. Cancel it with a written reason instead.', 'err.closedNoDelete')
+
+
 def _refuse_delete_in_use(store, entity, rid):
     if entity not in USED_BY_TRIPS:
         return
@@ -451,7 +459,10 @@ def normalize_ops(store, ops, trusted=False):
               'places': ('places', 'key', 'key', 'name')}
     for op in ops:
         if isinstance(op, dict) and op.get('op') == 'del' and not trusted and not op.get('resolve'):
-            _refuse_delete_in_use(store, op.get('e'), op.get('id'))
+            e = op.get('e')
+            _refuse_delete_in_use(store, e, op.get('id'))
+            if e == 'trips':
+                _refuse_delete_trip(store, op.get('id'))
         if not isinstance(op, dict) or op.get('op') != 'put' or not isinstance(op.get('row'), dict):
             continue
         e, row = op.get('e'), op['row']

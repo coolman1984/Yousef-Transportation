@@ -3,6 +3,12 @@
 
 # Next (not released yet)
 
+# Trip Orders 1.1.4
+
+- **QA fixes:** the setup checklist, whole-journal stored-text activity search plus clearly marked translated-label matching over the newest 1,000 activities, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.
+- **Activity search:** a search with no matches says so. If the log is longer than 1,000 rows, the note about that newest window stays visible even when nothing in it matches.
+- **Licence hub on upgrade:** an existing licence hub address or disabled setting is kept. Fresh installs use the default hub; environment and explicit config settings still take priority.
+
 # Trip Orders 1.1.3
 
 - **Paid licence expiry:** when a licence hub is configured, its calendar day is checked every six hours even if the PC date freezes. After the paid period and grace end, editing stops; reading, exports and backups remain available. Earlier server dates and network failures do not move the effective day backward.

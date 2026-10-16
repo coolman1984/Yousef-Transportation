@@ -5,23 +5,24 @@ Trip Orders can use **two different Cloudflare Workers** (different URLs). They 
 | Worker | Role | Typical URL config |
 |---|---|---|
 | **Telemetry relay** (`Apps-Factory/templates/telemetry-relay`) | Problem reports (`/ingest`), usage counts, crash fingerprints | `hub_url` / `FACTORY_HUB_URL` (Settings → Privacy & help) |
-| **Licence hub** (`licence-hub/` in this repository) | Online trial requests, licence calendar checks (`/licence/time`) and the owner approval UI | `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` (or the same `hub_url` only when telemetry is disabled) |
+| **Licence hub** (`licence-hub/` in this repository) | Online trial requests, licence calendar checks (`/licence/time`) and the owner approval UI | `licence_hub_url` / `FACTORY_LICENCE_HUB_URL`; default below |
 
-Nothing is set up by default. Telemetry requires office consent (Settings → Privacy & help), an address and a token. Configuring a licence hub enables its calendar checks; trial activation sends a request when the administrator presses **Activate**.
+The licence hub defaults to `https://trip-orders-licence-hub.mflma2040.workers.dev` only when no licence hub setting is saved or explicitly configured. Upgrades keep an existing setting. Telemetry has no default relay and requires office consent (Settings → Privacy & help), an address and a token. An enabled licence hub allows calendar checks; trial activation sends a request when the administrator presses **Activate**.
 
 ## What goes to the hub
 | What | When | Needs |
 |---|---|---|
 | Problem report (`/ingest`) | the person wrote it and pressed send after the preview | telemetry relay address and the install token |
 | Usage counts, error fingerprints, backup/sync results (`/ingest`) | only after the **office and the person** agreed | telemetry relay address and the install token |
-| Licence request (`/licence/request`, `/licence/status`, `/licence/ack`) | the administrator pressed "Activate" for an online trial | **licence hub** address (`licence_hub_url` / `FACTORY_LICENCE_HUB_URL`, or `hub_url` when telemetry is off) |
+| Licence request (`/licence/request`, `/licence/status`, `/licence/ack`) | the administrator pressed "Activate" for an online trial | **licence hub** address (explicit, saved, or default) |
 | Calendar check (`GET /licence/time`) | every six hours after a valid response; failed checks retry after five minutes, doubling up to six hours; includes paid or expired licences; disabled in practice mode | licence hub address only; no activation code, device identifier or token is sent |
 
 Never sent: passwords, phone numbers, trips, vehicles, drivers, amounts, screenshots. A licence request may include the **organisation name** you type on the Licence tab (`shop`, up to 60 characters; if left blank the program sends the site name from settings). That name is not part of the signed activation code. Other typed text is not sent. Telemetry uses only the factory taxonomy `server/aftelemetry_events.json` (byte-identical to the factory copy).
 
 ## Configure (nothing is committed to the repository)
 - **Telemetry relay address:** environment variable `FACTORY_HUB_URL` or `"hub_url"` in `config.json`, or Settings → Privacy & help → Help service. It must be `https://`.
-- **Licence hub address:** environment variable `FACTORY_LICENCE_HUB_URL` or `"licence_hub_url"` in `config.json`. When omitted, the program falls back to `hub_url` for online trial activation and licence calendar checks.
+- **Licence hub address, highest priority first:** nonblank `FACTORY_LICENCE_HUB_URL` environment variable → an explicit `"licence_hub_url"` key in `config.json` → the `licence_hub_url` setting saved in `data/assist.db` → `https://trip-orders-licence-hub.mflma2040.workers.dev` when none is set. The default is resolved at use time, not written into `config.json` or the database. `hub_url` is only for telemetry and is never a licence fallback.
+- **Override or disable:** set `FACTORY_LICENCE_HUB_URL` or `"licence_hub_url"` in `config.json` to another HTTPS address. To disable online activation and calendar checks, set `FACTORY_LICENCE_HUB_URL=off` (case-insensitive), or set `"licence_hub_url": ""` in `config.json` with no nonblank environment override. A saved database value of `""` or `off` also stays disabled when no higher-priority setting exists. A blank environment value means no override; removing the config key exposes the saved database setting or default. Restart the app after changing the environment or config file.
 - **Mutually exclusive on one URL:** if `hub_url` points at the licence hub, problem reports and usage counts will not reach a telemetry relay (that Worker has no `/ingest`). Either disable telemetry for that installation or configure **two** addresses as above.
 - **Install token** (given by the factory control centre for telemetry): typed once in Settings → Privacy & help → Help service, or `TO_HUB_TOKEN`. It is kept only in `data/assist.db` on this PC, never shown again, never logged, never written to the backups.
 - **Licence public keys (contract / source installs):** one or more `kid:key` lines in `licence_keys.txt` next to `config.json` (or `TO_LICENCE_KEYS`, or `"licence_keys"` in `config.json`). With no key the program is "licence by contract" and nothing is enforced.
@@ -75,7 +76,7 @@ Two paths use the **same** signed codes and rules; nothing new is invented.
 1. **Licence hub** (`licence-hub/`): deploy the Worker, set `LICENCE_SIGNING_KEY` (trial-only private key) and owner login secrets; trials are signed here.
 2. **Licence Studio** on the owner's trusted PC: monthly/permanent and manual codes for the device code the customer sends.
 3. Embed `trial-hub:<public>` and `studio:<public>` in commercial builds, or use `licence_keys.txt` on contract installs.
-4. Set `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` to the licence hub URL. Set `hub_url` / `FACTORY_HUB_URL` to the telemetry relay when help telemetry should stay enabled.
+4. Fresh installs use the default licence hub above; set `licence_hub_url` / `FACTORY_LICENCE_HUB_URL` only to override or disable it. Set `hub_url` / `FACTORY_HUB_URL` to the telemetry relay when help telemetry should stay enabled.
 
 Advanced options (monthly/permanent requests, field preview) stay under **Details** on the Licence tab.
 

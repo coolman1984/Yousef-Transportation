@@ -43,6 +43,7 @@ import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
+from journal import log_list_columns  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
@@ -96,6 +97,7 @@ TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf
 
 
 def load_config():
+    # Licence hub defaults are resolved by Assist after checking its saved database setting.
     cfg = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding='utf-8') as f:
@@ -657,7 +659,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send(409, {'error': str(e)})
         except BadRequest as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
-            key, vars = (e.code, {}) if str(getattr(e, 'code', '')).startswith('lic.') else errkeys.key_for(str(e))
+            code = str(getattr(e, 'code', ''))
+            key, vars = (code, {}) if code.startswith(('lic.', 'err.')) else errkeys.key_for(str(e))
             self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {}), **({'key': key, 'vars': vars} if key else {})})
         except (ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError):
             # a value the request carried in a form no handler expected (junk type, a number that is not a number ...): a calm 400,
@@ -751,7 +754,10 @@ class Handler(BaseHTTPRequestHandler):
             self.need('settings.edit')
             return self.send(200, ASSIST.receiver_public())
         if p == '/api/licence':
-            return self.send(200, {**LIC.status(), 'request': LIC.public()})
+            pub = LIC.public()
+            if pub.get('status') in ('sending', 'waiting', 'issued'):
+                pub = LIC.step()
+            return self.send(200, {**LIC.status(), 'request': pub})
         if p == '/api/licence/request':
             return self.send(200, LIC.public())
         if p == '/api/licence/preview':
@@ -792,7 +798,8 @@ class Handler(BaseHTTPRequestHandler):
                     n = reports._names(st)
                     ctx = {'no': t.get('no', ''), 'passenger': (n['ppl'].get(t.get('requesterId')) or {}).get('name', ''), 'department': (n['dep'].get(t.get('departmentId')) or {}).get('name', ''),
                            'driver': (n['drv'].get(t.get('driverId')) or {}).get('name', ''), 'plate': (n['veh'].get(t.get('vehicleId')) or {}).get('plate', ''),
-                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'startDate': t.get('date', ''), 'route': t.get('destination', '')}
+                           'carType': (n['cat'].get(t.get('categoryId')) or {}).get('name', ''), 'route': t.get('destination', ''),
+                           **word_io.trip_form_extra(t, lang)}
                     name = f'Trip_order_{t.get("no") or "draft"}.docx'
                 data = word_io.form(ctx, lang, brand, cfg.get('legalText') or '')
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Word export', 'target': name}])
@@ -851,10 +858,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == '/api/activity':
                 self.need_admin()  # what other people clicked is forensic data: administrators only
             node = qs.get('node', '') if is_admin(self.u) else ''
+            # keep_blank_values so `fields=` is a refused empty list, not a silent full row
+            listed = {k: v[0] for k, v in parse_qs(url.query, keep_blank_values=True).items() if k in ('fields', 'columns')}
             return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('scope', ''), qs.get('from', ''), qs.get('to', ''),
                                                   max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), self.u['scopes'], node,
-                                                  admin=is_admin(self.u)))
+                                                  admin=is_admin(self.u), columns=log_list_columns(listed)))
         if p == '/api/security':
             self.need('logs.security')
             self.need_admin()

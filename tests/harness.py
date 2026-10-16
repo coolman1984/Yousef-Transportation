@@ -96,7 +96,7 @@ class Server:
         self.cfg_path = os.path.join(self.root, 'config.json')
         cfg = {'port': self.port, 'host': '127.0.0.1', 'data_dir': self.data_dir, 'backup_dir': os.path.join(self.root, 'backups'),
                'open_browser': False, 'sync_port': self.sync_port, 'sync_interval_seconds': 1, 'device_name': name,
-               'backup_interval_hours': 1000}
+               'backup_interval_hours': 1000, 'licence_hub_url': ''}
         cfg.update(extra_cfg or {})
         with open(self.cfg_path, 'w') as f:
             json.dump(cfg, f)

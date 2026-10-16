@@ -914,6 +914,7 @@
     "err.badStatus",
     "err.cancelledFinal",
     "err.closedFinal",
+    "err.closedNoDelete",
     "err.gaDeclined",
     "err.notFinished",
     "err.cannotStart",

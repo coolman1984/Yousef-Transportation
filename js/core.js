@@ -96,6 +96,7 @@
   TO.api = function (method, url, body, opts) {
     opts = opts || {};
     var init = { method: method, credentials: 'same-origin', headers: {} };
+    if (opts.signal) init.signal = opts.signal;
     if (body !== undefined && body !== null) {
       if (opts.raw) { init.body = body; init.headers['Content-Type'] = 'application/octet-stream'; }
       else { init.body = JSON.stringify(body); init.headers['Content-Type'] = 'application/json'; }
@@ -112,7 +113,8 @@
         }
         return data;
       });
-    }, function () {
+    }, function (err) {
+      if (err && err.name === 'AbortError') throw err; // a newer search cancelled this one; the screen ignores it
       /* the program could not be reached (PC asleep, cable out): say it in the screen's language; the open form keeps what was typed */
       throw new ApiError(0, TO.has && TO.has('err.offline') ? TO.t('err.offline') : 'No connection to the program right now.', { key: 'err.offline', offline: true });
     });
@@ -129,7 +131,7 @@
     if (data.incident && data.key !== 'err.server') text += ' (' + data.incident + ')';
     return text;
   };
-  TO.get = function (url) { return TO.api('GET', url); };
+  TO.get = function (url, opts) { return TO.api('GET', url, null, opts); };
   TO.post = function (url, body) { return TO.api('POST', url, body === undefined ? {} : body); };
 
   /* ---------- toasts ---------- */

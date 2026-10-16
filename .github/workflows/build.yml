@@ -107,7 +107,7 @@ jobs:
         run: |
           $home_dir = Join-Path $env:RUNNER_TEMP 'to-home'
           New-Item -ItemType Directory -Force $home_dir | Out-Null
-          '{"port": 18080, "sync_port": 18443, "open_browser": false}' | Set-Content (Join-Path $home_dir 'config.json')
+          '{"port": 18080, "sync_port": 18443, "open_browser": false, "licence_hub_url": ""}' | Set-Content (Join-Path $home_dir 'config.json')
           $env:TO_HOME = $home_dir
           $p = Start-Process -FilePath build\to_main.dist\TripOrders.exe -ArgumentList '--background' -PassThru
           $ok = $false

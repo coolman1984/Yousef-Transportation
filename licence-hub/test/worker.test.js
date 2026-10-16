@@ -9,7 +9,7 @@ import worker from '../src/worker.js';
 import { d1FromDb, newD1 } from './d1-mock.js';
 import { CSRF_COOKIE, signSession } from '../src/auth.js';
 import { deviceKey } from '../src/licence-api.js';
-import { TRIAL_GRANTS_BACKFILL_MARKER } from '../src/trial-grants.js';
+import { BACKFILL_OWNER_MAX_STEPS_PER_CALL, TRIAL_GRANTS_BACKFILL_MARKER } from '../src/trial-grants.js';
 
 const hubRoot = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -308,6 +308,136 @@ test('PR B r3: owner backfill route caps max_steps per invocation', async () => 
   const data = await res.json();
   assert.equal(data.ok, true);
   assert.ok(data.steps <= 2);
+});
+
+function passThroughD1(inner, prepare) {
+  return {
+    prepare,
+    batch: (stmts) => inner.batch(stmts),
+  };
+}
+
+test('owner backfill returns 500 when 0005 tables are missing', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  await e.DB.prepare('DROP TABLE trial_grants_backfill_progress').bind().run();
+  await e.DB.prepare('DROP TABLE trial_grants_backfill_staging').bind().run();
+  await e.DB.prepare('DROP TABLE trial_issue_batch_sentinel').bind().run();
+  const stillThere = await e.DB.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'",
+  ).bind().first();
+  assert.equal(stillThere.name, 'schema_migrations');
+
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', { method: 'POST', body: {} });
+  assert.equal(res.status, 500);
+  const data = await res.json();
+  assert.deepEqual(Object.keys(data), ['ok', 'error', 'message', 'complete', 'steps']);
+  assert.equal(data.ok, false);
+  assert.equal(data.error, 'backfill_failed');
+  assert.match(data.message, /no such table: trial_grants_backfill_progress/);
+  assert.equal(data.complete, false);
+  assert.equal(data.steps, 0);
+  const marker = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+    .bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(marker, null);
+});
+
+test('owner backfill success shape stays ok, complete, and bounded steps', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', {
+    method: 'POST',
+    body: { max_steps: 500 },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.deepEqual(Object.keys(data), ['ok', 'complete', 'steps']);
+  assert.equal(data.ok, true);
+  assert.equal(data.complete, true);
+  assert.equal(data.steps, 1);
+  assert.ok(data.steps <= BACKFILL_OWNER_MAX_STEPS_PER_CALL);
+  const marker = await e.DB.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+    .bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(marker.id, TRIAL_GRANTS_BACKFILL_MARKER);
+});
+
+test('owner backfill reports steps finished before a later step fails', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  const win = { last: '2026-06-14' };
+  for (let i = 0; i < 24; i++) {
+    const device = `PAR${String(i).padStart(2, '0')}-DEV${String(i).padStart(2, '0')}`;
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'delivered', 'trial', ?, 1, 1)`,
+    ).bind(`partial-${i}`, device, deviceKey(device), 'b'.repeat(64), `np-${i}`, win.last).run();
+  }
+  const inner = e.DB;
+  let progressReads = 0;
+  e.DB = passThroughD1(inner, (sql) => {
+    const stmt = inner.prepare(sql);
+    if (String(sql) !== 'SELECT phase, after_rowid FROM trial_grants_backfill_progress WHERE id = 1') return stmt;
+    return {
+      bind(...args) {
+        const bound = stmt.bind(...args);
+        return {
+          async run() { return bound.run(); },
+          async all() { return bound.all(); },
+          async first() {
+            progressReads += 1;
+            if (progressReads >= 2) throw new Error('step_two_failed');
+            return bound.first();
+          },
+        };
+      },
+    };
+  });
+
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', {
+    method: 'POST',
+    body: { max_steps: 2 },
+  });
+  assert.equal(res.status, 500);
+  const data = await res.json();
+  assert.equal(data.ok, false);
+  assert.equal(data.error, 'backfill_failed');
+  assert.equal(data.message, 'step_two_failed');
+  assert.equal(data.complete, false);
+  assert.equal(data.steps, 1);
+  assert.ok(progressReads >= 2);
+  const staged = await inner.prepare('SELECT COUNT(*) AS n FROM trial_grants_backfill_staging').bind().first();
+  assert.ok(staged.n > 0);
+  const marker = await inner.prepare('SELECT id FROM schema_migrations WHERE id = ?')
+    .bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  assert.equal(marker, null);
+});
+
+test('owner backfill returns complete null when the completion probe fails', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  const inner = e.DB;
+  e.DB = passThroughD1(inner, (sql) => {
+    if (String(sql).includes('FROM schema_migrations')) {
+      return {
+        bind() {
+          return {
+            async first() { throw new Error('completion_probe_failed'); },
+            async run() { throw new Error('completion_probe_failed'); },
+            async all() { throw new Error('completion_probe_failed'); },
+          };
+        },
+      };
+    }
+    return inner.prepare(sql);
+  });
+
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', { method: 'POST', body: {} });
+  assert.equal(res.status, 500);
+  const data = await res.json();
+  assert.deepEqual(data, {
+    ok: false,
+    error: 'backfill_failed',
+    message: 'completion_probe_failed',
+    complete: null,
+    steps: 0,
+  });
 });
 
 test('PR B r3: owner approve maps already_used to 400', async () => {

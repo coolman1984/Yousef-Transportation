@@ -592,22 +592,33 @@ export async function trialGrantsBackfillStep(env, options = {}) {
   return { complete, queriesUsed: budget.used };
 }
 
-/** Run stepped backfill until the marker is set (owner maintenance; bounded steps per call). */
+/**
+ * Run stepped backfill until the marker is set (owner maintenance; bounded steps per call).
+ * A thrown error has `steps` set to how many steps returned before the failure.
+ * @returns {{ complete: boolean, steps: number }}
+ */
 export async function runTrialGrantsBackfillToCompletion(env, options = {}) {
   const requested = Number(options.maxSteps ?? BACKFILL_OWNER_MAX_STEPS_PER_CALL) || BACKFILL_OWNER_MAX_STEPS_PER_CALL;
   const maxSteps = Math.min(
     BACKFILL_OWNER_MAX_STEPS_PER_CALL,
     Math.max(1, requested),
   );
-  let complete = await isTrialGrantsBackfillComplete(env);
   let steps = 0;
-  while (!complete && steps < maxSteps) {
-    const out = await trialGrantsBackfillStep(env, options);
-    complete = out.complete;
-    steps += 1;
-    if (out.queriesUsed === 0 && !complete) break;
+  try {
+    let complete = await isTrialGrantsBackfillComplete(env);
+    while (!complete && steps < maxSteps) {
+      const out = await trialGrantsBackfillStep(env, options);
+      complete = out.complete;
+      steps += 1;
+      if (out.queriesUsed === 0 && !complete) break;
+    }
+    return { complete: await isTrialGrantsBackfillComplete(env), steps };
+  } catch (e) {
+    const message = typeof e?.message === 'string' && e.message ? e.message : 'backfill_failed';
+    const err = new Error(message);
+    err.steps = steps;
+    throw err;
   }
-  return { complete: await isTrialGrantsBackfillComplete(env), steps };
 }
 
 /** One bounded backfill step before trial resolution (marker when fully done). */

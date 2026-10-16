@@ -60,17 +60,40 @@ class YT115(unittest.TestCase):
         self.ac.post('/api/users/save', {'username': 'resetlock', 'full_name': 'Reset Lock', 'password': 'Office-pass12', 'must_change': False,
                                           'perms': ['overview.view'], 'scopes': None})
         uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'resetlock'][0]['id']
-        code = self.ac.post('/api/users/reset-code', {'id': uid})['code']
-        for _ in range(3):
+        for _ in range(6):
             try:
-                self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                self.S.client().login('resetlock', 'wrong-password')
             except ApiError:
                 pass
-        with self.assertRaises(ApiError):
-            self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': code, 'password': 'Fresh-pass42'})
-        code2 = self.ac.post('/api/users/reset-code', {'id': uid})['code']
-        self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': code2, 'password': 'Fresh-pass99'})
+        users = {u['username']: u for u in self.ac.get('/api/users')['users']}
+        self.assertTrue(users['resetlock']['locked'])
+        code = self.ac.post('/api/users/reset-code', {'id': uid})['code']
+        self.S.client().post('/api/auth/reset', {'username': 'resetlock', 'code': code, 'password': 'Fresh-pass99'})
         self.S.client().login('resetlock', 'Fresh-pass99')
+
+    def test_YT03_suspended_username_cannot_reregister(self):
+        self.ac.post('/api/users/save', {'username': 'wasactive', 'full_name': 'Was Active', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'wasactive'][0]['id']
+        self.ac.post('/api/users/review', {'id': uid, 'decision': 'suspend', 'reason': 'Policy test'})
+        with self.assertRaises(ApiError) as e:
+            self.S.client().post('/api/auth/register', {'username': 'wasactive', 'full_name': 'New Try', 'password': 'Office-pass88'})
+        self.assertIn('taken', str(e.exception.msg).lower())
+
+    def test_YT03_refused_signup_shows_reason(self):
+        self.S.client().post('/api/auth/register', {'username': 'refused1', 'full_name': 'Refused One', 'password': 'Office-pass88'})
+        pending = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'refused1'][0]
+        self.ac.post('/api/users/review', {'id': pending['id'], 'decision': 'reject', 'reason': 'Not on the staff list'})
+        with self.assertRaises(ApiError) as e:
+            self.S.client().login('refused1', 'Office-pass88')
+        self.assertEqual(e.exception.data.get('key'), 'autherr.signupRejectedReason')
+        self.assertEqual((e.exception.data.get('vars') or {}).get('reason'), 'Not on the staff list')
+
+    def test_YT03_cannot_suspend_sole_admin(self):
+        boss = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'boss'][0]
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/users/review', {'id': boss['id'], 'decision': 'suspend', 'reason': 'Test'})
+        self.assertEqual(e.exception.data.get('key'), 'autherr.lastAdmin')
 
     def test_YT03_suspend_approved_user(self):
         self.ac.post('/api/users/save', {'username': 'suspendme', 'full_name': 'Suspend Me', 'password': 'Office-pass12', 'must_change': False,
@@ -96,6 +119,9 @@ class YT115(unittest.TestCase):
         self.assertTrue(slim.get('unchanged'))
         self.assertNotIn('trips', slim)
         self.assertEqual(slim['version'], v)
+        ins = self.ac.get('/api/insights?version=' + str(v))
+        self.assertTrue(ins.get('unchanged'))
+        self.assertEqual(ins['version'], v)
 
     def test_YT07_server_request_queue_size(self):
         import importlib.util
@@ -134,13 +160,15 @@ class YT115(unittest.TestCase):
         with open(os.path.join(ROOT, 'js', 'shell.js'), encoding='utf-8') as f:
             shell = f.read()
         anchor = shell.index('!PAGES.some')
-        self.assertLess(shell.index('err.notFound', anchor), shell.index("TO.go('overview')", anchor))
+        self.assertLess(shell.index('err.pageNotFound', anchor), shell.index("TO.go('overview')", anchor))
 
     def test_YT13_new_trip_form_submits_on_enter(self):
         trips = open(os.path.join(ROOT, 'js', 'views', 'trips.js'), encoding='utf-8').read()
         self.assertIn("form.addEventListener('submit'", trips)
         self.assertIn('type="submit"', trips)
         self.assertIn('data-save', trips)
+        self.assertIn('var saving = false', trips)
+        self.assertIn('if (saving) return', trips)
 
     def test_YT14_passenger_cap_error(self):
         cat = 'cat1'
@@ -158,6 +186,14 @@ class YT115(unittest.TestCase):
         cat = json.load(open(os.path.join(ROOT, 'guide', 'catalogue.json'), encoding='utf-8'))
         self.assertIn('licence', cat.get('unguided', []))
         self.assertIn('licence', cat.get('pages', []))
+        lic_problem = next(p for p in cat['problems'] if p['id'] == 'licence-locked')
+        self.assertEqual(lic_problem['page'], 'licence')
+        for g in cat.get('guides', []):
+            for step in g.get('steps', []):
+                self.assertNotEqual(step.get('page'), 'licence')
+        for lang in ('en', 'ar'):
+            data = open(os.path.join(ROOT, 'js', 'i18n', lang + '.js'), encoding='utf-8').read()
+            self.assertEqual(len(re.findall(r"'err\.notFound':", data)), 1)
 
     def test_YT17_harness_closes_server(self):
         with warnings.catch_warnings(record=True) as caught:
@@ -257,6 +293,22 @@ class YT01Lockout(unittest.TestCase):
 
 
 class YT02SoleAdmin(unittest.TestCase):
+    def test_YT02_sole_admin_reset_guesses_not_hard_locked(self):
+        s = Server('yt02r').start()
+        ac = make_authority(s)
+        try:
+            boss = [u for u in ac.get('/api/users')['users'] if u['username'] == 'boss'][0]
+            ac.post('/api/users/reset-code', {'id': boss['id']})
+            for _ in range(8):
+                try:
+                    s.client().post('/api/auth/reset', {'username': 'boss', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                except ApiError:
+                    pass
+            users = {u['username']: u for u in ac.get('/api/users')['users']}
+            self.assertFalse(users['boss']['locked'])
+        finally:
+            s.cleanup()
+
     def test_YT02_sole_admin_not_hard_locked(self):
         s = Server('yt02').start()
         ac = make_authority(s)

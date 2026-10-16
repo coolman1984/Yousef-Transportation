@@ -1,4 +1,5 @@
-"""QA findings fixed for 1.1.3 (report of 15 Oct 2026, B1-B12)."""
+"""QA findings fixed for 1.1.3 (report of 15 Oct 2026, B1-B12) and 1.1.4 (16 Oct deep QA N1)."""
+import ast
 import json
 import os
 import subprocess
@@ -119,6 +120,31 @@ class B5_B9_B10_Strings(unittest.TestCase):
         import errkeys
         self.assertEqual(errkeys.key_for('This PC already has a working licence.')[0], 'lic.have_licence')
         self.assertEqual(errkeys.key_for('Type the full folder, for example E:\\TO-Backups.')[0], 'err.fullFolder')
+
+
+class N1_LicenceHubDefault(unittest.TestCase):
+    def test_default_config_includes_licence_hub_url(self):
+        tree = ast.parse(open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read())
+        default = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG')
+        url = default['licence_hub_url']
+        self.assertTrue(url.startswith('https://'))
+        self.assertIn('workers.dev', url)
+
+    def test_empty_licence_hub_url_disables_online_request(self):
+        s = Server('lic-off', extra_cfg={'licence_hub_url': ''}).start()
+        try:
+            ac = make_authority(s)
+            self.assertFalse(ac.get('/api/licence')['request']['available'])
+        finally:
+            s.cleanup()
+
+    def test_explicit_licence_hub_url_enables_request_without_using_telemetry_hub(self):
+        s = Server('lic-on', extra_cfg={'licence_hub_url': 'https://hub.test', 'hub_url': 'https://telemetry.test'}).start()
+        try:
+            ac = make_authority(s)
+            self.assertTrue(ac.get('/api/licence')['request']['available'])
+        finally:
+            s.cleanup()
 
 
 if __name__ == '__main__':

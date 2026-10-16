@@ -109,7 +109,17 @@ class ApiTest(unittest.TestCase):
         blank = ac.call('GET', '/api/word/form?lang=en')
         self.assertTrue(blank[:2] == b'PK')
         filled = ac.call('GET', f'/api/word/form?lang=ar&trip={t["id"]}')
-        self.assertEqual(W.parse_forms(filled)[0]['driver'], 'Ali Hassan')
+        rec = W.parse_forms(filled)[0]
+        self.assertEqual(rec['driver'], 'Ali Hassan')
+        self.assertEqual((rec.get('startKm'), rec.get('endKm')), ('45000', '45120'))
+        cat = next(c['id'] for c in ac.get('/api/state')['tripCategories'])
+        nt = ac.post('/api/trips/new', {'categoryId': cat, 'destination': 'Closed export test'})
+        day = next(t for t in ac.get('/api/state')['trips'] if t['id'] == nt['id'])['date']
+        ac.post('/api/trips/close', {'id': nt['id'], 'startKm': 100, 'endKm': 180, 'startAt': day + 'T08:00', 'endAt': day + 'T11:30'})
+        closed_form = W.parse_forms(ac.call('GET', f'/api/word/form?lang=ar&trip={nt["id"]}'))[0]
+        self.assertEqual((closed_form.get('startKm'), closed_form.get('endKm')), ('100', '180'))
+        self.assertIn('8:00', closed_form.get('startTime', ''))
+        self.assertIn('11:30', closed_form.get('endTime', ''))
         rep = ac.call('GET', '/api/word/report?ym=2026-09&lang=ar')
         text = ' '.join(c for tb in docx_read.read(rep)['tables'] for r in tb for c in r)
         self.assertIn('Ali Hassan', text)

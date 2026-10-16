@@ -83,7 +83,10 @@ class _Assist:
         return self.values.get('hub_url', '')
 
     def licence_hub_url(self):
-        return self.values.get('licence_hub_url') or self.hub_url()
+        if 'licence_hub_url' in self.values:
+            url = (self.values.get('licence_hub_url') or '').strip().rstrip('/')
+            return url if url else ''
+        return self.hub_url()
 
     def kv(self, key, value=None, delete=False):
         if delete:

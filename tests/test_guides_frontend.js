@@ -74,6 +74,16 @@ test('the course and the finished lessons belong to the person, not to the PC (r
   assert.ok(!G.lessons(G.myPath(), {}).find((x) => x.g.id === 'find').done);
 });
 
+test('overview checklist tags exist and step readiness follows guide facts', () => {
+  const TO = startup('ar');
+  assert.ok(TO.t('ov.todo.tag') && TO.t('ov.done.tag'));
+  assert.equal(typeof TO.overviewStepReady, 'function');
+  const facts = { categoriesAdded: true, vehiclesAdded: true, driversAdded: true, peopleAdded: false, placesAdded: true, myImport: false, mailboxReady: false };
+  assert.equal(TO.overviewStepReady(2, facts, {}, 0), true);
+  assert.equal(TO.overviewStepReady(4, facts, {}, 0), false);
+  assert.equal(TO.overviewStepReady(5, facts, {}, 3), true);
+});
+
 test('a failed facts fetch after a change of person never shows the previous person\'s facts (review)', async () => {
   const TO = startup('en'); TO.prefs.data = {};
   TO.me = { id: 'a', perms: [] };

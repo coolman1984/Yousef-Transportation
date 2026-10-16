@@ -279,6 +279,19 @@ class TripsApiTest(unittest.TestCase):
             self.ac.post('/api/commit', {'label': 'd', 'ops': [{'e': 'departments', 'id': 'depLegacy', 'op': 'del'}]})
         self.assertIn('trip(s)', str(e.exception))
 
+    def test_i_draft_trip_can_be_deleted_but_closed_cannot(self):
+        draft = self.trip()
+        ver = self.get_trip(draft['id'])['ver']
+        self.ac.post('/api/commit', {'label': 'del draft', 'ops': [{'e': 'trips', 'id': draft['id'], 'op': 'del', 'ver': ver}]})
+        self.assertFalse(any(x['id'] == draft['id'] for x in self.ac.get('/api/state')['trips']))
+        closed = self.trip()
+        self.ac.post('/api/trips/amend', {'id': closed['id'], 'field': 'status', 'value': 'closed', 'reason': 'Closed by office'})
+        ver = self.get_trip(closed['id'])['ver']
+        with self.assertRaises(ApiError) as e:
+            self.ac.post('/api/commit', {'label': 'del closed', 'ops': [{'e': 'trips', 'id': closed['id'], 'op': 'del', 'ver': ver}]})
+        self.assertEqual(e.exception.code, 400)
+        self.assertEqual((e.exception.data or {}).get('key'), 'err.closedNoDelete')
+
     def test_h_office_only_trip_turns_green_after_review(self):
         t = self.trip()
         for field, value in (('startKm', 500), ('endKm', 640), ('status', 'finished')):

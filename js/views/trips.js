@@ -71,7 +71,9 @@
       var r = U.read(form, fields).values, p = TO.data.get('people', r.requesterId), dep = form.querySelector('[name="departmentId"]');
       if (p && p.departmentId && !dep.value) dep.value = TO.data.name('departments', p.departmentId);
     });
+    var saving = false;
     function save() {
+      if (saving) return;
       var r = U.read(form, fields);
       if (r.missing.length) { err.hidden = false; err.textContent = TO.t('form.missing', { f: r.missing.join('، ') }); return; }
       var v = r.values, ops = [], made = {};
@@ -85,11 +87,12 @@
         return byKey[U.key(name)] ? { personId: byKey[U.key(name)] } : { freeText: name };
       });
       var body = Object.assign({}, v, made); delete body.passengersText; body.passengers = pax;
+      saving = true;
       var btn = el.querySelector('[data-save]'); btn.disabled = true;
       var pre = ops.length ? TO.data.commit(TO.t('trip.people.added'), ops) : Promise.resolve();
       pre.then(function () { return TO.post('/api/trips/new', body); }).then(function (res) {
-        return TO.data.load().then(function () { TO.overlay.close(); TO.toast(TO.t('trip.created', { no: res.no })); TO.rerender(); openTrip(res.id); });
-      }, function (e) { btn.disabled = false; err.hidden = false; err.textContent = U.errorText(e); });
+        return TO.data.load().then(function () { saving = false; TO.overlay.close(); TO.toast(TO.t('trip.created', { no: res.no })); TO.rerender(); openTrip(res.id); });
+      }, function (e) { saving = false; btn.disabled = false; err.hidden = false; err.textContent = U.errorText(e); });
     }
     form.addEventListener('submit', function (e) { e.preventDefault(); save(); });
     el.querySelector('[data-save]').addEventListener('click', save);

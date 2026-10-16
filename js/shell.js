@@ -125,8 +125,8 @@
       if (r.path && !PAGES.some(function (p) { return p.id === r.path; })) {
         var host = TO.$('#view'), old = host.cloneNode(false);
         host.replaceWith(old);
-        old.innerHTML = TO.pageHead ? TO.pageHead('err.notFound', 'err.notFound.d') : '<div class="card"><h2>' + TO.esc(TO.t('err.notFound')) + '</h2></div>';
-        document.title = TO.t('err.notFound') + ' · ' + TO.t('app.name');
+        old.innerHTML = TO.pageHead ? TO.pageHead('err.pageNotFound', 'err.pageNotFound.d') : '<div class="card"><h2>' + TO.esc(TO.t('err.pageNotFound')) + '</h2></div>';
+        document.title = TO.t('err.pageNotFound') + ' · ' + TO.t('app.name');
         return;
       }
       TO.go('overview'); return;

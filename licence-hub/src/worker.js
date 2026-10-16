@@ -187,9 +187,16 @@ async function ownerApi(request, env, url, session) {
     try {
       const out = await runTrialGrantsBackfillToCompletion(env, { maxSteps });
       return json({ ok: true, complete: out.complete, steps: out.steps });
-    } catch {
-      const complete = await isTrialGrantsBackfillComplete(env);
-      return json({ ok: true, complete, steps: 0 });
+    } catch (e) {
+      const steps = Number.isInteger(e?.steps) && e.steps >= 0 ? e.steps : 0;
+      let complete = null;
+      try {
+        complete = await isTrialGrantsBackfillComplete(env);
+      } catch {
+        complete = null;
+      }
+      const message = typeof e?.message === 'string' && e.message ? e.message : 'backfill_failed';
+      return json({ ok: false, error: 'backfill_failed', message, complete, steps }, 500);
     }
   }
   if (path === '/refuse') {

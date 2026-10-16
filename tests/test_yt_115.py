@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import socket
+import sys
 import tempfile
 import threading
 import time
@@ -14,22 +15,49 @@ import warnings
 from harness import ADMIN, ApiError, Server, make_authority, wait_until
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(ROOT, 'server'))
 
 
 def put(e, i, **row):
     return {'e': e, 'id': i, 'op': 'put', 'row': row}
 
 
-def _journal_has_user_command(data_dir, cmd):
+def _fold_fresh_auth(data_dir):
+    """Rebuild users from journal.db into a new auth.db (multi-PC fold)."""
+    import auth
+    from journal import Journal
+    from node import Node
+    from store import REPLICATED
+
+    auth_path = os.path.join(data_dir, 'auth.db')
+    if os.path.isfile(auth_path):
+        os.remove(auth_path)
+    node = Node(data_dir)
+    journal = Journal(data_dir, node, REPLICATED, log=lambda *_a, **_k: None)
+    a = auth.Auth(data_dir)
+    a.attach(journal, node)
+    a.fold_pending()
+    return a
+
+
+def _journal_clear_reset_bindings(data_dir):
     import sqlite3
     db = os.path.join(data_dir, 'journal.db')
-    if not os.path.isfile(db):
-        return False
+    bindings = []
     con = sqlite3.connect(db)
     try:
-        return any(cmd in (row[0] or '') for row in con.execute('SELECT body FROM changes'))
+        for (body,) in con.execute('SELECT body FROM changes'):
+            try:
+                env = json.loads(body or '')
+            except (TypeError, ValueError):
+                continue
+            for op in env.get('ops') or []:
+                s = op.get('s') or {}
+                if s.get('cmd') == 'clear-reset-code':
+                    bindings.append(s.get('reset_hash'))
     finally:
         con.close()
+    return bindings
 
 
 class YT115(unittest.TestCase):
@@ -109,6 +137,7 @@ class YT115(unittest.TestCase):
 
     def test_YT115_clear_reset_code_replicated_on_success(self):
         S = Server('yt115clr-ok').start()
+        data_dir = S.data_dir
         try:
             ac = make_authority(S)
             cl = S.client()
@@ -117,30 +146,52 @@ class YT115(unittest.TestCase):
             uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'clr_ok'][0]['id']
             code = ac.post('/api/users/reset-code', {'id': uid})['code']
             cl.post('/api/auth/reset', {'username': 'clr_ok', 'code': code, 'password': 'Fresh-pass42'})
-            self.assertTrue(_journal_has_user_command(S.data_dir, 'clear-reset-code'))
+            bindings = _journal_clear_reset_bindings(data_dir)
+            self.assertTrue(bindings)
+            self.assertTrue(all(bindings))
+        finally:
+            S.kill()
+        import auth as auth_mod
+        try:
+            a = _fold_fresh_auth(data_dir)
+            with self.assertRaises(auth_mod.AuthError):
+                a.reset_with_code('clr_ok', code, 'Another-pass99', '127.0.0.1')
+            a.conn.close()
         finally:
             S.cleanup()
 
     def test_YT115_clear_reset_code_replicated_after_three_wrong_guesses(self):
         S = Server('yt115clr-bad').start()
+        data_dir = S.data_dir
         try:
             ac = make_authority(S)
             cl = S.client()
             ac.post('/api/users/save', {'username': 'clr_bad', 'full_name': 'Clr Bad', 'password': 'Office-pass12', 'must_change': False,
                                          'perms': ['overview.view'], 'scopes': None})
             uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'clr_bad'][0]['id']
-            ac.post('/api/users/reset-code', {'id': uid})
+            burned_code = ac.post('/api/users/reset-code', {'id': uid})['code']
             for _ in range(3):
                 try:
                     cl.post('/api/auth/reset', {'username': 'clr_bad', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
                 except ApiError:
                     pass
-            self.assertTrue(_journal_has_user_command(S.data_dir, 'clear-reset-code'))
+            bindings = _journal_clear_reset_bindings(data_dir)
+            self.assertEqual(len(bindings), 1)
+            self.assertTrue(bindings[0])
+        finally:
+            S.kill()
+        import auth as auth_mod
+        try:
+            a = _fold_fresh_auth(data_dir)
+            with self.assertRaises(auth_mod.AuthError):
+                a.reset_with_code('clr_bad', burned_code, 'Fresh-pass42', '127.0.0.1')
+            a.conn.close()
         finally:
             S.cleanup()
 
     def test_YT115_reissued_reset_code_survives_wrong_guess(self):
         S = Server('yt115reissue').start()
+        data_dir = S.data_dir
         try:
             ac = make_authority(S)
             cl = S.client()
@@ -148,17 +199,21 @@ class YT115(unittest.TestCase):
                                          'perms': ['overview.view'], 'scopes': None})
             uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'reissue'][0]['id']
             ac.post('/api/users/reset-code', {'id': uid})
-            try:
-                cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
-            except ApiError:
-                pass
+            for _ in range(3):
+                try:
+                    cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                except ApiError:
+                    pass
             code2 = ac.post('/api/users/reset-code', {'id': uid})['code']
-            try:
-                cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
-            except ApiError:
-                pass
-            cl.post('/api/auth/reset', {'username': 'reissue', 'code': code2, 'password': 'Fresh-pass55'})
-            cl.login('reissue', 'Fresh-pass55')
+        finally:
+            S.kill()
+        import auth as auth_mod
+        try:
+            a = _fold_fresh_auth(data_dir)
+            a.reset_with_code('reissue', code2, 'Fresh-pass55', '127.0.0.1')
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('reissue',)).fetchone()
+            self.assertFalse(row['reset_hash'])
+            a.conn.close()
         finally:
             S.cleanup()
 

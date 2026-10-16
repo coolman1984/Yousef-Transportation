@@ -1158,7 +1158,7 @@ export async function approveRequest(env, requestId, keys, options = {}) {
           throw downgradeForbiddenError(knownTerm);
         }
         await refuseRequest(env, requestId, reason);
-        return null;
+        return { refused: true, reason };
       }
     }
   }

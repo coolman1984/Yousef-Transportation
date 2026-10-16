@@ -151,6 +151,7 @@ async function ownerApi(request, env, url, session) {
         if (signed.reason === 'paid_signing_key_missing') {
           return json({ error: 'paid_key_missing' }, 503);
         }
+        if (signed.reason === 'trial_expired') return json({ error: 'trial_expired' }, 409);
         const msg = signed.reason === REASON_PAID_IN_STUDIO ? 'paid_in_studio' : signed.reason;
         return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: msg }, 400);
       }

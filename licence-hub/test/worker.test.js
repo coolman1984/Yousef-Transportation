@@ -339,6 +339,26 @@ test('PR B r3: owner approve maps already_used to 400', async () => {
   assert.equal(row.reason, 'already_used');
 });
 
+test('PR B r5: owner approve of 2nd pending trial on a machine whose window ended -> 409 trial_expired, not 404', async () => {
+  const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 88)), LICENCE_PRODUCTS: 'trip-orders' });
+  const device = '7KD2M-QX9TP';
+  const machine = 'b'.repeat(64);
+  const reqId = 'req-second-on-machine';
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(reqId, 'h', 'trip-orders', 'trial', device, deviceKey(device), machine, 'n-2nd', 'Shop', '', '', 'pending', 1, 1).run();
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [machine], { first_day: '2020-01-01', last_day: '2020-01-14' }, 'req-first-on-machine',
+  ));
+  const res = await ownerFetch(e, '/owner/api/approve', { method: 'POST', body: { id: reqId, grant: 'trial' } });
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: 'trial_expired' });
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(reqId).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'trial_expired');
+});
+
 test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending', async () => {
   const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 97)) });
   const device = 'ABCD2EFGH3';

@@ -1,6 +1,11 @@
 -- Authoritative insert-only ledger of trial windows per device (d) or machine (m).
 -- Back up D1 before applying. Safe to re-run (CREATE IF NOT EXISTS).
 
+CREATE TABLE IF NOT EXISTS schema_migrations (
+  id         TEXT PRIMARY KEY,
+  applied_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS trial_grants (
   product        TEXT NOT NULL,
   subject_kind   TEXT NOT NULL CHECK (subject_kind IN ('m', 'd')),

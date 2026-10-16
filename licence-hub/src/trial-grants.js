@@ -359,6 +359,290 @@ export async function backfillTrialGrants(env, productFilter, options = {}) {
   return stmts.length;
 }
 
+/** Recorded in schema_migrations after one-time legacy ledger backfill (PR B). */
+export const TRIAL_GRANTS_BACKFILL_MARKER = 'trial_grants_backfill_v1';
+
+export const BACKFILL_IN_PROGRESS = 'backfill_in_progress';
+
+const BACKFILL_STEP_QUERY_BUDGET = 20;
+/** Owner backfill route: stay under D1 Free 50-query invocation cap (2 × 20-step budget + headroom). */
+export const BACKFILL_OWNER_MAX_STEPS_PER_CALL = 2;
+const BACKFILL_STEP_PAGE_SIZE = 8;
+
+const BACKFILL_PHASES = ['machine_trials', 'licence_requests', 'customers', 'flush'];
+
+const STAGING_UPSERT_SQL = `INSERT INTO trial_grants_backfill_staging(product, subject_kind, subject, first_day, last_day, source_request)
+  VALUES (?, ?, ?, ?, ?, ?)
+  ON CONFLICT(product, subject_kind, subject) DO UPDATE SET
+    first_day = CASE
+      WHEN excluded.first_day < trial_grants_backfill_staging.first_day
+        OR (excluded.first_day = trial_grants_backfill_staging.first_day
+            AND excluded.last_day < trial_grants_backfill_staging.last_day)
+      THEN excluded.first_day
+      ELSE trial_grants_backfill_staging.first_day END,
+    last_day = CASE
+      WHEN excluded.first_day < trial_grants_backfill_staging.first_day
+        OR (excluded.first_day = trial_grants_backfill_staging.first_day
+            AND excluded.last_day < trial_grants_backfill_staging.last_day)
+      THEN excluded.last_day
+      ELSE trial_grants_backfill_staging.last_day END,
+    source_request = CASE
+      WHEN excluded.first_day < trial_grants_backfill_staging.first_day
+        OR (excluded.first_day = trial_grants_backfill_staging.first_day
+            AND excluded.last_day < trial_grants_backfill_staging.last_day)
+      THEN excluded.source_request
+      ELSE trial_grants_backfill_staging.source_request END`;
+
+function spendBackfillQuery(budget) {
+  budget.used += 1;
+  return budget.used <= budget.max;
+}
+
+async function mergeStagingRow(env, product, kind, subject, window, source, budget) {
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare(STAGING_UPSERT_SQL).bind(
+    product, kind, subject, window.first, window.last, source || null,
+  ).run();
+  return true;
+}
+
+async function readBackfillProgress(env, budget) {
+  if (!spendBackfillQuery(budget)) return null;
+  const row = await env.DB.prepare(
+    'SELECT phase, after_rowid FROM trial_grants_backfill_progress WHERE id = 1',
+  ).bind().first();
+  if (!row) return { phase: BACKFILL_PHASES[0], afterRowid: 0 };
+  return { phase: row.phase, afterRowid: Number(row.after_rowid) || 0 };
+}
+
+async function writeBackfillProgress(env, phase, afterRowid, budget) {
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare(
+    `INSERT INTO trial_grants_backfill_progress(id, phase, after_rowid) VALUES(1, ?, ?)
+     ON CONFLICT(id) DO UPDATE SET phase = excluded.phase, after_rowid = excluded.after_rowid`,
+  ).bind(phase, afterRowid).run();
+  return true;
+}
+
+async function finishBackfillFromStaging(env, budget) {
+  const createdAt = new Date().toISOString();
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO trial_grants(product, subject_kind, subject, first_day, last_day, created_at, source_request)
+     SELECT product, subject_kind, subject, first_day, last_day, ?, source_request
+     FROM trial_grants_backfill_staging`,
+  ).bind(createdAt).run();
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare('DELETE FROM trial_grants_backfill_staging').bind().run();
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare('DELETE FROM trial_grants_backfill_progress WHERE id = 1').bind().run();
+  const t = Math.floor(Date.now() / 1000);
+  if (!spendBackfillQuery(budget)) return false;
+  await env.DB.prepare(
+    'INSERT OR IGNORE INTO schema_migrations(id, applied_at) VALUES(?, ?)',
+  ).bind(TRIAL_GRANTS_BACKFILL_MARKER, t).run();
+  return true;
+}
+
+async function backfillStepMachineTrials(env, productFilter, progress, budget) {
+  const products = productFilter ? [normalizeProduct(productFilter)] : null;
+  let afterRowid = progress.afterRowid;
+  const sql = `SELECT rowid, machine, request_id FROM machine_trials WHERE machine LIKE ? AND rowid > ? ORDER BY rowid LIMIT ?`;
+  if (!spendBackfillQuery(budget)) return { done: false, afterRowid };
+  const page = await env.DB.prepare(sql).bind(`${ETW_PREFIX}%`, afterRowid, BACKFILL_STEP_PAGE_SIZE).all();
+  const rows = page.results || [];
+  if (!rows.length) return { done: true, afterRowid: 0 };
+  for (const row of rows) {
+    const parsed = trialWindowFromEtwRow(row);
+    afterRowid = row.rowid;
+    if (!parsed) continue;
+    if (products && !products.includes(parsed.product)) continue;
+    const ok = await mergeStagingRow(
+      env, parsed.product, parsed.kind, parsed.subject,
+      { first: parsed.first, last: parsed.last }, parsed.source, budget,
+    );
+    if (!ok) return { done: false, afterRowid };
+  }
+  if (rows.length < BACKFILL_STEP_PAGE_SIZE) return { done: true, afterRowid: 0 };
+  return { done: false, afterRowid };
+}
+
+async function backfillStepLicenceRequests(env, productFilter, progress, budget) {
+  const products = productFilter ? [normalizeProduct(productFilter)] : null;
+  let afterRowid = progress.afterRowid;
+  const reqStatusList = `('issued', 'delivered', 'expired', 'refused', 'approved')`;
+  const sql = products
+    ? `SELECT rowid, * FROM licence_requests WHERE product = ? AND status IN ${reqStatusList} AND rowid > ? ORDER BY rowid LIMIT ?`
+    : `SELECT rowid, * FROM licence_requests WHERE status IN ${reqStatusList} AND rowid > ? ORDER BY rowid LIMIT ?`;
+  const binds = products ? [products[0], afterRowid, BACKFILL_STEP_PAGE_SIZE] : [afterRowid, BACKFILL_STEP_PAGE_SIZE];
+  if (!spendBackfillQuery(budget)) return { done: false, afterRowid };
+  const page = await env.DB.prepare(sql).bind(...binds).all();
+  const rows = page.results || [];
+  if (!rows.length) return { done: true, afterRowid: 0 };
+  for (const row of rows) {
+    afterRowid = row.rowid;
+    if (!requestIsTrialGrantSource(row)) continue;
+    const win = windowFromRequestRowForBackfill(row, env);
+    if (!win) continue;
+    const product = normalizeProduct(row.product);
+    if (products && !products.includes(product)) continue;
+    let dkey;
+    try {
+      dkey = String(row.device_key || '').trim() || deviceKeyNorm(row.device);
+    } catch {
+      continue;
+    }
+    let ok = await mergeStagingRow(env, product, 'd', dkey, win, win.source, budget);
+    if (!ok) return { done: false, afterRowid };
+    const mh = normalizeMachineHash(row.machine);
+    if (mh) {
+      ok = await mergeStagingRow(env, product, 'm', mh, win, win.source, budget);
+      if (!ok) return { done: false, afterRowid };
+    }
+  }
+  if (rows.length < BACKFILL_STEP_PAGE_SIZE) return { done: true, afterRowid: 0 };
+  return { done: false, afterRowid };
+}
+
+async function backfillStepCustomers(env, productFilter, progress, budget) {
+  const products = productFilter ? [normalizeProduct(productFilter)] : null;
+  let afterRowid = progress.afterRowid;
+  const sql = products
+    ? 'SELECT rowid, * FROM customers WHERE product = ? AND rowid > ? ORDER BY rowid LIMIT ?'
+    : 'SELECT rowid, * FROM customers WHERE rowid > ? ORDER BY rowid LIMIT ?';
+  const binds = products ? [products[0], afterRowid, BACKFILL_STEP_PAGE_SIZE] : [afterRowid, BACKFILL_STEP_PAGE_SIZE];
+  if (!spendBackfillQuery(budget)) return { done: false, afterRowid };
+  const page = await env.DB.prepare(sql).bind(...binds).all();
+  const rows = page.results || [];
+  if (!rows.length) return { done: true, afterRowid: 0 };
+  for (const row of rows) {
+    afterRowid = row.rowid;
+    const win = windowFromCustomerRow(row);
+    if (!win) continue;
+    const product = normalizeProduct(row.product);
+    if (products && !products.includes(product)) continue;
+    let dkey;
+    try {
+      dkey = deviceKeyNorm(row.device);
+    } catch {
+      continue;
+    }
+    const ok = await mergeStagingRow(env, product, 'd', dkey, win, win.source, budget);
+    if (!ok) return { done: false, afterRowid };
+  }
+  if (rows.length < BACKFILL_STEP_PAGE_SIZE) return { done: true, afterRowid: 0 };
+  return { done: false, afterRowid };
+}
+
+/** True when legacy ledger backfill marker is present (backfill finished). */
+export async function isTrialGrantsBackfillComplete(env) {
+  const done = await env.DB.prepare(
+    'SELECT 1 FROM schema_migrations WHERE id = ?',
+  ).bind(TRIAL_GRANTS_BACKFILL_MARKER).first();
+  return Boolean(done);
+}
+
+/**
+ * Advance resumable legacy backfill by at most `queryBudget` D1 queries (default 20).
+ * @returns {{ complete: boolean, queriesUsed: number }}
+ */
+export async function trialGrantsBackfillStep(env, options = {}) {
+  if (await isTrialGrantsBackfillComplete(env)) {
+    return { complete: true, queriesUsed: 0 };
+  }
+  const budget = { used: 0, max: Number(options.queryBudget ?? BACKFILL_STEP_QUERY_BUDGET) || BACKFILL_STEP_QUERY_BUDGET };
+  const productFilter = options.productFilter ?? null;
+  let progress = await readBackfillProgress(env, budget);
+  if (!progress) return { complete: false, queriesUsed: budget.used };
+
+  while (budget.used < budget.max) {
+    if (progress.phase === 'flush') {
+      const flushed = await finishBackfillFromStaging(env, budget);
+      if (!flushed) break;
+      return { complete: true, queriesUsed: budget.used };
+    }
+
+    let stepResult;
+    if (progress.phase === 'machine_trials') {
+      stepResult = await backfillStepMachineTrials(env, productFilter, progress, budget);
+    } else if (progress.phase === 'licence_requests') {
+      stepResult = await backfillStepLicenceRequests(env, productFilter, progress, budget);
+    } else if (progress.phase === 'customers') {
+      stepResult = await backfillStepCustomers(env, productFilter, progress, budget);
+    } else {
+      break;
+    }
+
+    if (!stepResult) break;
+
+    if (stepResult.done) {
+      const idx = BACKFILL_PHASES.indexOf(progress.phase);
+      const nextPhase = BACKFILL_PHASES[idx + 1] || 'flush';
+      progress = { phase: nextPhase, afterRowid: 0 };
+      if (!(await writeBackfillProgress(env, nextPhase, 0, budget))) break;
+      if (nextPhase === 'flush') continue;
+    } else {
+      progress = { phase: progress.phase, afterRowid: stepResult.afterRowid };
+      if (!(await writeBackfillProgress(env, progress.phase, progress.afterRowid, budget))) break;
+      break;
+    }
+  }
+
+  const complete = await isTrialGrantsBackfillComplete(env);
+  return { complete, queriesUsed: budget.used };
+}
+
+/**
+ * Run stepped backfill until the marker is set (owner maintenance; bounded steps per call).
+ * A thrown error has `steps` set to how many steps returned before the failure.
+ * @returns {{ complete: boolean, steps: number }}
+ */
+export async function runTrialGrantsBackfillToCompletion(env, options = {}) {
+  const requested = Number(options.maxSteps ?? BACKFILL_OWNER_MAX_STEPS_PER_CALL) || BACKFILL_OWNER_MAX_STEPS_PER_CALL;
+  const maxSteps = Math.min(
+    BACKFILL_OWNER_MAX_STEPS_PER_CALL,
+    Math.max(1, requested),
+  );
+  let steps = 0;
+  try {
+    let complete = await isTrialGrantsBackfillComplete(env);
+    while (!complete && steps < maxSteps) {
+      const out = await trialGrantsBackfillStep(env, options);
+      complete = out.complete;
+      steps += 1;
+      if (out.queriesUsed === 0 && !complete) break;
+    }
+    return { complete: await isTrialGrantsBackfillComplete(env), steps };
+  } catch (e) {
+    const message = typeof e?.message === 'string' && e.message ? e.message : 'backfill_failed';
+    const err = new Error(message);
+    err.steps = steps;
+    throw err;
+  }
+}
+
+/** One bounded backfill step before trial resolution (marker when fully done). */
+export async function ensureTrialGrantsBackfill(env) {
+  if (env._trialGrantsBackfillPromise) {
+    await env._trialGrantsBackfillPromise;
+    return;
+  }
+  env._trialGrantsBackfillPromise = trialGrantsBackfillStep(env).then(() => {});
+  try {
+    await env._trialGrantsBackfillPromise;
+  } catch (e) {
+    env._trialGrantsBackfillPromise = null;
+    throw e;
+  }
+}
+
+export async function assertTrialGrantsBackfillReady(env) {
+  await ensureTrialGrantsBackfill(env);
+  if (!(await isTrialGrantsBackfillComplete(env))) {
+    throw new Error(BACKFILL_IN_PROGRESS);
+  }
+}
+
 function closureSql(seedsSql) {
   return `
 WITH RECURSIVE
@@ -653,6 +937,18 @@ function closureGrantSubjects(devices, machines) {
     rows.push({ kind: 'm', subject: id });
   }
   return rows;
+}
+
+/** Abort the D1 batch when the preceding statement changed zero rows (issue lock race). */
+export function trialIssueAbortIfNoChanges(env) {
+  return env.DB.prepare(
+    `INSERT INTO trial_issue_batch_sentinel(singleton) SELECT 0 WHERE changes() = 0`,
+  ).bind();
+}
+
+export function isTrialIssueAbortFailure(err) {
+  const msg = String(err?.message || err || '');
+  return /CHECK constraint failed/i.test(msg);
 }
 
 function grantWindowGuardStatement(env, product, reqFirst, reqLast, subjectRows) {

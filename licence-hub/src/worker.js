@@ -2,7 +2,9 @@ import {
   handleLicence, approveRequest, refuseRequest, issueOfflineCustomer, purgeStaleCodes,
   REASON_PAID_IN_STUDIO, ownerCapabilities, loadSigningKeys, products, defaultProduct, ownerProductsPayload,
   licencePathname, deviceKey, offlineRequestId, termFromRow, pickStrongerTerm,
+  TRIAL_GRANT_CONFLICT, BACKFILL_IN_PROGRESS, runTrialGrantsBackfillToCompletion,
 } from './licence-api.js';
+import { BACKFILL_OWNER_MAX_STEPS_PER_CALL, isTrialGrantsBackfillComplete } from './trial-grants.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
   destroySession, loginLimited, csrfOk,
@@ -149,6 +151,7 @@ async function ownerApi(request, env, url, session) {
         if (signed.reason === 'paid_signing_key_missing') {
           return json({ error: 'paid_key_missing' }, 503);
         }
+        if (signed.reason === 'trial_expired') return json({ error: 'trial_expired' }, 409);
         const msg = signed.reason === REASON_PAID_IN_STUDIO ? 'paid_in_studio' : signed.reason;
         return json({ error: signed.reason || REASON_PAID_IN_STUDIO, message: msg }, 400);
       }
@@ -166,8 +169,34 @@ async function ownerApi(request, env, url, session) {
       }
       if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
       if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
+      if (e?.message === BACKFILL_IN_PROGRESS) {
+        return json({ error: 'backfill_in_progress', retryable: true }, 503);
+      }
+      if (e?.message === TRIAL_GRANT_CONFLICT) return json({ error: 'trial_grant_conflict' }, 409);
+      if (e?.message === 'already_used') return json({ error: 'already_used' }, 400);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
+    }
+  }
+  if (path === '/backfill-trial-grants' && request.method === 'POST') {
+    const requested = Number(body.max_steps ?? body.maxSteps ?? BACKFILL_OWNER_MAX_STEPS_PER_CALL);
+    const maxSteps = Math.min(
+      BACKFILL_OWNER_MAX_STEPS_PER_CALL,
+      Math.max(1, Number.isFinite(requested) ? requested : BACKFILL_OWNER_MAX_STEPS_PER_CALL),
+    );
+    try {
+      const out = await runTrialGrantsBackfillToCompletion(env, { maxSteps });
+      return json({ ok: true, complete: out.complete, steps: out.steps });
+    } catch (e) {
+      const steps = Number.isInteger(e?.steps) && e.steps >= 0 ? e.steps : 0;
+      let complete = null;
+      try {
+        complete = await isTrialGrantsBackfillComplete(env);
+      } catch {
+        complete = null;
+      }
+      const message = typeof e?.message === 'string' && e.message ? e.message : 'backfill_failed';
+      return json({ ok: false, error: 'backfill_failed', message, complete, steps }, 500);
     }
   }
   if (path === '/refuse') {
@@ -211,6 +240,10 @@ async function ownerApi(request, env, url, session) {
       }
       if (e?.message === 'reissue_confirm') return json({ error: 'reissue_confirm' }, 409);
       if (e?.message === 'trial_expired') return json({ error: 'trial_expired' }, 409);
+      if (e?.message === BACKFILL_IN_PROGRESS) {
+        return json({ error: 'backfill_in_progress', retryable: true }, 503);
+      }
+      if (e?.message === TRIAL_GRANT_CONFLICT) return json({ error: 'trial_grant_conflict' }, 409);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }

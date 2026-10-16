@@ -4,6 +4,7 @@ import {
   licencePathname, deviceKey, offlineRequestId, termFromRow, pickStrongerTerm,
   TRIAL_GRANT_CONFLICT, BACKFILL_IN_PROGRESS, runTrialGrantsBackfillToCompletion,
 } from './licence-api.js';
+import { BACKFILL_OWNER_MAX_STEPS_PER_CALL, isTrialGrantsBackfillComplete } from './trial-grants.js';
 import {
   SESSION_COOKIE, CSRF_COOKIE, verifyPassword, parseCookies, cookieHeader, loadSession, createSession,
   destroySession, loginLimited, csrfOk,
@@ -171,14 +172,24 @@ async function ownerApi(request, env, url, session) {
         return json({ error: 'backfill_in_progress', retryable: true }, 503);
       }
       if (e?.message === TRIAL_GRANT_CONFLICT) return json({ error: 'trial_grant_conflict' }, 409);
+      if (e?.message === 'already_used') return json({ error: 'already_used' }, 400);
       if (e?.message === 'no_signing_key') return json({ error: 'config' }, 503);
       throw e;
     }
   }
   if (path === '/backfill-trial-grants' && request.method === 'POST') {
-    const maxSteps = Number(body.max_steps ?? body.maxSteps ?? 50);
-    const out = await runTrialGrantsBackfillToCompletion(env, { maxSteps });
-    return json({ ok: true, complete: out.complete, steps: out.steps });
+    const requested = Number(body.max_steps ?? body.maxSteps ?? BACKFILL_OWNER_MAX_STEPS_PER_CALL);
+    const maxSteps = Math.min(
+      BACKFILL_OWNER_MAX_STEPS_PER_CALL,
+      Math.max(1, Number.isFinite(requested) ? requested : BACKFILL_OWNER_MAX_STEPS_PER_CALL),
+    );
+    try {
+      const out = await runTrialGrantsBackfillToCompletion(env, { maxSteps });
+      return json({ ok: true, complete: out.complete, steps: out.steps });
+    } catch {
+      const complete = await isTrialGrantsBackfillComplete(env);
+      return json({ ok: true, complete, steps: 0 });
+    }
   }
   if (path === '/refuse') {
     await refuseRequest(env, body.id, body.reason || 'refused');

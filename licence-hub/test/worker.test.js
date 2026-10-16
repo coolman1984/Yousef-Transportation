@@ -242,6 +242,56 @@ test('owner offline API signs with the product sent in the body', async () => {
   assert.equal(row.product, 'al-store');
 });
 
+test('PR B r3: owner backfill route caps max_steps per invocation', async () => {
+  const e = env({ LICENCE_PRODUCTS: 'trip-orders' });
+  const win = { last: '2026-06-14' };
+  for (let i = 0; i < 60; i++) {
+    const device = `CAP${String(i).padStart(2, '0')}-DEV${String(i).padStart(2, '0')}`;
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'delivered', 'trial', ?, 1, 1)`,
+    ).bind(`cap-${i}`, device, deviceKey(device), 'a'.repeat(64), `n-${i}`, win.last).run();
+  }
+  const res = await ownerFetch(e, '/owner/api/backfill-trial-grants', {
+    method: 'POST',
+    body: { max_steps: 500 },
+  });
+  assert.equal(res.status, 200);
+  const data = await res.json();
+  assert.equal(data.ok, true);
+  assert.ok(data.steps <= 2);
+});
+
+test('PR B r3: owner approve maps already_used to 400', async () => {
+  const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 88)), LICENCE_PRODUCTS: 'trip-orders' });
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const machine = 'a'.repeat(64);
+  const reqId = 'req-already-used-owner';
+  await e.DB.prepare(
+    'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).bind(reqId, 'h', 'trip-orders', 'trial', device, dkey, machine, 'n-au', 'Shop', '', '', 'pending', 1, 1).run();
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  const { machineLockKey, onlineDeviceLockKey } = await import('../src/licence-api.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [machine], { first_day: '2020-01-01', last_day: '2020-01-14' }, reqId,
+  ));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(onlineDeviceLockKey('trip-orders', dkey), reqId, 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(machineLockKey(machine), reqId, 1).run();
+  const res = await ownerFetch(e, '/owner/api/approve', {
+    method: 'POST',
+    body: { id: reqId, grant: 'trial' },
+  });
+  assert.equal(res.status, 400);
+  assert.deepEqual(await res.json(), { error: 'already_used', message: 'already_used' });
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(reqId).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'already_used');
+});
+
 test('owner approve paid without PAID_SIGNING_KEY returns 503 and keeps pending', async () => {
   const e = env({ LICENCE_SIGNING_KEY: pemFromSeed(Buffer.alloc(32, 97)) });
   const device = 'ABCD2EFGH3';

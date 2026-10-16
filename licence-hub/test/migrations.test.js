@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DatabaseSync } from 'node:sqlite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { applyMigrations, resolveDefaultProduct, substituteDefaultProduct } from '../scripts/apply-migrations.mjs';
+import {
+  applyMigrations, resolveDefaultProduct, substituteDefaultProduct, WRANGLER_MIGRATION_SQL_FILES,
+} from '../scripts/apply-migrations.mjs';
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -93,6 +95,50 @@ test('0001 backfills licence_tier from kind on legacy rows', () => {
   assert.equal(db.prepare('SELECT licence_tier FROM licence_requests WHERE id = ?').get('m1').licence_tier, 'paid');
   assert.equal(db.prepare('SELECT licence_tier FROM licence_requests WHERE id = ?').get('m2').licence_tier, '');
   assert.equal(db.prepare('SELECT licence_tier FROM customers WHERE id = ?').get('c1').licence_tier, 'permanent');
+});
+
+test('apply-migrations covers every migrations/*.sql file', () => {
+  const files = readdirSync(join(root, 'migrations')).filter((f) => f.endsWith('.sql')).sort();
+  assert.deepEqual([...WRANGLER_MIGRATION_SQL_FILES].sort(), files);
+});
+
+test('apply-migrations on pre-0004 schema adds trial ledger and backfill tables', () => {
+  const db = new DatabaseSync(':memory:');
+  db.exec(`CREATE TABLE licence_requests (
+    id TEXT PRIMARY KEY, poll_token_hash TEXT, kind TEXT, device TEXT, device_key TEXT,
+    machine TEXT, nonce TEXT, shop TEXT, ref TEXT, version TEXT, status TEXT,
+    stage TEXT, reason TEXT, code TEXT, created_at INTEGER, updated_at INTEGER
+  );`);
+  db.exec(`CREATE TABLE customers (
+    id TEXT PRIMARY KEY, shop TEXT, device TEXT, kind TEXT, serial TEXT,
+    first_day TEXT, last_day TEXT, created_at INTEGER
+  );`);
+  db.exec(`CREATE TABLE machine_trials (
+    machine TEXT PRIMARY KEY, request_id TEXT NOT NULL, at INTEGER NOT NULL
+  );`);
+  applyMigrations(db);
+  for (const table of [
+    'trial_grants',
+    'trial_grants_backfill_staging',
+    'trial_grants_backfill_progress',
+    'trial_issue_batch_sentinel',
+  ]) {
+    assert.ok(db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(table));
+  }
+  assert.ok(db.prepare('SELECT 1 FROM schema_migrations WHERE id = ?').get('0004_trial_grants'));
+  assert.ok(db.prepare('SELECT 1 FROM schema_migrations WHERE id = ?').get('0005_trial_grants_backfill_staging'));
+  const fresh = new DatabaseSync(':memory:');
+  fresh.exec(readFileSync(join(root, 'schema.sql'), 'utf8'));
+  for (const table of [
+    'trial_grants',
+    'trial_grants_backfill_staging',
+    'trial_grants_backfill_progress',
+    'trial_issue_batch_sentinel',
+  ]) {
+    const migrated = db.prepare('PRAGMA table_info(' + table + ')').all().map((r) => r.name).sort();
+    const expected = fresh.prepare('PRAGMA table_info(' + table + ')').all().map((r) => r.name).sort();
+    assert.deepEqual(migrated, expected);
+  }
 });
 
 test('0003 dedupes duplicate customers before unique index', () => {

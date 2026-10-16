@@ -1664,6 +1664,60 @@ test('PR B r2: offline od lock owned by other-req rolls back trial_grants', asyn
   assert.ok((await issueOfflineCustomer(e, keys, device, 'Shop', 'trip-orders', { grant: 'trial' }))?.code);
 });
 
+test('PR B r3: online trial during unfinished backfill returns 503 without storing refusal', async () => {
+  const e = env();
+  const device = '7KD2M-QX9TP';
+  const bulkDevice = (i) => {
+    const hex = i.toString(16).padStart(8, '0').toUpperCase();
+    return `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+  };
+  for (let i = 0; i < 80; i++) {
+    const dev = bulkDevice(i);
+    await e.DB.prepare(
+      `INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version,
+        status, licence_tier, licence_expiry, created_at, updated_at)
+       VALUES(?, 'h', 'trip-orders', 'trial', ?, ?, ?, ?, '', '', '', 'delivered', 'trial', '2026-01-14', 1, 1)`,
+    ).bind(`bulk-bf-${i}`, dev, deviceKey(dev), MACHINE_A, `bulk-nonce-${i}`).run();
+  }
+  const nonce = 'backfill-retry-online';
+  const trialBody = { device, nonce, machine: MACHINE_B };
+  const first = await postRequest(e, body(trialBody));
+  assert.equal(first.res.status, 503);
+  assert.equal(first.data.error, 'backfill_in_progress');
+  assert.equal(first.data.retryable, true);
+  assert.equal(await e.DB.prepare('SELECT id FROM licence_requests WHERE nonce = ?').bind(nonce).first(), null);
+  const { runTrialGrantsBackfillToCompletion, isTrialGrantsBackfillComplete } = await import('../src/trial-grants.js');
+  while (!(await isTrialGrantsBackfillComplete(e))) {
+    await runTrialGrantsBackfillToCompletion(e, { maxSteps: 500 });
+  }
+  const second = await postRequest(e, body(trialBody));
+  assert.equal(second.data.status, 'pending');
+});
+
+test('PR B r3: approve already_used refuses row instead of throwing', async () => {
+  const e = env();
+  const keys = await signingKeys(210);
+  const device = '7KD2M-QX9TP';
+  const dkey = deviceKey(device);
+  const { data } = await postRequest(e, body({ nonce: 'approve-already-used-r3' }));
+  const { trialGrantStatements } = await import('../src/trial-grants.js');
+  const { machineLockKey, onlineDeviceLockKey } = await import('../src/licence-api.js');
+  await e.DB.batch(await trialGrantStatements(
+    e, 'trip-orders', device, [MACHINE_A], { first_day: '2020-01-01', last_day: '2020-01-14' }, data.id,
+  ));
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(onlineDeviceLockKey('trip-orders', dkey), data.id, 1).run();
+  await e.DB.prepare('INSERT INTO machine_trials(machine, request_id, at) VALUES(?, ?, ?)')
+    .bind(machineLockKey(MACHINE_A), data.id, 1).run();
+  setHubTestCalendarDay(e, '2026-06-01');
+  const out = await approveRequest(e, data.id, keys);
+  assert.equal(out?.refused, true);
+  assert.equal(out?.reason, 'already_used');
+  const row = await e.DB.prepare('SELECT status, reason FROM licence_requests WHERE id = ?').bind(data.id).first();
+  assert.equal(row.status, 'refused');
+  assert.equal(row.reason, 'already_used');
+});
+
 test('PR B r2: paid-expired trial approve rolls back trial_grants when device lock is lost', async () => {
   const e = env();
   const keys = await signingKeys(203, 204);

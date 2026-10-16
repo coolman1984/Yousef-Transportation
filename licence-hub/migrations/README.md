@@ -23,6 +23,7 @@ npx wrangler d1 execute <database> --remote --file=migrations/0001_licence_tier_
 npx wrangler d1 execute <database> --remote --file=migrations/0002_product_column.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0003_customers_product.sql
 npx wrangler d1 execute <database> --remote --file=migrations/0004_trial_grants.sql
+npx wrangler d1 execute <database> --remote --file=migrations/0005_trial_grants_backfill_staging.sql
 ```
 
 `scripts/apply-migrations.mjs` skips `ALTER` when `pragma_table_info` shows the column already exists (safe to re-run). Migration `0004_trial_grants.sql` creates the insert-only `trial_grants` ledger — **back up D1 before applying** on production.

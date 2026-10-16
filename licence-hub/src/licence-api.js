@@ -848,6 +848,9 @@ export async function handleLicence(request, env, url) {
 
     const trialBlock = await onlineTrialRequestBlocked(env, body.product, body.device, machineHash);
     if (trialBlock) {
+      if (trialBlock === BACKFILL_IN_PROGRESS) {
+        return json({ error: 'backfill_in_progress', retryable: true }, 503);
+      }
       await env.DB.prepare(
         'INSERT INTO licence_requests(id, poll_token_hash, product, kind, device, device_key, machine, nonce, shop, ref, version, status, reason, created_at, updated_at) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).bind(id, pollHash, body.product, body.kind, body.device, dkey, body.machine, body.nonce, shopStored, refStored, body.version.slice(0, 40), 'refused', trialBlock, t, t).run();
@@ -1182,6 +1185,10 @@ export async function approveRequest(env, requestId, keys, options = {}) {
       if (e?.message === BACKFILL_IN_PROGRESS) throw e;
       if (e?.message === 'bad_device_code') {
         await refuseRequest(env, requestId, 'bad_device');
+      }
+      if (e?.message === 'already_used') {
+        await refuseRequest(env, requestId, 'already_used');
+        return { refused: true, reason: 'already_used' };
       }
       throw e;
     }

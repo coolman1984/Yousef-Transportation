@@ -365,6 +365,8 @@ export const TRIAL_GRANTS_BACKFILL_MARKER = 'trial_grants_backfill_v1';
 export const BACKFILL_IN_PROGRESS = 'backfill_in_progress';
 
 const BACKFILL_STEP_QUERY_BUDGET = 20;
+/** Owner backfill route: stay under D1 Free 50-query invocation cap (2 × 20-step budget + headroom). */
+export const BACKFILL_OWNER_MAX_STEPS_PER_CALL = 2;
 const BACKFILL_STEP_PAGE_SIZE = 8;
 
 const BACKFILL_PHASES = ['machine_trials', 'licence_requests', 'customers', 'flush'];
@@ -592,7 +594,11 @@ export async function trialGrantsBackfillStep(env, options = {}) {
 
 /** Run stepped backfill until the marker is set (owner maintenance; bounded steps per call). */
 export async function runTrialGrantsBackfillToCompletion(env, options = {}) {
-  const maxSteps = Math.max(1, Number(options.maxSteps ?? 500) || 500);
+  const requested = Number(options.maxSteps ?? BACKFILL_OWNER_MAX_STEPS_PER_CALL) || BACKFILL_OWNER_MAX_STEPS_PER_CALL;
+  const maxSteps = Math.min(
+    BACKFILL_OWNER_MAX_STEPS_PER_CALL,
+    Math.max(1, requested),
+  );
   let complete = await isTrialGrantsBackfillComplete(env);
   let steps = 0;
   while (!complete && steps < maxSteps) {

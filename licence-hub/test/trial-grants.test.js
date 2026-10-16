@@ -1401,6 +1401,33 @@ test('customer device I/L/O aliases match normalized resolveTrial device', async
   assert.equal(blocked.reason, 'downgrade_forbidden');
 });
 
+test('PR B r3: owner backfill completion call stays within D1 free query cap', async () => {
+  const win = trialWindow('2026-09-01');
+  const { e, queryCount } = countingEnv();
+  for (let i = 0; i < 200; i++) {
+    const hex = i.toString(16).padStart(8, '0').toUpperCase();
+    const device = `${hex.slice(0, 4)}A-${hex.slice(4, 8)}B`;
+    await insertRequest(e, {
+      id: `owner-cap-${i}`,
+      device,
+      dkey: deviceKey(device),
+      machine: MACHINE_A,
+      expiry: win.last,
+    });
+  }
+  const { runTrialGrantsBackfillToCompletion, isTrialGrantsBackfillComplete } = await import('../src/trial-grants.js');
+  const start = queryCount();
+  const out = await runTrialGrantsBackfillToCompletion(e, { maxSteps: 999 });
+  const used = queryCount() - start;
+  assert.ok(out.steps <= 2);
+  assert.ok(used <= 50);
+  while (!(await isTrialGrantsBackfillComplete(e))) {
+    const stepStart = queryCount();
+    await runTrialGrantsBackfillToCompletion(e, { maxSteps: 999 });
+    assert.ok(queryCount() - stepStart <= 50);
+  }
+});
+
 test('PR B r2: stepped backfill for 1200 trials stays within query budget and matches one-shot', async () => {
   const win = trialWindow('2026-09-01');
   const { e: eFull } = countingEnv();

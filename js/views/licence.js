@@ -54,12 +54,20 @@
       function transientError(e) {
         return /^(offline|http_|busy|token|relay_off|recovery_unavailable)/.test(e || '');
       }
+      function whenText(iso) {
+        if (!iso) return '';
+        try { return TO.fmt.dt(iso); } catch (e) { return iso; }
+      }
       function line(q) {
-        var wait = q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && transientError(q.error));
-        var cls = 'busy', icon = 'clock', text = '';
+        var wait = q.status === 'sending' || q.status === 'waiting' || q.status === 'issued' || (q.status === 'failed' && transientError(q.error));
+        var cls = 'busy', icon = 'clock', text = '', meta = '';
         if (!q.available) { cls = ''; icon = 'info'; text = TO.t('lic.req.off'); }
         else if (q.status === 'sending') text = TO.t('lic.req.sending');
-        else if (q.status === 'waiting' && !q.error) text = TO.t(q.stage === 'approved' ? 'lic.req.approved' : 'lic.req.sentWaiting');
+        else if (q.status === 'waiting' && !q.error) {
+          text = TO.t(q.stage === 'approved' ? 'lic.req.approved' : 'lic.req.sentWaiting');
+          if (q.created_at) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.sentAt', { when: whenText(q.created_at) })) + '</div>';
+          if (q.next_try) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.nextCheck', { when: whenText(q.next_try) })) + '</div>';
+        }
         else if (q.error === 'recovery_unavailable') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.recoveryUnavailable'); }
         else if (wait) { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.offline', { when: q.next_try || '' }); }
         else if (q.status === 'failed') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.codeBad'); }
@@ -67,10 +75,10 @@
         else if (q.status === 'closed' && q.reason === 'manual') { cls = 'good'; icon = 'check'; text = TO.t('lic.req.closedManual'); }
         else if (q.status === 'closed') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.closed'); }
         else if (q.status === 'activated') { cls = 'good'; icon = 'check'; text = TO.t('lic.req.activated'); }
-        return { wait: wait, html: text ? '<div class="lic-line ' + cls + '" role="status">' + TO.icon(icon) + '<span>' + TO.esc(text) + '</span></div>' : '' };
+        return { wait: wait, html: text ? '<div class="lic-line ' + cls + '" role="status">' + TO.icon(icon) + '<div class="grow"><span>' + TO.esc(text) + '</span>' + meta + '</div></div>' : '' };
       }
       function requestOpen(q) {
-        return q.status === 'sending' || q.status === 'waiting' || (q.status === 'failed' && transientError(q.error));
+        return q.status === 'sending' || q.status === 'waiting' || q.status === 'issued' || (q.status === 'failed' && transientError(q.error));
       }
       function draw(lic) {
         var codeEl = host.querySelector('#lic-code');
@@ -145,7 +153,7 @@
           });
         });
         stop();
-        if (requestOpen(q)) timer = setInterval(function () { if (!host.isConnected) { stop(); return; } refresh(); }, 8000);
+        if (requestOpen(q)) timer = setInterval(function () { if (!host.isConnected) { stop(); return; } refresh(); }, 15000);
       }
       function send(kind, btn, shop) {
         var body = { kind: kind };
@@ -153,7 +161,14 @@
         TO.ui.run(TO.post('/api/licence/request', body), null, btn).then(refresh, function () { /* the toast says why */ });
       }
       function refresh() {
-        return TO.get('/api/licence').then(function (lic) { TO.me.licence = lic; banner(); draw(lic); }, function (e) { host.innerHTML = '<p>' + TO.esc(TO.ui.errorText(e)) + '</p>'; });
+        return TO.get('/api/licence').then(function (lic) {
+          var wasWaiting = host.dataset.waiting === '1';
+          TO.me.licence = lic;
+          banner();
+          draw(lic);
+          host.dataset.waiting = requestOpen(lic.request || {}) ? '1' : '0';
+          if (wasWaiting && lic.full && (lic.request || {}).status === 'activated') TO.toast(TO.t('lic.done'));
+        }, function (e) { host.innerHTML = '<p>' + TO.esc(TO.ui.errorText(e)) + '</p>'; });
       }
       TO.get('/api/licence/preview?kind=trial').then(function (p) { defaultShop = (p.sends && p.sends.shop) || ''; refresh(); }, refresh);
     }

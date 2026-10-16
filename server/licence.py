@@ -1185,8 +1185,10 @@ class Licence:
         except ConnectionError:
             pass
 
-    def loop(self, every=20):
+    def loop(self, every=None):
         """Background: look for the answer while a request is open, even when nobody has the page open."""
+        if every is None:
+            every = max(3, int(os.environ.get('TO_LICENCE_POLL_SEC', '20')))
         while not self.stop:
             try:
                 st = self._state()

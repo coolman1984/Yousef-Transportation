@@ -739,9 +739,11 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/me':
             return self.send(200, self.me())
         if p == '/api/state':
+            if qs.get('version'):
+                v = STORE.version()
+                if qs.get('version') == str(v):
+                    return self.send(200, {'version': v, 'unchanged': True})
             st = STORE.state(self.u['scopes'])
-            if qs.get('version') and qs.get('version') == str(st.get('version')):
-                return self.send(200, {'version': st['version'], 'unchanged': True})
             return self.send(200, {**project_state(st, self.u['perms']), 'gateway': bool(SECRETS.configured), 'office': OFFICE_STATE})
         if p == '/api/guide/state':
             return self.send(200, ASSIST.guide_state(self.u, guide_facts()))

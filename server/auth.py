@@ -158,6 +158,8 @@ USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), 
                ('status', T), ('status_reason', T), ('status_at', T), ('status_by', T), ('request_code', T), ('reset_hash', T), ('reset_expires', T)]
 USER_STATUSES = ('pending', 'approved', 'rejected', 'suspended')
 RESET_CODE_HOURS = 24
+RESET_CODE_MAX_ATTEMPTS = 3
+MAX_PENDING_SIGNUPS = 25
 REQUEST_CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
 USER_FIELD_NAMES = {f for f, _ in USER_FIELDS}
 PROFILE_FIELDS = [('name', T), ('perms', J), ('deleted', B), ('updated_at', T), ('updated_by', T)]
@@ -370,6 +372,10 @@ class Auth:
     def _reset_code():
         return ''.join(secrets.choice(REQUEST_CODE_ALPHABET) for _ in range(8))
 
+    @staticmethod
+    def _normalize_reset_code(code):
+        return re.sub(r'[\s\-]', '', (code or '')).upper()
+
     def _status_message(self, u):
         st = u.get('status') or 'approved'
         if st == 'pending':
@@ -481,30 +487,7 @@ class Auth:
             verify_password(password or '', _DUMMY)
             self.log(username or '(empty)', ip, 'login-failed', username, 'Unknown user name')
             raise AuthError(generic)
-        msg = self._status_message(u)
-        if msg:
-            self.log(u['display'], ip, 'login-blocked', username, u.get('status') or '')
-            raise AuthError(msg)
-        with self.lock:
-            pre = self.conn.execute('SELECT failed, locked_until FROM users WHERE id=?', (u['id'],)).fetchone()
-        sole = self._sole_admin_id() == u['id'] and 'users.manage' in u['perms']
-        if sole and int(pre['failed'] or 0) >= self.max_failed:
-            ok = verify_password(password or '', u['pw_hash'])
-            if not ok:
-                with self.lock:
-                    self.conn.execute('BEGIN IMMEDIATE')
-                    try:
-                        row = self.conn.execute('SELECT failed FROM users WHERE id=?', (u['id'],)).fetchone()
-                        failed = int(row['failed'] or 0) + 1
-                        self.conn.execute('UPDATE users SET failed=? WHERE id=?', (failed, u['id']))
-                        self.conn.execute('COMMIT')
-                    except Exception:
-                        self.conn.execute('ROLLBACK')
-                        raise
-                self.log(u['display'], ip, 'login-failed', username, f'Wrong password (sole admin, attempt {failed})')
-                raise AuthError(generic)
-        else:
-            ok = verify_password(password or '', u['pw_hash'])
+        ok = verify_password(password or '', u['pw_hash'])
         with self.lock:
             self.conn.execute('BEGIN IMMEDIATE')
             try:
@@ -533,6 +516,11 @@ class Auth:
                         self.log(u['display'], ip, 'account-locked', username, f'Locked for {self.lock_minutes} minutes after {failed} wrong passwords')
                         raise AuthError(f'Too many wrong passwords. The account is locked for {self.lock_minutes} minutes.')
                     raise AuthError(generic)
+                msg = self._status_message(u)
+                if msg:
+                    self.conn.execute('ROLLBACK')
+                    self.log(u['display'], ip, 'login-blocked', username, u.get('status') or '')
+                    raise AuthError(msg)
                 if not u['active']:
                     self.conn.execute('ROLLBACK')
                     self.log(u['display'], ip, 'login-blocked', username, 'Account is disabled')
@@ -573,6 +561,8 @@ class Auth:
             elif t - _parse(s['created']) > self.max_age:
                 reason = f'Logged out automatically after the maximum session time ({int(self.max_age.total_seconds() // 3600)} hours)'
             u = self.get(s['user_id'])
+            if not reason and u and (u.get('status') or 'approved') != 'approved':
+                reason = 'Session ended - the account is not approved yet'
             if not reason and (not u or not u['active']):
                 reason = 'Session ended - the account is disabled or deleted'
             if not reason and s['via'] == 'link' and not (u.get('link_hash') and self.link_allowed(u)):
@@ -618,6 +608,9 @@ class Auth:
         if not u:
             self.log('(personal link)', ip, 'login-link-failed', '', 'Unknown or switched-off personal link')
             raise AuthError('This link does not work any more.')
+        if (u.get('status') or 'approved') != 'approved':
+            self.log(u['display'], ip, 'login-blocked', u['username'], 'Personal link used, but the account is not approved')
+            raise AuthError('This account is not approved yet. Ask the administrator.')
         if not u['active']:
             self.log(u['display'], ip, 'login-blocked', u['username'], 'Personal link used, but the account is disabled')
             raise AuthError('This account is disabled.')
@@ -735,20 +728,51 @@ class Auth:
         if not full_name:
             raise AuthError('Enter the full name.')
         self.check_password(password, username, full_name)
-        if self.conn.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
-            raise AuthError('This user name is already taken.')
-        uid = uuid.uuid4().hex
+        if not self.node.is_authority:
+            raise NotAuthority(self.authority_hint())
+        with self.lock:
+            pending_n = self.conn.execute("SELECT COUNT(*) FROM users WHERE deleted=0 AND status='pending'").fetchone()[0]
+            existing = self.conn.execute('SELECT * FROM users WHERE username=?', (username,)).fetchone()
+        if pending_n >= MAX_PENDING_SIGNUPS:
+            raise AuthError('Too many sign-up requests are waiting. Ask the administrator to clear the queue.')
         ts = now()
         code = self._request_code()
         h = hash_password(password)
+        if existing and not existing['deleted']:
+            old = self._user(existing)
+            st = old.get('status') or 'approved'
+            if st in ('approved', 'pending'):
+                raise AuthError('This user name is already taken.')
+            if st not in ('rejected', 'suspended'):
+                raise AuthError('This user name is already taken.')
+            uid = old['id']
+            row = {'full_name': full_name, 'title': (title or '')[:80], 'pw_hash': h, 'pw_pub': account_pub(password, uid),
+                   'perms': [], 'scopes': None, 'role': 'Custom', 'active': False, 'must_change': False, 'pw_changed_at': ts,
+                   'status': 'pending', 'status_reason': '', 'status_at': ts, 'status_by': 'Self sign-up', 'request_code': code,
+                   'notes': (notes or '')[:500], 'updated_at': ts, 'updated_by': 'Self sign-up', 'failed': 0, 'locked_until': None,
+                   'reset_hash': '', 'reset_expires': ''}
+
+            def check(c):
+                if c.execute("SELECT COUNT(*) FROM users WHERE deleted=0 AND status='pending'").fetchone()[0] >= MAX_PENDING_SIGNUPS:
+                    raise AuthError('Too many sign-up requests are waiting. Ask the administrator to clear the queue.')
+                cur = c.execute('SELECT status FROM users WHERE id=? AND deleted=0', (uid,)).fetchone()
+                if not cur or (cur['status'] or 'approved') not in ('rejected', 'suspended'):
+                    raise AuthError('This sign-up request is no longer waiting.')
+                return [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'pending']}}]
+            self._write('Self sign-up', ip, f'Sign-up request {username}', [], check=check)
+            self.log(full_name + ' (' + username + ')', ip, 'signup-pending', username, f'Re-request code {code}')
+            return {'ok': True, 'request_code': code}
+        if existing and existing['deleted']:
+            raise AuthError('This user name is already taken.')
+        uid = uuid.uuid4().hex
         row = {'username': username, 'full_name': full_name, 'title': (title or '')[:80], 'pw_hash': h, 'pw_pub': account_pub(password, uid),
                'perms': [], 'scopes': None, 'role': 'Custom', 'active': False, 'deleted': False, 'must_change': False, 'pw_changed_at': ts,
                'status': 'pending', 'status_reason': '', 'status_at': ts, 'status_by': 'Self sign-up', 'request_code': code,
                'notes': (notes or '')[:500], 'created_at': ts, 'created_by': 'Self sign-up', 'updated_at': ts, 'updated_by': 'Self sign-up', 'login': 'password'}
-        if not self.node.is_authority:
-            raise NotAuthority(self.authority_hint())
 
         def check(c):
+            if c.execute("SELECT COUNT(*) FROM users WHERE deleted=0 AND status='pending'").fetchone()[0] >= MAX_PENDING_SIGNUPS:
+                raise AuthError('Too many sign-up requests are waiting. Ask the administrator to clear the queue.')
             if c.execute('SELECT 1 FROM users WHERE username=?', (username,)).fetchone():
                 raise AuthError('This user name is already taken.')
             return [{'e': 'users', 'id': uid, 'op': 'insert', 's': row, 'r': {'id': uid, **row}}]
@@ -758,17 +782,45 @@ class Auth:
 
     def reset_with_code(self, username, code, new_password, ip):
         username = (username or '').strip()[:64]
-        code = (code or '').strip().upper()
+        code = self._normalize_reset_code(code)
         generic = 'Wrong user name or reset code.'
         with self.lock:
             r = self.conn.execute('SELECT * FROM users WHERE username=? AND deleted=0', (username,)).fetchone()
         u = self._user(r)
-        if not u or not u.get('reset_hash') or not u.get('reset_expires'):
+        if not u or (u.get('status') or 'approved') != 'approved':
             verify_password(code or 'x', _DUMMY)
             raise AuthError(generic)
-        if _parse(u['reset_expires']) < datetime.now():
-            raise AuthError('This reset code has expired. Ask the administrator for a new one.')
-        if not verify_password(code, u['reset_hash']):
+        if not u.get('reset_hash') or not u.get('reset_expires'):
+            verify_password(code or 'x', _DUMMY)
+            raise AuthError(generic)
+        expired = _parse(u['reset_expires']) < datetime.now()
+        ok_code = not expired and verify_password(code, u['reset_hash'])
+        if not ok_code:
+            verify_password(code or 'x', _DUMMY) if expired else None
+            with self.lock:
+                self.conn.execute('BEGIN IMMEDIATE')
+                try:
+                    row = self.conn.execute('SELECT failed, locked_until, reset_hash, reset_expires FROM users WHERE id=?', (u['id'],)).fetchone()
+                    if row['locked_until'] and _parse(row['locked_until']) > datetime.now():
+                        self.conn.execute('ROLLBACK')
+                        mins = max(1, round((_parse(row['locked_until']) - datetime.now()).total_seconds() / 60))
+                        raise AuthError(f'This account is locked for {mins} more minute(s) after too many wrong passwords. '
+                                        'Wait, or ask the administrator to unlock it.')
+                    failed = int(row['failed'] or 0) + 1
+                    locked = None
+                    if failed >= self.max_failed:
+                        locked = (datetime.now() + timedelta(minutes=self.lock_minutes)).isoformat(timespec='seconds')
+                    clear_reset = failed >= RESET_CODE_MAX_ATTEMPTS or expired
+                    self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
+                                      (0 if locked else failed, locked,
+                                       '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
+                    self.conn.execute('COMMIT')
+                except AuthError:
+                    raise
+                except Exception:
+                    self.conn.execute('ROLLBACK')
+                    raise
+            self.log(u['display'], ip, 'reset-code-failed', username, f'Wrong or expired reset code (attempt {failed})')
             raise AuthError(generic)
         self.check_password(new_password, u['username'], u['full_name'])
         ts = now()
@@ -776,7 +828,8 @@ class Auth:
         self._write('Password reset', ip, 'Reset password of ' + username, [
             {'e': 'users', 'id': uid, 'op': 'update',
              's': {'pw_hash': hash_password(new_password), 'pw_pub': account_pub(new_password, uid), 'must_change': False,
-                   'pw_changed_at': ts, 'reset_hash': '', 'reset_expires': '', 'updated_at': ts, 'updated_by': 'Reset code'},
+                   'pw_changed_at': ts, 'reset_hash': '', 'reset_expires': '', 'failed': 0, 'locked_until': None,
+                   'updated_at': ts, 'updated_by': 'Reset code'},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}},
             {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}])
         self.log(u['display'], ip, 'password-reset-code', username, 'Password changed with administrator reset code')
@@ -786,6 +839,8 @@ class Auth:
         u = self.get(uid)
         if not u:
             raise AuthError('This user no longer exists.')
+        if (u.get('status') or 'approved') != 'approved':
+            raise AuthError('Reset codes are only for approved accounts. Approve the sign-up first.')
         if not self.node.is_authority:
             raise NotAuthority(self.authority_hint())
         plain = self._reset_code()
@@ -800,8 +855,15 @@ class Auth:
         if decision not in ('approve', 'reject', 'suspend'):
             raise AuthError('Unknown decision.')
         u = self.get(uid)
-        if not u or (u.get('status') or 'approved') != 'pending':
-            raise AuthError('This sign-up request is no longer waiting.')
+        if not u:
+            raise AuthError('This user no longer exists.')
+        st = u.get('status') or 'approved'
+        if decision == 'approve' and st not in ('pending', 'rejected', 'suspended'):
+            raise AuthError('This account cannot be approved from its current state.')
+        if decision == 'reject' and st != 'pending':
+            raise AuthError('Only a waiting sign-up can be refused.')
+        if decision == 'suspend' and st not in ('pending', 'approved'):
+            raise AuthError('This account cannot be suspended from its current state.')
         if not self.node.is_authority:
             raise NotAuthority(self.authority_hint())
         ts = now()
@@ -813,7 +875,7 @@ class Auth:
             use_perms = sorted({p for p in (perms or (prof['perms'] if prof else ['overview.view'])) if p in ALL})
             row = {'status': 'approved', 'status_reason': '', 'status_at': ts, 'status_by': actor['display'], 'active': True,
                    'role': role, 'perms': use_perms, 'scopes': scopes, 'request_code': '', 'updated_at': ts, 'updated_by': actor['display']}
-            ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': ['pending', 'approved'], 'active': [False, True]}},
+            ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'approved'], 'active': [bool(u['active']), True]}},
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
             label = 'Approve sign-up ' + u['username']
         elif decision == 'reject':
@@ -822,8 +884,9 @@ class Auth:
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
             label = 'Refuse sign-up ' + u['username']
         else:
-            row = {'status': 'suspended', 'status_reason': reason or 'Suspended by administrator', 'status_at': ts, 'status_by': actor['display'], 'active': False}
-            ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row},
+            row = {'status': 'suspended', 'status_reason': reason or 'Suspended by administrator', 'status_at': ts, 'status_by': actor['display'],
+                   'active': False, 'request_code': ''}
+            ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'suspended'], 'active': [bool(u['active']), False]}},
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
             label = 'Suspend ' + u['username']
         self._write(actor, ip, label, ops)
@@ -1044,7 +1107,13 @@ class Auth:
                     row.update({'pw_hash': hash_password(password), 'pw_pub': account_pub(password, uid), 'must_change': must_change,
                                 'pw_changed_at': ts, 'link_hash': '', 'link_nonce': '', 'link_at': '', 'link_by': ''})
                     extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout-link', 'user': uid}})
+                if active and (old.get('status') or 'approved') in ('pending', 'rejected', 'suspended'):
+                    row.update({'status': 'approved', 'status_reason': '', 'status_at': ts, 'status_by': actor['display'], 'request_code': ''})
+                elif not active and (old.get('status') or 'approved') == 'approved':
+                    row['status'] = 'approved'
                 changes = {f: [cur[f], row[f]] for f in cur if cur.get(f) != row.get(f)}
+                if 'status' in row and 'status' not in cur:
+                    changes['status'] = [(old.get('status') or 'approved'), row['status']]
                 if 'pw_hash' in row:
                     changes['pw_hash'] = ['', '']
                 res['old'] = old

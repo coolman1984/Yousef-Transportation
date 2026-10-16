@@ -95,7 +95,7 @@ def check_trip(row, before=None, today=None, trusted=False, window=True):
         if changed(f) and row[f] not in (None, ''):
             if domain.parse_dt(row[f]) is None:
                 raise BadRequest(f'{f}: write the time like 2026-10-12T08:30')
-    if (changed('startAt') or changed('endAt')) and row.get('startAt') and row.get('endAt'):
+    if (changed('startAt') or changed('endAt') or changed('startKm') or changed('endKm')) and row.get('startAt') and row.get('endAt'):
         a, b = domain.parse_dt(row['startAt']), domain.parse_dt(row['endAt'])
         if a and b and b < a:
             raise BadRequest('endAt: the end time cannot be before the start time')

@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Yousef QA v1.1.4 fixes + auth (YT-01..18) — v1.1.5 (2026-10-16)
+
+**What/why:** Branch `feat/auth-and-qa-fixes-1.1.5`: atomic login lockout, self-service sign-up with admin approve/reject and reset codes, licence page and activation UI on source builds, board cap and state `?version=` short-circuit, trip plausibility and passenger cap, i18n and UX items from report `/workspace/yousef-qa/report-v1.1.4.md`.
+**Checks:** `cd tests && python3 -m unittest` (listed modules incl. `test_yt_115`) — 451 run, OK, skipped=40. `cd gateway && node --test test/gateway.test.js` — 24 pass. `cd licence-hub && npm test` — 762 pass. No hub D1 migration (office-only auth fields replicate via journal).
+**Next:** Owner PR review; no push.
+
 ## Preserve saved licence hub on upgrade — review P2/P3 (2026-10-16)
 
 **What/why:** `fix/1.1.4-qa-findings`, source `3049a8b`, L1/L3 upgrade regression: the default merged at config load hid a licence hub URL saved in `assist.db`. Resolve it last in Assist instead: environment → explicit config → saved database setting → default. Preserve disabled settings; fresh installs still use the default. Updated setup guide, release notes and test map. Lesson: defaults must not masquerade as explicit settings.

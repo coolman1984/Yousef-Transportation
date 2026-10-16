@@ -74,7 +74,7 @@
           if (q.next_try) meta += '<div class="small muted">' + TO.esc(TO.t('lic.req.nextCheck', { when: whenText(q.next_try) })) + '</div>';
         }
         else if (q.error === 'recovery_unavailable') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.recoveryUnavailable'); }
-        else if (wait) { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.offline', { when: q.next_try || '' }); }
+        else if (wait) { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.offline', { when: whenText(q.next_try) }); }
         else if (q.status === 'failed') { cls = 'warn'; icon = 'alert'; text = TO.t('lic.req.codeBad'); }
         else if (q.status === 'refused') { cls = 'bad'; icon = 'x'; text = reasonText(q.reason); }
         else if (q.status === 'closed' && q.reason === 'manual') { cls = 'good'; icon = 'check'; text = TO.t('lic.req.closedManual'); }

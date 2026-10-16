@@ -167,6 +167,8 @@ class Assist:
 
     def licence_hub_url(self):
         env = (os.environ.get('FACTORY_LICENCE_HUB_URL') or '').strip().rstrip('/')
+        if env.casefold() == 'off':
+            return ''
         if env:
             return env if valid_hub_url(env) else ''
         if 'licence_hub_url' in self.cfg:

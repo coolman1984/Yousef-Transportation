@@ -32,6 +32,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn("'FACTORY_LICENCE_HUB_URL': hub", open(os.path.join(ROOT, 'tools', 'customer_release_check.py'), encoding='utf-8').read())
 
     def test_windows_smoke_does_not_contact_the_customer_licence_hub(self):
+        self.assertRegex(WORKFLOW, r"(?m)^env:\n  FACTORY_LICENCE_HUB_URL: 'off'$")
         smoke = next(line for line in WORKFLOW.splitlines() if '"port": 18080' in line)
         self.assertIn('"licence_hub_url": ""', smoke)
 

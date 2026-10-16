@@ -126,6 +126,8 @@ class ReviewFixes(unittest.TestCase):
     def test_licence_view_formats_dates_with_ui_dt(self):
         src = open(os.path.join(ROOT, 'js', 'views', 'licence.js'), encoding='utf-8').read()
         self.assertIn('TO.ui.dt(iso)', src)
+        self.assertIn("lic.req.offline', { when: whenText(q.next_try) }", src)
+        self.assertNotIn("{ when: q.next_try || '' }", src)
         self.assertNotIn('TO.fmt.dt', src)
 
     def test_activity_maps_real_audit_label_prefixes(self):
@@ -133,15 +135,20 @@ class ReviewFixes(unittest.TestCase):
         for needle in ('GA approved trip', 'GA declined trip', 'Restore backup of', 'Word import', 'act.entity.'):
             self.assertIn(needle, src)
         self.assertIn("act.label.driverLinkReplaced", src)
+        self.assertIn("gaApproved: 'f.ga'", src)
+        self.assertIn("act.label.releasedPhone", src)
         self.assertIn("label.slice(18)", src)
         self.assertNotIn("label.slice(19)", src)
+        ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
+        self.assertIn("'act.label.restoreBackupOf': 'استرجاع نسخة احتياطية من '", ar)
 
     def test_reviewed_arabic_wording_is_consistent(self):
         ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
         for needle in ('ساعة الجهاز اترجعت لورا', 'إيه اللي بيتبعت؟', 'مفيش مشاوير ولا أشخاص ولا مبالغ',
-                       "'act.label.driverLinkReplaced'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة'):
+                       "'act.label.driverLinkReplaced'", "'act.label.releasedPhone'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة',
+                       'النسخة دي مترخّصة', 'ابعت الرقم ده للشركة'):
             self.assertIn(needle, ar)
-        for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة'):
+        for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة', 'هذه النسخة مرخّصة', 'أرسل هذا الرقم'):
             self.assertNotIn(leftover, ar)
 
 
@@ -168,6 +175,21 @@ class N1_LicenceHubDefault(unittest.TestCase):
             self.assertTrue(ac.get('/api/licence')['request']['available'])
         finally:
             s.cleanup()
+
+    def test_off_environment_disables_configured_licence_hub_case_insensitively(self):
+        old = os.environ.get('FACTORY_LICENCE_HUB_URL')
+        os.environ['FACTORY_LICENCE_HUB_URL'] = ' OfF '
+        s = None
+        try:
+            s = Server('lic-env-off', extra_cfg={'licence_hub_url': 'https://hub.test'}).start()
+            self.assertFalse(make_authority(s).get('/api/licence')['request']['available'])
+        finally:
+            if s:
+                s.cleanup()
+            if old is None:
+                os.environ.pop('FACTORY_LICENCE_HUB_URL', None)
+            else:
+                os.environ['FACTORY_LICENCE_HUB_URL'] = old
 
 
 if __name__ == '__main__':

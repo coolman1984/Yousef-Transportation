@@ -491,6 +491,7 @@
     'act.label.driverLinkReplaced': 'Driver link replaced for trip {no}',
     'act.label.gaApprovedTrip': 'GA approved trip {no}',
     'act.label.gaDeclinedTrip': 'GA declined trip {no}',
+    'act.label.releasedPhone': 'Released the phone of trip {no}',
     'act.label.restoreDeleted': 'Restore deleted:',
     'act.label.restoreBackupOf': 'Restore backup of',
     'act.label.excelExport': 'Excel export',

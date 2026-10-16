@@ -76,7 +76,6 @@ DEFAULT_CONFIG = {
     'lockout_minutes': 15,
     'min_password_length': 8,
     'device_name': '',
-    'licence_hub_url': 'https://trip-orders-licence-hub.mflma2040.workers.dev',
     'sync_port': 8453,
     'sync_interval_seconds': 5,
     'peer_addresses': {},
@@ -98,6 +97,7 @@ TYPES = {'.js': 'text/javascript; charset=utf-8', '.css': 'text/css; charset=utf
 
 
 def load_config():
+    # Licence hub defaults are resolved by Assist after checking its saved database setting.
     cfg = dict(DEFAULT_CONFIG)
     if os.path.exists(CONFIG_PATH):
         with open(CONFIG_PATH, encoding='utf-8') as f:

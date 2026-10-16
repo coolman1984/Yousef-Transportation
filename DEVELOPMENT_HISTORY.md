@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Preserve saved licence hub on upgrade — review P2/P3 (2026-10-16)
+
+**What/why:** `fix/1.1.4-qa-findings`, source `3049a8b`, L1/L3 upgrade regression: the default merged at config load hid a licence hub URL saved in `assist.db`. Resolve it last in Assist instead: environment → explicit config → saved database setting → default. Preserve disabled settings; fresh installs still use the default. Updated setup guide, release notes and test map. Lesson: defaults must not masquerade as explicit settings.
+**Checks:** The two initial regression checks failed before the fix. `cd tests && python3 -m unittest test_qa_113.N1_LicenceHubPrecedence test_commercial_licence` — 74 tests passed, no skips, exit 0 (seven new precedence tests). The broader `cd tests && python3 -m unittest test_qa_113 test_assist test_commercial_licence` — 85 tests run, 11 errors, exit 1: the sandbox refuses socket creation (`PermissionError: Operation not permitted`), blocking local HTTP tests and class setup. Both runs used a temporary external-connection guard via `PYTHONPATH`; no external network used. Existing ResourceWarnings printed. `git diff --check` clean.
+**Next:** Re-run the HTTP suites where local sockets are allowed; Windows upgrade acceptance remains unverified. No commit, push, fetch or deployment.
+
 ## Activity search window, no-matches state, and narrow audit columns (2026-10-16)
 
 **What/why:** Review 8 on `fix/1.1.4-qa-findings` (from d16bdad). A miss inside the newest 1,000 rows hid the partial-results note and showed the empty-log text. That fetch still read every audit column, and a newer keystroke left the previous requests running.

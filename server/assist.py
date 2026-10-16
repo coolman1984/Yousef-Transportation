@@ -33,6 +33,7 @@ import atrest
 from version import DEVELOPER, VERSION
 
 PRODUCT_ID = 'trip-orders'
+DEFAULT_LICENCE_HUB_URL = 'https://trip-orders-licence-hub.mflma2040.workers.dev'
 _ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9_.:\-/]{0,79}$')
 _LONG = re.compile(r'\d{8,}')
 ROLES = ('administrator', 'dispatcher', 'ga-approver', 'reviewer', 'finance', 'viewer')
@@ -166,6 +167,7 @@ class Assist:
         return url if valid_hub_url(url) else ''
 
     def licence_hub_url(self):
+        """Explicit environment/config, then saved setting, then the fresh-install default."""
         env = (os.environ.get('FACTORY_LICENCE_HUB_URL') or '').strip().rstrip('/')
         if env.casefold() == 'off':
             return ''
@@ -174,7 +176,8 @@ class Assist:
         if 'licence_hub_url' in self.cfg:
             url = (self.cfg.get('licence_hub_url') or '').strip().rstrip('/')
             return url if valid_hub_url(url) else ''
-        url = (self.kv('licence_hub_url') or '').strip().rstrip('/')
+        saved = self.kv('licence_hub_url')
+        url = (saved if saved is not None else DEFAULT_LICENCE_HUB_URL).strip().rstrip('/')
         return url if valid_hub_url(url) else ''
 
     def hub_token(self):

@@ -4,9 +4,12 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 from harness import ApiError, Server, make_authority
+from assist import Assist
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -161,14 +164,84 @@ class ReviewFixes(unittest.TestCase):
             self.assertNotIn(leftover, ar)
 
 
-class N1_LicenceHubDefault(unittest.TestCase):
-    def test_default_config_includes_licence_hub_url(self):
-        tree = ast.parse(open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8').read())
-        default = next(ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG')
-        url = default['licence_hub_url']
-        self.assertTrue(url.startswith('https://'))
-        self.assertIn('workers.dev', url)
+class N1_LicenceHubPrecedence(unittest.TestCase):
+    DEFAULT_URL = 'https://trip-orders-licence-hub.mflma2040.workers.dev'
 
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.env = patch.dict(os.environ, {'FACTORY_LICENCE_HUB_URL': ''})
+        self.env.start()
+        self.addCleanup(self.env.stop)
+
+    def loaded_config(self, saved=None):
+        """Run the real loader without importing app.py (which starts the application)."""
+        path = os.path.join(self.tmp.name, 'config.json')
+        if saved is not None:
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(saved, f)
+        with open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8') as f:
+            tree = ast.parse(f.read())
+        nodes = [n for n in tree.body if
+                 (isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG') or
+                 (isinstance(n, ast.FunctionDef) and n.name == 'load_config')]
+        namespace = {'os': os, 'json': json, 'CONFIG_PATH': path}
+        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'app.py', 'exec'), namespace)
+        return namespace['load_config']()
+
+    def assist(self, cfg):
+        a = Assist(self.tmp.name, cfg, ROOT)
+        self.addCleanup(a.close)
+        return a
+
+    def test_fresh_install_gets_default_without_persisting_an_override(self):
+        cfg = self.loaded_config()
+        self.assertEqual(self.assist(cfg).licence_hub_url(), self.DEFAULT_URL)
+        with open(os.path.join(self.tmp.name, 'config.json'), encoding='utf-8') as f:
+            self.assertNotIn('licence_hub_url', json.load(f))
+
+    def test_saved_database_url_preserved_on_upgrade(self):
+        a = self.assist({})
+        a.kv('licence_hub_url', 'https://saved-hub.test/')
+        a.close()
+        a = self.assist(self.loaded_config({}))
+        self.assertEqual(a.licence_hub_url(), 'https://saved-hub.test')
+        self.assertEqual(a.kv('licence_hub_url'), 'https://saved-hub.test/')
+
+    def test_saved_database_url_preserved_when_config_is_recreated(self):
+        a = self.assist({})
+        a.kv('licence_hub_url', 'https://saved-hub.test')
+        a.close()
+        self.assertEqual(self.assist(self.loaded_config()).licence_hub_url(), 'https://saved-hub.test')
+
+    def test_legacy_config_without_saved_url_gets_default(self):
+        self.assertEqual(self.assist(self.loaded_config({})).licence_hub_url(), self.DEFAULT_URL)
+
+    def test_explicit_config_overrides_database_and_default(self):
+        for url in ('https://configured-hub.test/', '', 'off'):
+            with self.subTest(url=url):
+                a = self.assist(self.loaded_config({'licence_hub_url': url}))
+                a.kv('licence_hub_url', 'https://saved-hub.test')
+                self.assertEqual(a.licence_hub_url(), url.rstrip('/') if url.startswith('https://') else '')
+                a.close()
+
+    def test_environment_overrides_config_database_and_default(self):
+        a = self.assist(self.loaded_config({'licence_hub_url': 'https://configured-hub.test'}))
+        a.kv('licence_hub_url', 'https://saved-hub.test')
+        for url in ('https://environment-hub.test/', ' OfF '):
+            with self.subTest(url=url), patch.dict(os.environ, {'FACTORY_LICENCE_HUB_URL': url}):
+                self.assertEqual(a.licence_hub_url(), url.rstrip('/') if url.startswith('https://') else '')
+
+    def test_saved_database_disable_is_preserved(self):
+        for url in ('', 'off'):
+            with self.subTest(url=url):
+                a = self.assist(self.loaded_config({}))
+                a.kv('licence_hub_url', url)
+                self.assertEqual(a.licence_hub_url(), '')
+                a.close()
+
+
+class N1_LicenceHubDefault(unittest.TestCase):
     def test_empty_licence_hub_url_disables_online_request(self):
         s = Server('lic-off', extra_cfg={'licence_hub_url': ''}).start()
         try:

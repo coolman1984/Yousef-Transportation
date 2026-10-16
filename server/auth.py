@@ -778,13 +778,27 @@ class Auth:
         self.log(full_name + ' (' + username + ')', ip, 'signup-pending', username, f'Request code {code}')
         return {'ok': True, 'request_code': code}
 
-    def _replicate_clear_reset_code(self, uid, ip, username):
-        """Burn reset codes in the journal so fold/rebuild on another PC cannot revive them (Grok r4 P2)."""
+    def _replicate_clear_reset_code(self, uid, ip, username, reset_hash, conn=None):
+        """Burn reset codes in the journal so fold/rebuild on another PC cannot revive them (Grok r4 P2).
+        reset_hash binds the command to the code verified in this transaction; a later reissue is not cleared."""
         if not self.node or not self.node.is_authority:
-            return
-        self._write('Password reset', ip, 'Clear reset code for ' + username, [
-            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
-             's': {'cmd': 'clear-reset-code', 'user': uid}}])
+            return None
+        ops = [{'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': reset_hash}}]
+        if conn is not None:
+            with self.journal.lock:
+                rec = self.journal.build('admin', ops, actor='Password reset', actor_id='', ip=ip,
+                                         label='Clear reset code for ' + username, authority=True,
+                                         deps=replica.markers(conn))
+                before = len(self.folder.problems)
+                self.folder.fold(rec['env'], 'ok')
+                if len(self.folder.problems) != before:
+                    raise AuthError('This change could not be saved: ' + self.folder.problems[-1])
+                self.journal.append_local(rec)
+            self.journal._notify([rec])
+            return rec
+        self._write('Password reset', ip, 'Clear reset code for ' + username, ops)
+        return None
 
     def reset_with_code(self, username, code, new_password, ip):
         username = (username or '').strip()[:64]
@@ -798,7 +812,7 @@ class Auth:
             raise AuthError(generic)
         ok_code = False
         failed = 0
-        clear_replicate = False
+        clear_replicate_hash = None
         with self.lock:
             self.conn.execute('BEGIN IMMEDIATE')
             try:
@@ -824,7 +838,8 @@ class Auth:
                     if not sole and failed >= self.max_failed:
                         locked = (datetime.now() + timedelta(minutes=self.lock_minutes)).isoformat(timespec='seconds')
                     clear_reset = failed >= RESET_CODE_MAX_ATTEMPTS or expired
-                    clear_replicate = clear_reset
+                    if clear_reset:
+                        clear_replicate_hash = row['reset_hash']
                     rh, re = ('', '') if clear_reset else (row['reset_hash'], row['reset_expires'])
                     if sole:
                         self.conn.execute('UPDATE users SET failed=?, reset_hash=?, reset_expires=? WHERE id=?',
@@ -832,6 +847,8 @@ class Auth:
                     else:
                         self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
                                           (0 if locked else failed, locked, rh, re, u['id']))
+                    if clear_replicate_hash:
+                        self._replicate_clear_reset_code(u['id'], ip, username, clear_replicate_hash, conn=self.conn)
                     self.conn.execute('COMMIT')
             except AuthError:
                 raise
@@ -839,8 +856,6 @@ class Auth:
                 self.conn.execute('ROLLBACK')
                 raise
         if not ok_code:
-            if clear_replicate:
-                self._replicate_clear_reset_code(u['id'], ip, username)
             self.log(u['display'], ip, 'reset-code-failed', username, f'Wrong or expired reset code (attempt {failed})')
             raise AuthError(generic)
         self.check_password(new_password, u['username'], u['full_name'])
@@ -856,15 +871,17 @@ class Auth:
                 raise AuthError(generic)
             if not verify_password(code, row['reset_hash']):
                 raise AuthError(generic)
+            burned = row['reset_hash']
             c.execute('UPDATE users SET failed=0, locked_until=NULL, reset_hash=?, reset_expires=? WHERE id=?', ('', '', uid))
+            return [{'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                       's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': burned}}]
 
         self._write('Password reset', ip, 'Reset password of ' + username, [
             {'e': 'users', 'id': uid, 'op': 'update',
              's': {'pw_hash': new_hash, 'pw_pub': account_pub(new_password, uid), 'must_change': False,
                    'pw_changed_at': ts, 'updated_at': ts, 'updated_by': 'Reset code'},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}},
-            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}},
-            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'clear-reset-code', 'user': uid}}],
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}],
             check=check_ok)
         self.log(u['display'], ip, 'password-reset-code', username, 'Password changed with administrator reset code')
         return {'ok': True}
@@ -1371,7 +1388,13 @@ class UserFolder:
                 self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?',
                                   (s.get('reset_hash'), s.get('reset_expires'), s.get('user')))
             elif s.get('cmd') == 'clear-reset-code':
-                self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?', ('', '', s.get('user')))
+                uid = s.get('user')
+                bound = s.get('reset_hash')
+                if bound:
+                    cur = self.conn.execute('SELECT reset_hash FROM users WHERE id=?', (uid,)).fetchone()
+                    if not cur or cur['reset_hash'] != bound:
+                        return
+                self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?', ('', '', uid))
             elif s.get('cmd') == 'logout':
                 self.conn.execute('DELETE FROM sessions WHERE user_id=?', (s.get('user'),))
             elif s.get('cmd') == 'logout-link':  # the old personal link was replaced or switched off

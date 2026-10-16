@@ -30,8 +30,9 @@ def _fold_fresh_auth(data_dir):
     from store import REPLICATED
 
     auth_path = os.path.join(data_dir, 'auth.db')
-    if os.path.isfile(auth_path):
-        os.remove(auth_path)
+    for path in (auth_path, auth_path + '-wal', auth_path + '-shm'):
+        if os.path.isfile(path):
+            os.remove(path)
     node = Node(data_dir)
     journal = Journal(data_dir, node, REPLICATED, log=lambda *_a, **_k: None)
     a = auth.Auth(data_dir)
@@ -154,6 +155,9 @@ class YT115(unittest.TestCase):
         import auth as auth_mod
         try:
             a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('clr_ok',)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertFalse(row['reset_hash'])
             with self.assertRaises(auth_mod.AuthError):
                 a.reset_with_code('clr_ok', code, 'Another-pass99', '127.0.0.1')
             a.conn.close()
@@ -183,6 +187,9 @@ class YT115(unittest.TestCase):
         import auth as auth_mod
         try:
             a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('clr_bad',)).fetchone()
+            self.assertIsNotNone(row)
+            self.assertFalse(row['reset_hash'])
             with self.assertRaises(auth_mod.AuthError):
                 a.reset_with_code('clr_bad', burned_code, 'Fresh-pass42', '127.0.0.1')
             a.conn.close()
@@ -199,6 +206,14 @@ class YT115(unittest.TestCase):
                                          'perms': ['overview.view'], 'scopes': None})
             uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'reissue'][0]['id']
             ac.post('/api/users/reset-code', {'id': uid})
+            import sqlite3
+            auth_db = os.path.join(data_dir, 'auth.db')
+            con = sqlite3.connect(auth_db)
+            con.row_factory = sqlite3.Row
+            try:
+                stale_hash = con.execute('SELECT reset_hash FROM users WHERE id=?', (uid,)).fetchone()['reset_hash']
+            finally:
+                con.close()
             for _ in range(3):
                 try:
                     cl.post('/api/auth/reset', {'username': 'reissue', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
@@ -208,8 +223,22 @@ class YT115(unittest.TestCase):
         finally:
             S.kill()
         import auth as auth_mod
+        import uuid
+        from journal import Journal
+        from node import Node
+        from store import REPLICATED
+        node = Node(data_dir)
+        journal = Journal(data_dir, node, REPLICATED, log=lambda *_a, **_k: None)
+        writer = auth_mod.Auth(data_dir)
+        writer.attach(journal, node)
+        writer._write('test', '127.0.0.1', 'stale clear-reset-code', [
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+             's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': stale_hash}}])
+        writer.conn.close()
         try:
             a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('reissue',)).fetchone()
+            self.assertTrue(row['reset_hash'])
             a.reset_with_code('reissue', code2, 'Fresh-pass55', '127.0.0.1')
             row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('reissue',)).fetchone()
             self.assertFalse(row['reset_hash'])
@@ -268,6 +297,31 @@ class YT115(unittest.TestCase):
         with self.assertRaises(ApiError) as e:
             self.ac.post('/api/users/review', {'id': boss['id'], 'decision': 'suspend', 'reason': 'Test'})
         self.assertEqual(e.exception.data.get('key'), 'autherr.lastAdmin')
+
+    def test_YT115_suspend_journals_clear_reset_code(self):
+        S = Server('yt115susclr').start()
+        data_dir = S.data_dir
+        try:
+            ac = make_authority(S)
+            ac.post('/api/users/save', {'username': 'susclr', 'full_name': 'Sus Clr', 'password': 'Office-pass12', 'must_change': False,
+                                         'perms': ['overview.view'], 'scopes': None})
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'susclr'][0]['id']
+            burned = ac.post('/api/users/reset-code', {'id': uid})['code']
+            ac.post('/api/users/review', {'id': uid, 'decision': 'suspend', 'reason': 'Policy test'})
+            bindings = _journal_clear_reset_bindings(data_dir)
+            self.assertTrue(bindings)
+        finally:
+            S.kill()
+        import auth as auth_mod
+        try:
+            a = _fold_fresh_auth(data_dir)
+            row = a.conn.execute('SELECT reset_hash FROM users WHERE username=?', ('susclr',)).fetchone()
+            self.assertFalse(row['reset_hash'])
+            with self.assertRaises(auth_mod.AuthError):
+                a.reset_with_code('susclr', burned, 'Fresh-pass42', '127.0.0.1')
+            a.conn.close()
+        finally:
+            S.cleanup()
 
     def test_YT03_suspend_approved_user(self):
         self.ac.post('/api/users/save', {'username': 'suspendme', 'full_name': 'Suspend Me', 'password': 'Office-pass12', 'must_change': False,

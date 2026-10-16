@@ -819,6 +819,7 @@ class Auth:
         failed = 0
         clear_replicate_hash = None
         burn_journal = None
+        notify_rec = None
         with self.lock:
             self.conn.execute('BEGIN IMMEDIATE')
             try:
@@ -857,7 +858,7 @@ class Auth:
                         burn_journal = self._replicate_clear_reset_code(u['id'], ip, username, clear_replicate_hash, conn=self.conn)
                     self.conn.execute('COMMIT')
                     if burn_journal and burn_journal.get('rec'):
-                        self.journal._notify([burn_journal['rec']])
+                        notify_rec = burn_journal['rec']
             except AuthError:
                 try:
                     self.conn.execute('ROLLBACK')
@@ -875,6 +876,8 @@ class Auth:
                     except Exception as e:  # noqa: BLE001
                         self.journal.alert('fold', f'A saved account change could not be applied yet ({e}).', '', 'warning')
                 raise
+        if notify_rec:
+            self.journal._notify([notify_rec])
         if not ok_code:
             self.log(u['display'], ip, 'reset-code-failed', username, f'Wrong or expired reset code (attempt {failed})')
             raise AuthError(generic)
@@ -957,18 +960,12 @@ class Auth:
             row = {'status': 'rejected', 'status_reason': reason, 'status_at': ts, 'status_by': actor['display'], 'active': False, 'request_code': ''}
             ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row},
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
-            if u.get('reset_hash'):
-                ops.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
-                            's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': u['reset_hash']}})
             label = 'Refuse sign-up ' + u['username']
         else:
             row = {'status': 'suspended', 'status_reason': reason or 'Suspended by administrator', 'status_at': ts, 'status_by': actor['display'],
                    'active': False, 'request_code': ''}
             ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'suspended'], 'active': [bool(u['active']), False]}},
                    {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}]
-            if u.get('reset_hash'):
-                ops.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
-                            's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': u['reset_hash']}})
             label = 'Suspend ' + u['username']
 
         def check(c):
@@ -977,7 +974,14 @@ class Auth:
                     raise AuthError('At least one active user must keep the right to manage users.')
             elif decision in ('reject', 'suspend') and self._loses_last_admin(c, uid, False):
                 raise AuthError('At least one active user must keep the right to manage users.')
-            return None
+            extra = []
+            if decision in ('reject', 'suspend'):
+                cur = c.execute('SELECT reset_hash FROM users WHERE id=?', (uid,)).fetchone()
+                bound = (cur['reset_hash'] or '') if cur else ''
+                if bound:
+                    extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                                  's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': bound}})
+            return extra or None
 
         self._write(actor, ip, label, ops, check=check)
         self.log(actor['display'], ip, 'signup-' + decision, u['display'], reason or decision)

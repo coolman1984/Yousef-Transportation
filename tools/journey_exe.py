@@ -87,17 +87,46 @@ def put(entity, rid, **row):
     return {'e': entity, 'id': rid, 'op': 'put', 'row': row}
 
 
+def _test_signing_pem():
+    key_file = os.environ.get('TO_TEST_SIGNING_KEY_FILE')
+    if not key_file:
+        return None
+    from cryptography.hazmat.primitives import serialization
+    with open(key_file, 'rb') as source:
+        key = serialization.load_pem_private_key(source.read(), password=None)
+    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
+
+
+def _activate_enforced_legacy(app, pem):
+    import afcodes
+    lic = app.call('GET', '/api/licence')
+    if not lic.get('enforced') or lic.get('full'):
+        return False
+    if not pem:
+        raise SystemExit('enforced N-1 legacy needs TO_TEST_SIGNING_KEY_FILE (CI fixture build)')
+    code = afcodes.issue_code(pem, 'trip-orders', 'standard', date.today(), 30, lic['device'], 3)['code']
+    assert app.call('POST', '/api/licence/activate', {'code': code})['full']
+    return True
+
+
 def legacy(home, cmd):
-    """The same journey on the PREVIOUS release (N-1), which has no licence: administrator, lists, a trip, a backup. `after` then runs on the new one."""
+    """The same journey on the PREVIOUS release (N-1). Contract releases need no licence; enforced releases
+    use a CI-only throwaway studio key (never the vendor private key). `after` then runs on the new build."""
     os.makedirs(home, exist_ok=True)
+    pem = _test_signing_pem()
     proc, app = start(cmd, home, {})
     try:
         app.call('POST', '/api/auth/setup', {'username': ADMIN, 'full_name': 'Journey', 'password': PASSWORD})
-        app.call('POST', '/api/commit', {'label': 'lists', 'ops': [put('tripCategories', 'jc1', name='Manager car', exportSheet='All'), put('vehicles', 'jv1', plate='JRN 123', plateKey='jrn123', active=True),
-                                                                   put('drivers', 'jd1', name='Journey Driver', active=True), put('people', 'jp1', name='Journey Rider', isRequester=True, isPassenger=True)]})
+        lists = [put('tripCategories', 'jc1', name='Manager car', exportSheet='All'), put('vehicles', 'jv1', plate='JRN 123', plateKey='jrn123', active=True),
+                 put('drivers', 'jd1', name='Journey Driver', active=True), put('people', 'jp1', name='Journey Rider', isRequester=True, isPassenger=True)]
+        legacy_enforced = _activate_enforced_legacy(app, pem)
+        app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists})
         trip = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'Journey Factory'})
         backup = app.call('POST', '/api/backups', {})['name']
-        json.dump({'legacy': True, 'trip': trip['id'], 'no': trip['no'], 'backup': backup}, open(os.path.join(home, 'journey.json'), 'w'))
+        state = {'legacy': True, 'trip': trip['id'], 'no': trip['no'], 'backup': backup}
+        if legacy_enforced:
+            state['legacy_enforced'] = True
+        json.dump(state, open(os.path.join(home, 'journey.json'), 'w'))
         print(f"OK legacy: previous release set up, trip {trip['no']}, backup {backup}")
     finally:
         proc.kill()
@@ -148,7 +177,7 @@ def after(home, cmd):
         app.call('POST', '/api/auth/login', {'username': ADMIN, 'password': PASSWORD})
         lic = app.call('GET', '/api/licence')
         if state.get('legacy'):
-            if lic['enforced']:
+            if lic['enforced'] or state.get('legacy_enforced'):
                 # Upgrading a historical no-key install must preserve all data,
                 # but must NOT silently grandfather an unlicensed customer.
                 assert not lic['full'], 'commercial upgrade bypassed the licence: ' + str(lic)

@@ -155,8 +155,7 @@ T, J, B = 'text', 'json', 'bool'
 USER_FIELDS = [('username', T), ('full_name', T), ('title', T), ('pw_hash', T), ('pw_pub', T), ('perms', J), ('scopes', J), ('role', T),
                ('active', B), ('deleted', B), ('must_change', B), ('pw_changed_at', T), ('notes', T), ('created_at', T),
                ('created_by', T), ('updated_at', T), ('updated_by', T), ('link_hash', T), ('link_nonce', T), ('link_at', T), ('link_by', T), ('login', T),
-               ('status', T), ('status_reason', T), ('status_at', T), ('status_by', T), ('request_code', T), ('reset_hash', T), ('reset_expires', T),
-               ('failed', T), ('locked_until', T)]
+               ('status', T), ('status_reason', T), ('status_at', T), ('status_by', T), ('request_code', T)]
 USER_STATUSES = ('pending', 'approved', 'rejected', 'suspended')
 RESET_CODE_HOURS = 24
 RESET_CODE_MAX_ATTEMPTS = 3
@@ -748,8 +747,7 @@ class Auth:
             row = {'full_name': full_name, 'title': (title or '')[:80], 'pw_hash': h, 'pw_pub': account_pub(password, uid),
                    'perms': [], 'scopes': None, 'role': 'Custom', 'active': False, 'must_change': False, 'pw_changed_at': ts,
                    'status': 'pending', 'status_reason': '', 'status_at': ts, 'status_by': 'Self sign-up', 'request_code': code,
-                   'notes': (notes or '')[:500], 'updated_at': ts, 'updated_by': 'Self sign-up', 'failed': 0, 'locked_until': None,
-                   'reset_hash': '', 'reset_expires': ''}
+                   'notes': (notes or '')[:500], 'updated_at': ts, 'updated_by': 'Self sign-up'}
 
             def check(c):
                 if c.execute("SELECT COUNT(*) FROM users WHERE deleted=0 AND status='pending'").fetchone()[0] >= MAX_PENDING_SIGNUPS:
@@ -757,6 +755,7 @@ class Auth:
                 cur = c.execute('SELECT status FROM users WHERE id=? AND deleted=0', (uid,)).fetchone()
                 if not cur or (cur['status'] or 'approved') != 'rejected':
                     raise AuthError('This sign-up request is no longer waiting.')
+                c.execute('UPDATE users SET failed=0, locked_until=NULL, reset_hash=?, reset_expires=? WHERE id=?', ('', '', uid))
                 return [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'pending']}}]
             self._write('Self sign-up', ip, f'Sign-up request {username}', [], check=check)
             self.log(full_name + ' (' + username + ')', ip, 'signup-pending', username, f'Re-request code {code}')
@@ -829,13 +828,25 @@ class Auth:
         self.check_password(new_password, u['username'], u['full_name'])
         ts = now()
         uid = u['id']
+        new_hash = hash_password(new_password)
+
+        def check_ok(c):
+            row = c.execute('SELECT reset_hash, reset_expires FROM users WHERE id=?', (uid,)).fetchone()
+            if not row or not row['reset_hash'] or not row['reset_expires']:
+                raise AuthError(generic)
+            if _parse(row['reset_expires']) < datetime.now():
+                raise AuthError(generic)
+            if not verify_password(code, row['reset_hash']):
+                raise AuthError(generic)
+            c.execute('UPDATE users SET failed=0, locked_until=NULL, reset_hash=?, reset_expires=? WHERE id=?', ('', '', uid))
+
         self._write('Password reset', ip, 'Reset password of ' + username, [
             {'e': 'users', 'id': uid, 'op': 'update',
-             's': {'pw_hash': hash_password(new_password), 'pw_pub': account_pub(new_password, uid), 'must_change': False,
-                   'pw_changed_at': ts, 'reset_hash': '', 'reset_expires': '', 'failed': '0', 'locked_until': '',
-                   'updated_at': ts, 'updated_by': 'Reset code'},
+             's': {'pw_hash': new_hash, 'pw_pub': account_pub(new_password, uid), 'must_change': False,
+                   'pw_changed_at': ts, 'updated_at': ts, 'updated_by': 'Reset code'},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}},
-            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}])
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}],
+            check=check_ok)
         self.log(u['display'], ip, 'password-reset-code', username, 'Password changed with administrator reset code')
         return {'ok': True}
 
@@ -850,8 +861,11 @@ class Auth:
         plain = self._reset_code()
         exp = (datetime.now() + timedelta(hours=RESET_CODE_HOURS)).isoformat(timespec='seconds')
         ts = now()
+        h = hash_password(plain)
         self._write(actor, ip, 'Issue reset code for ' + u['username'], [
-            {'e': 'users', 'id': uid, 'op': 'update', 's': {'reset_hash': hash_password(plain), 'reset_expires': exp, 'updated_at': ts, 'updated_by': actor['display']}}])
+            {'e': 'users', 'id': uid, 'op': 'update', 's': {'updated_at': ts, 'updated_by': actor['display']}},
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+             's': {'cmd': 'set-reset-code', 'user': uid, 'reset_hash': h, 'reset_expires': exp}}])
         self.log(actor['display'], ip, 'reset-code-issued', u['display'], f'Valid {RESET_CODE_HOURS} hours')
         return {'code': plain, 'expires': exp}
 
@@ -1334,6 +1348,9 @@ class UserFolder:
             s = op.get('s') or {}
             if s.get('cmd') == 'unlock':
                 self.conn.execute('UPDATE users SET failed=0, locked_until=NULL WHERE id=?', (s.get('user'),))
+            elif s.get('cmd') == 'set-reset-code':
+                self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?',
+                                  (s.get('reset_hash'), s.get('reset_expires'), s.get('user')))
             elif s.get('cmd') == 'logout':
                 self.conn.execute('DELETE FROM sessions WHERE user_id=?', (s.get('user'),))
             elif s.get('cmd') == 'logout-link':  # the old personal link was replaced or switched off

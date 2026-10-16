@@ -778,6 +778,14 @@ class Auth:
         self.log(full_name + ' (' + username + ')', ip, 'signup-pending', username, f'Request code {code}')
         return {'ok': True, 'request_code': code}
 
+    def _replicate_clear_reset_code(self, uid, ip, username):
+        """Burn reset codes in the journal so fold/rebuild on another PC cannot revive them (Grok r4 P2)."""
+        if not self.node or not self.node.is_authority:
+            return
+        self._write('Password reset', ip, 'Clear reset code for ' + username, [
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+             's': {'cmd': 'clear-reset-code', 'user': uid}}])
+
     def reset_with_code(self, username, code, new_password, ip):
         username = (username or '').strip()[:64]
         code = self._normalize_reset_code(code)
@@ -788,41 +796,51 @@ class Auth:
         if not u or (u.get('status') or 'approved') != 'approved':
             verify_password(code or 'x', _DUMMY)
             raise AuthError(generic)
-        if not u.get('reset_hash') or not u.get('reset_expires'):
-            verify_password(code or 'x', _DUMMY)
-            raise AuthError(generic)
-        expired = _parse(u['reset_expires']) < datetime.now()
-        ok_code = not expired and verify_password(code, u['reset_hash'])
-        if not ok_code:
-            verify_password(code or 'x', _DUMMY) if expired else None
-            with self.lock:
-                self.conn.execute('BEGIN IMMEDIATE')
-                try:
-                    row = self.conn.execute('SELECT failed, locked_until, reset_hash, reset_expires FROM users WHERE id=?', (u['id'],)).fetchone()
-                    if row['locked_until'] and _parse(row['locked_until']) > datetime.now():
-                        self.conn.execute('ROLLBACK')
-                        mins = max(1, round((_parse(row['locked_until']) - datetime.now()).total_seconds() / 60))
-                        raise AuthError(f'This account is locked for {mins} more minute(s) after too many wrong passwords. '
-                                        'Wait, or ask the administrator to unlock it.')
+        ok_code = False
+        failed = 0
+        clear_replicate = False
+        with self.lock:
+            self.conn.execute('BEGIN IMMEDIATE')
+            try:
+                row = self.conn.execute('SELECT failed, locked_until, reset_hash, reset_expires FROM users WHERE id=?', (u['id'],)).fetchone()
+                if not row or not row['reset_hash'] or not row['reset_expires']:
+                    verify_password(code or 'x', _DUMMY)
+                    self.conn.execute('ROLLBACK')
+                    raise AuthError(generic)
+                if row['locked_until'] and _parse(row['locked_until']) > datetime.now():
+                    self.conn.execute('ROLLBACK')
+                    mins = max(1, round((_parse(row['locked_until']) - datetime.now()).total_seconds() / 60))
+                    raise AuthError(f'This account is locked for {mins} more minute(s) after too many wrong passwords. '
+                                    'Wait, or ask the administrator to unlock it.')
+                expired = _parse(row['reset_expires']) < datetime.now()
+                ok_code = not expired and verify_password(code, row['reset_hash'])
+                if ok_code:
+                    self.conn.execute('ROLLBACK')
+                else:
+                    verify_password(code or 'x', _DUMMY) if expired else None
                     failed = int(row['failed'] or 0) + 1
                     sole = self._sole_admin_id(self.conn) == u['id'] and 'users.manage' in u['perms']
                     locked = None
                     if not sole and failed >= self.max_failed:
                         locked = (datetime.now() + timedelta(minutes=self.lock_minutes)).isoformat(timespec='seconds')
                     clear_reset = failed >= RESET_CODE_MAX_ATTEMPTS or expired
+                    clear_replicate = clear_reset
+                    rh, re = ('', '') if clear_reset else (row['reset_hash'], row['reset_expires'])
                     if sole:
                         self.conn.execute('UPDATE users SET failed=?, reset_hash=?, reset_expires=? WHERE id=?',
-                                          (failed, '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
+                                          (failed, rh, re, u['id']))
                     else:
                         self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
-                                          (0 if locked else failed, locked,
-                                           '' if clear_reset else row['reset_hash'], '' if clear_reset else row['reset_expires'], u['id']))
+                                          (0 if locked else failed, locked, rh, re, u['id']))
                     self.conn.execute('COMMIT')
-                except AuthError:
-                    raise
-                except Exception:
-                    self.conn.execute('ROLLBACK')
-                    raise
+            except AuthError:
+                raise
+            except Exception:
+                self.conn.execute('ROLLBACK')
+                raise
+        if not ok_code:
+            if clear_replicate:
+                self._replicate_clear_reset_code(u['id'], ip, username)
             self.log(u['display'], ip, 'reset-code-failed', username, f'Wrong or expired reset code (attempt {failed})')
             raise AuthError(generic)
         self.check_password(new_password, u['username'], u['full_name'])
@@ -845,7 +863,8 @@ class Auth:
              's': {'pw_hash': new_hash, 'pw_pub': account_pub(new_password, uid), 'must_change': False,
                    'pw_changed_at': ts, 'updated_at': ts, 'updated_by': 'Reset code'},
              'c': {'pw_hash': ['', ''], 'must_change': [bool(u['must_change']), False]}},
-            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}}],
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'logout', 'user': uid}},
+            {'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True, 's': {'cmd': 'clear-reset-code', 'user': uid}}],
             check=check_ok)
         self.log(u['display'], ip, 'password-reset-code', username, 'Password changed with administrator reset code')
         return {'ok': True}
@@ -1351,6 +1370,8 @@ class UserFolder:
             elif s.get('cmd') == 'set-reset-code':
                 self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?',
                                   (s.get('reset_hash'), s.get('reset_expires'), s.get('user')))
+            elif s.get('cmd') == 'clear-reset-code':
+                self.conn.execute('UPDATE users SET reset_hash=?, reset_expires=? WHERE id=?', ('', '', s.get('user')))
             elif s.get('cmd') == 'logout':
                 self.conn.execute('DELETE FROM sessions WHERE user_id=?', (s.get('user'),))
             elif s.get('cmd') == 'logout-link':  # the old personal link was replaced or switched off

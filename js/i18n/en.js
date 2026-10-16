@@ -503,6 +503,8 @@
     'act.label.restoredBackup': 'Restored backup',
     'act.label.excelImport': 'Excel import',
     'act.label.wordImport': 'Word import',
+    'act.label.excelImportWithCount': 'Excel import{detail} ({n} trips)',
+    'act.label.wordImportWithCount': 'Word import{detail} ({n} trips)',
     'act.entity.trips': 'trips',
     'act.op.insert': 'add',
     'act.op.update': 'change',

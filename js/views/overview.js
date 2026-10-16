@@ -15,7 +15,7 @@
   function stepReady(k, facts, settings, tripCount) {
     facts = facts || {};
     switch (k) {
-      case 1: return !!(String((settings && settings.systemName) || '').trim());
+      case 1: return true; // Organisation editing is not shipped yet; the setup spec allows this step to start ready.
       case 2: return !!facts.categoriesAdded;
       case 3: return !!(facts.vehiclesAdded && facts.driversAdded);
       case 4: return !!(facts.peopleAdded && facts.placesAdded);

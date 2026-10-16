@@ -3,6 +3,10 @@
 
 # Next (not released yet)
 
+# Trip Orders 1.1.4
+
+- **QA fixes:** the setup checklist, Arabic activity log/search, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.
+
 # Trip Orders 1.1.3
 
 - **Paid licence expiry:** when a licence hub is configured, its calendar day is checked every six hours even if the PC date freezes. After the paid period and grace end, editing stops; reading, exports and backups remain available. Earlier server dates and network failures do not move the effective day backward.

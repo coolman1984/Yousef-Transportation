@@ -126,7 +126,10 @@ class ReviewFixes(unittest.TestCase):
     def test_licence_view_formats_dates_with_ui_dt(self):
         src = open(os.path.join(ROOT, 'js', 'views', 'licence.js'), encoding='utf-8').read()
         self.assertIn('TO.ui.dt(iso)', src)
-        self.assertIn("lic.req.offline', { when: whenText(q.next_try) }", src)
+        self.assertIn("safeWhenMessage('lic.req.offline', q.next_try)", src)
+        self.assertIn("return TO.esc(iso)", src)
+        self.assertIn("'<bdi dir=\"ltr\">' + whenText(iso)", src)
+        self.assertIn("'<bdi dir=\"ltr\">'", src)
         self.assertNotIn("{ when: q.next_try || '' }", src)
         self.assertNotIn('TO.fmt.dt', src)
 

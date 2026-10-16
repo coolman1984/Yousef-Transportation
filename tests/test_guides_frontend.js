@@ -79,6 +79,7 @@ test('overview checklist tags exist and step readiness follows guide facts', () 
   assert.ok(TO.t('ov.todo.tag') && TO.t('ov.done.tag'));
   assert.equal(typeof TO.overviewStepReady, 'function');
   const facts = { categoriesAdded: true, vehiclesAdded: true, driversAdded: true, peopleAdded: false, placesAdded: true, myImport: false, mailboxReady: false };
+  assert.equal(TO.overviewStepReady(1, facts, {}, 0), true);
   assert.equal(TO.overviewStepReady(2, facts, {}, 0), true);
   assert.equal(TO.overviewStepReady(4, facts, {}, 0), false);
   assert.equal(TO.overviewStepReady(5, facts, {}, 3), true);
@@ -92,4 +93,17 @@ test('a failed facts fetch after a change of person never shows the previous per
   TO.me = { id: 'b', perms: [] };
   TO.get = () => Promise.reject(new Error('offline'));
   assert.equal(Object.keys(await TO.guides.loadFacts()).length, 0);
+});
+
+test('activity labels search and render the displayed Arabic safely', () => {
+  const TO = startup('ar');
+  const row = { label: 'Closed trip 26-A-00001', entity: 'trips', op: 'update', user: 'u', node_name: 'PC', ts: '2026-10-16T09:30:00Z' };
+  assert.equal(TO.activityMatches(row, 'قفل مشوار'), true);
+  assert.equal(TO.activityMatches(row, 'missing'), false);
+  assert.match(TO.auditLabel('Driver link 26-A-00001: start, end', false), /عداد البداية.*عداد النهاية/);
+  assert.match(TO.auditLabel('Driver photo start_odo for 26-A-00001', false), /عداد البداية/);
+  assert.match(TO.auditLabel('Excel import sheet.xlsx (3 trips)', false), /3 مشاوير/);
+  const html = TO.auditLabel('New trip 26-A-00001<img src=x>', true);
+  assert.match(html, /<bdi dir="ltr">26-A-00001&lt;img src=x&gt;<\/bdi>/);
+  assert.ok(!html.includes('<img src=x>'));
 });

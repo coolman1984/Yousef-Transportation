@@ -503,6 +503,8 @@
     'act.label.restoredBackup': 'استرجاع نسخة احتياطية',
     'act.label.excelImport': 'استيراد إكسل',
     'act.label.wordImport': 'استيراد وورد',
+    'act.label.excelImportWithCount': 'استيراد إكسل{detail} ({n} مشاوير)',
+    'act.label.wordImportWithCount': 'استيراد وورد{detail} ({n} مشاوير)',
     'act.entity.trips': 'المشاوير',
     'act.op.insert': 'إضافة',
     'act.op.update': 'تعديل',

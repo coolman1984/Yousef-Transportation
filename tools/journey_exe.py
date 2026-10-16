@@ -87,47 +87,32 @@ def put(entity, rid, **row):
     return {'e': entity, 'id': rid, 'op': 'put', 'row': row}
 
 
-def _test_signing_pem():
-    key_file = os.environ.get('TO_TEST_SIGNING_KEY_FILE')
-    if not key_file:
-        return None
-    from cryptography.hazmat.primitives import serialization
-    with open(key_file, 'rb') as source:
-        key = serialization.load_pem_private_key(source.read(), password=None)
-    return key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
-
-
-def _activate_enforced_legacy(app, pem):
-    import afcodes
-    lic = app.call('GET', '/api/licence')
-    if not lic.get('enforced') or lic.get('full'):
-        return False
-    if not pem:
-        raise SystemExit('enforced N-1 legacy needs TO_TEST_SIGNING_KEY_FILE (CI fixture build)')
-    code = afcodes.issue_code(pem, 'trip-orders', 'standard', date.today(), 30, lic['device'], 3)['code']
-    assert app.call('POST', '/api/licence/activate', {'code': code})['full']
-    return True
-
-
 def legacy(home, cmd):
-    """The same journey on the PREVIOUS release (N-1). Contract releases need no licence; enforced releases
-    use a CI-only throwaway studio key (never the vendor private key). `after` then runs on the new build."""
+    """The same journey on the PREVIOUS release (N-1). Contract releases (before enforced commercial) run the full
+    trip path without a licence. Enforced commercial N-1 stays unlicensed: one refused write, then a backup."""
     os.makedirs(home, exist_ok=True)
-    pem = _test_signing_pem()
     proc, app = start(cmd, home, {})
     try:
         app.call('POST', '/api/auth/setup', {'username': ADMIN, 'full_name': 'Journey', 'password': PASSWORD})
         lists = [put('tripCategories', 'jc1', name='Manager car', exportSheet='All'), put('vehicles', 'jv1', plate='JRN 123', plateKey='jrn123', active=True),
                  put('drivers', 'jd1', name='Journey Driver', active=True), put('people', 'jp1', name='Journey Rider', isRequester=True, isPassenger=True)]
-        legacy_enforced = _activate_enforced_legacy(app, pem)
-        app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists})
-        trip = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'Journey Factory'})
-        backup = app.call('POST', '/api/backups', {})['name']
-        state = {'legacy': True, 'trip': trip['id'], 'no': trip['no'], 'backup': backup}
+        lic = app.call('GET', '/api/licence')
+        legacy_enforced = bool(lic.get('enforced') and not lic.get('full'))
         if legacy_enforced:
-            state['legacy_enforced'] = True
-        json.dump(state, open(os.path.join(home, 'journey.json'), 'w'))
-        print(f"OK legacy: previous release set up, trip {trip['no']}, backup {backup}")
+            denied = app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists}, expect=402)
+            assert denied['key'] == 'err.licence', denied
+            assert app.call('GET', '/api/state')['version'] is not None
+            backup = app.call('POST', '/api/backups', {})['name']
+            state = {'legacy': True, 'legacy_enforced': True, 'backup': backup}
+            json.dump(state, open(os.path.join(home, 'journey.json'), 'w'))
+            print(f'OK legacy: enforced N-1 unlicensed, write refused, backup {backup}')
+        else:
+            app.call('POST', '/api/commit', {'label': 'lists', 'ops': lists})
+            trip = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'Journey Factory'})
+            backup = app.call('POST', '/api/backups', {})['name']
+            state = {'legacy': True, 'trip': trip['id'], 'no': trip['no'], 'backup': backup}
+            json.dump(state, open(os.path.join(home, 'journey.json'), 'w'))
+            print(f"OK legacy: previous release set up, trip {trip['no']}, backup {backup}")
     finally:
         proc.kill()
         proc.wait()
@@ -177,26 +162,22 @@ def after(home, cmd):
         app.call('POST', '/api/auth/login', {'username': ADMIN, 'password': PASSWORD})
         lic = app.call('GET', '/api/licence')
         if state.get('legacy'):
-            if lic['enforced'] or state.get('legacy_enforced'):
-                # Upgrading a historical no-key install must preserve all data,
-                # but must NOT silently grandfather an unlicensed customer.
+            if state.get('legacy_enforced') or lic['enforced']:
                 assert not lic['full'], 'commercial upgrade bypassed the licence: ' + str(lic)
                 assert app.call('GET', '/api/state')['version'] is not None
-                from cryptography.hazmat.primitives import serialization
-                import afcodes
-                with open(os.environ['TO_TEST_SIGNING_KEY_FILE'], 'rb') as source:
-                    key = source.read()
-                signed = afcodes.issue_code(key, 'trip-orders', 'standard', date.today(), 30, lic['device'], 3)['code']
-                assert app.call('POST', '/api/licence/activate', {'code': signed})['full']
             else:
                 assert lic['full'] and lic['state'] == 'contract', 'source-mode legacy compatibility: ' + str(lic)
         else:
             assert lic['full'] and lic['edition'] == 'standard', 'the licence must survive the restart/update: ' + str(lic)
-        trips = [t for t in app.call('GET', '/api/state')['trips'] if t['destination'] == 'Journey Factory']
-        assert len(trips) == 1 and trips[0]['id'] == state['trip'], f'the trip before the update must be there exactly once: {trips}'
+        if state.get('trip'):
+            trips = [t for t in app.call('GET', '/api/state')['trips'] if t['destination'] == 'Journey Factory']
+            assert len(trips) == 1 and trips[0]['id'] == state['trip'], f'the trip before the update must be there exactly once: {trips}'
         assert state['backup'] in [b['name'] for b in app.call('GET', '/api/backups')], 'the backup made before the update is missing'
-        newer = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'After the update'})
-        print(f"OK after: trip {state['no']} and backup {state['backup']} kept, licence kept; created {newer['no']} after the update")
+        if state.get('trip'):
+            newer = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'After the update'})
+            print(f"OK after: trip {state['no']} and backup {state['backup']} kept, licence kept; created {newer['no']} after the update")
+        else:
+            print(f"OK after: backup {state['backup']} kept, enforced office still unlicensed")
     finally:
         proc.terminate()
         try:

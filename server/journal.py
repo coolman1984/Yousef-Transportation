@@ -83,6 +83,57 @@ class HLC:
         return True
 
 
+# The activity screen may ask for this list only. changes, before, after and ip stay off it.
+AUDIT_LIST_COLUMNS = ('id', 'ts', 'user', 'node', 'label', 'entity', 'op', 'entity_id')
+_AUDIT_LIST_COLUMN_SET = frozenset(AUDIT_LIST_COLUMNS)
+
+
+def _refuse_log_columns():
+    from store import BadRequest
+    raise BadRequest('The request could not be understood.', 'err.badRequest')
+
+
+def audit_list_columns(raw):
+    """A non-empty subset of AUDIT_LIST_COLUMNS. Duplicates and anything else are refused."""
+    if raw is None:
+        _refuse_log_columns()
+    if isinstance(raw, (list, tuple)):
+        parts = [str(part).strip() for part in raw]
+    else:
+        parts = [part.strip() for part in str(raw).split(',')]
+    if not parts or any(part == '' for part in parts):
+        _refuse_log_columns()
+    seen = set()
+    names = []
+    for name in parts:
+        if name not in _AUDIT_LIST_COLUMN_SET or name in seen:
+            _refuse_log_columns()
+        seen.add(name)
+        names.append(name)
+    return tuple(names)
+
+
+def log_list_columns(qs):
+    """None keeps the full row. `fields` and `columns` are the same narrow list."""
+    if not qs:
+        return None
+    has_fields = 'fields' in qs
+    has_columns = 'columns' in qs
+    if not has_fields and not has_columns:
+        return None
+    fields = qs.get('fields') if has_fields else None
+    columns = qs.get('columns') if has_columns else None
+    if has_fields and has_columns and (fields or '') != (columns or ''):
+        _refuse_log_columns()
+    return audit_list_columns(fields if has_fields else columns)
+
+
+def _quoted_audit_columns(table, columns):
+    if table != 'audit':
+        _refuse_log_columns()
+    return ', '.join('"' + name + '"' for name in audit_list_columns(columns))
+
+
 class Journal:
     def __init__(self, data_dir, node, business=(), log=None):
         self.path = os.path.join(data_dir, 'journal.db')
@@ -757,7 +808,8 @@ class Journal:
         return out
 
     # ------------------------------------------------------------ log queries (monitoring)
-    def query(self, table, q='', user='', typ='', scope='', frm='', to='', node='', limit=200, offset=0, scopes=None, business_only=False):
+    def query(self, table, q='', user='', typ='', scope='', frm='', to='', node='', limit=200, offset=0, scopes=None, business_only=False, columns=None):
+        # Search stays on the full stored text. `columns` only narrows the rows that are sent back.
         cols = {'audit': ['label', 'entity', 'entity_id', 'changes', 'before', 'after'], 'activity': ['action', 'target', 'page', 'detail'],
                 'security': ['target', 'detail', 'user']}[table]
         where, args = [], []
@@ -782,14 +834,18 @@ class Journal:
         if to:
             where.append('ts<=?'); args.append(to + 'T23:59:59')
         w = ('WHERE ' + ' AND '.join(where)) if where else ''
+        selected = '*' if columns is None else _quoted_audit_columns(table, columns)
         with self.lock:
             names = {r['id']: r['name'] for r in self.conn.execute('SELECT id, name FROM nodes')}
             total = self.conn.execute(f'SELECT COUNT(*) FROM {table} {w}', args).fetchone()[0]
-            rows = [dict(r) for r in self.conn.execute(f'SELECT * FROM {table} {w} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?',
+            rows = [dict(r) for r in self.conn.execute(f'SELECT {selected} FROM {table} {w} ORDER BY ts DESC, id DESC LIMIT ? OFFSET ?',
                                                        (*args, int(limit), int(offset)))]
             users = [r[0] for r in self.conn.execute(f'SELECT DISTINCT user FROM {table} ORDER BY user')]
-        for r in rows:
-            r['node_name'] = names.get(r['node'], r['node'])
+        # A column list is exact. node_name is added only on the default full row.
+        if columns is None:
+            for r in rows:
+                if 'node' in r:
+                    r['node_name'] = names.get(r['node'], r['node'])
         return {'total': total, 'rows': rows, 'users': users, 'nodes': [{'id': k, 'name': v} for k, v in names.items()]}
 
     def sync_log(self, peer, event, detail):

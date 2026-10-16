@@ -6,6 +6,7 @@
 # Trip Orders 1.1.4
 
 - **QA fixes:** the setup checklist, whole-journal stored-text activity search plus clearly marked translated-label matching over the newest 1,000 activities, trip-number and licence-time direction, closed-trip protection, licence requests, and printed Word trip details now display and behave correctly.
+- **Activity search:** a search with no matches says so. If the log is longer than 1,000 rows, the note about that newest window stays visible even when nothing in it matches.
 
 # Trip Orders 1.1.3
 

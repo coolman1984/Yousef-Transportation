@@ -43,6 +43,7 @@ import netpolicy  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
+from journal import log_list_columns  # noqa: E402
 from store import BadRequest, Conflict, now  # noqa: E402
 from sync import SyncService  # noqa: E402
 from system import System, lock_data  # noqa: E402
@@ -857,10 +858,12 @@ class Handler(BaseHTTPRequestHandler):
             if p == '/api/activity':
                 self.need_admin()  # what other people clicked is forensic data: administrators only
             node = qs.get('node', '') if is_admin(self.u) else ''
+            # keep_blank_values so `fields=` is a refused empty list, not a silent full row
+            listed = {k: v[0] for k, v in parse_qs(url.query, keep_blank_values=True).items() if k in ('fields', 'columns')}
             return self.send(200, STORE.query_log('audit' if p == '/api/audit' else 'activity', qs.get('q', ''), qs.get('user', ''),
                                                   qs.get('type', ''), qs.get('scope', ''), qs.get('from', ''), qs.get('to', ''),
                                                   max(1, min(1000, int(qs.get('limit', 200)))), max(0, int(qs.get('offset', 0))), self.u['scopes'], node,
-                                                  admin=is_admin(self.u)))
+                                                  admin=is_admin(self.u), columns=log_list_columns(listed)))
         if p == '/api/security':
             self.need('logs.security')
             self.need_admin()

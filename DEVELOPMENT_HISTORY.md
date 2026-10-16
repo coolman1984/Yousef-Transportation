@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Activity search window, no-matches state, and narrow audit columns (2026-10-16)
+
+**What/why:** Review 8 on `fix/1.1.4-qa-findings` (from d16bdad). A miss inside the newest 1,000 rows hid the partial-results note and showed the empty-log text. That fetch still read every audit column, and a newer keystroke left the previous requests running.
+**Fix:** The note shows when `total` is greater than the rows returned, including zero hits. A search with no rows uses its own English and simple formal Arabic empty state. The 1,000-row fetch asks only for `id,ts,user,node,label,entity,op,entity_id`. That response has exactly those keys: it does not add `node_name`. A request with no column list still returns the full row, including `node_name`. The screen reads the PC name from the `nodes` list. Search, permissions and the count are unchanged. Both requests share an AbortController; a changed or cleared search ignores late results and errors.
+**Checks:** `cd tests && python3 -m unittest test_qa_113 test_e2e_browser test_unit` — 75 tests, OK, exit 0, 19 skips. Eighteen are every `test_e2e_browser` test: Python `playwright` is not installed and `/opt/pw-browsers/chromium` is missing, so the suite reports `Playwright or Chromium not available` and does not launch a browser. One is `test_unit.ToolsTest.test_rebuild_refuses_while_database_is_open` (Windows-only file lock). System Chrome 154 is installed; these tests do not use it, and Playwright was not installed. `cd gateway && node --test test/gateway.test.js` — 24 pass, 0 fail, 0 skipped, exit 0. `node --test tests/test_guides_frontend.js` — 15 pass, 0 fail, 0 skipped, exit 0. ResourceWarnings printed; they did not fail the run. Other test modules were not in these commands. `git diff --check` is clean.
+**Next:** No commit yet.
+
 ## Trial grants ledger PR A — review round 8 (2026-10-15)
 
 **What/why:** `trialGrantStatements` is async and uses the same device↔machine closure and earliest-window logic as `resolveTrial` (50-query budget, `link_limit`); propagate fills every closure subject missing a row with that window; guard fails only when the requested window differs from closure earliest; probes A/B + resolve→retry convergence tests.

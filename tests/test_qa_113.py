@@ -201,5 +201,111 @@ class N1_LicenceHubDefault(unittest.TestCase):
                 os.environ['FACTORY_LICENCE_HUB_URL'] = old
 
 
+class ActivityAuditColumnsHttpTest(unittest.TestCase):
+    """The audit route keeps permissions, search and the full row unless a whitelist column list is asked for."""
+
+    FIELDS = 'id,ts,user,node,label,entity,op,entity_id'
+    MARKER = 'XQ-DEST-77'
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('audit-cols').start()
+        cls.ac = make_authority(cls.S)
+        cls.ac.post('/api/commit', {'label': 'lists', 'ops': [
+            put('tripCategories', 'c1', name='Cars', exportSheet='All Car'),
+            put('vehicles', 'v1', plate='ABC 123', active=True)]})
+        cls.ac.post('/api/trips/new', {'categoryId': 'c1', 'vehicleId': 'v1', 'destination': cls.MARKER})
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def login_as(self, name, perms, scopes=None):
+        self.ac.post('/api/users/save', {'username': name, 'full_name': name, 'password': 'Perm-test-77x', 'must_change': False,
+                                         'role': 'Custom', 'perms': perms, 'scopes': scopes})
+        client = self.S.client()
+        client.login(name, 'Perm-test-77x')
+        return client
+
+    def assert_hidden(self, payload):
+        if self.MARKER in json.dumps(payload, ensure_ascii=False):
+            raise AssertionError('projected audit response included a hidden column')
+
+    def assert_kept(self, payload):
+        if self.MARKER not in json.dumps(payload, ensure_ascii=False):
+            raise AssertionError('stored-text search missed a hidden column')
+
+    def test_projection_default_search_and_whitelist(self):
+        fields = '/api/audit?limit=20&fields=' + self.FIELDS
+        projected = self.ac.get(fields)
+        full = self.ac.get('/api/audit?limit=20')
+        self.assertGreater(full['total'], 1)
+        self.assertEqual(projected['total'], full['total'])
+        self.assertEqual(len(projected['rows']), len(full['rows']))
+        allowed = set(self.FIELDS.split(','))
+        self.assertTrue(projected['rows'])
+        for row in projected['rows']:
+            self.assertEqual(set(row), allowed)
+        self.assertIn('changes', full['rows'][0])
+        self.assertIn('ip', full['rows'][0])
+        self.assertIn('node_name', full['rows'][0])
+        self.assertNotIn('node_name', projected['rows'][0])
+        self.assert_hidden(projected)
+        found = self.ac.get('/api/audit?limit=50&q=' + self.MARKER + '&fields=' + self.FIELDS)
+        stored = self.ac.get('/api/audit?limit=50&q=' + self.MARKER)
+        self.assertGreaterEqual(stored['total'], 1)
+        self.assertEqual(found['total'], stored['total'])
+        self.assert_hidden(found)
+        self.assert_kept(stored)
+        one = self.ac.get('/api/audit?limit=1&fields=' + self.FIELDS)
+        self.assertEqual(len(one['rows']), 1)
+        self.assertGreater(one['total'], 1)
+        self.assertEqual(self.ac.get('/api/audit?limit=1')['total'], one['total'])
+        via_columns = self.ac.get('/api/audit?limit=20&columns=' + self.FIELDS)
+        self.assertEqual(via_columns['total'], projected['total'])
+        self.assert_hidden(via_columns)
+        both = self.ac.get('/api/audit?limit=5&fields=id,label&columns=id,label')
+        self.assertEqual(set(both['rows'][0]), {'id', 'label'})
+        spaced = self.ac.get('/api/audit?limit=5&fields=' + 'id,%20ts,%20user,%20node,%20label,%20entity,%20op,%20entity_id')
+        self.assertEqual(set(spaced['rows'][0]), set(self.FIELDS.split(',')))
+        activity = self.ac.get('/api/activity?limit=5')
+        self.assertIn('rows', activity)
+        self.assertIn('total', activity)
+        for path in ('/api/audit?fields=before', '/api/audit?fields=id,changes', '/api/audit?fields=',
+                     '/api/audit?columns=ip', '/api/audit?fields=id&columns=label', '/api/audit?fields=id%3Bdrop',
+                     '/api/activity?fields=id', '/api/activity?columns=detail'):
+            try:
+                self.ac.get(path)
+            except ApiError as caught:
+                self.assertEqual(caught.code, 400, path)
+                self.assertEqual((caught.data or {}).get('key'), 'err.badRequest', path)
+                low = str(caught.msg).lower()
+                for leak in ('traceback', 'sqlite', 'operationalerror', 'before', 'changes', 'drop'):
+                    self.assertNotIn(leak, low, path)
+            else:
+                self.fail('column list was accepted: ' + path)
+
+    def test_permissions_still_gate_a_column_list(self):
+        blocked = self.login_as('ada.view', ['overview.view'])
+        for path in ('/api/audit?limit=5', '/api/audit?limit=5&fields=' + self.FIELDS, '/api/audit?fields=before'):
+            with self.assertRaises(ApiError) as caught:
+                blocked.get(path)
+            self.assertEqual(caught.exception.code, 403, path)
+        logs = self.login_as('lee.logs', ['logs.view'])
+        admin = self.ac.get('/api/audit?limit=1000&fields=' + self.FIELDS)
+        narrowed = logs.get('/api/audit?limit=1000&fields=' + self.FIELDS)
+        self.assertGreater(admin['total'], narrowed['total'])
+        self.assertGreater(narrowed['total'], 0)
+        self.assertTrue(all(row.get('entity') not in ('users', 'nodes', 'userCommands', 'profiles') for row in narrowed['rows']))
+        self.assertTrue(any(row.get('entity') == 'users' for row in admin['rows']))
+        self.assertEqual(logs.get('/api/audit?limit=1000')['total'], narrowed['total'])
+        self.assertTrue(narrowed['rows'])
+        self.assertTrue(all(set(row) == set(self.FIELDS.split(',')) for row in narrowed['rows']))
+        self.assert_hidden(narrowed)
+        scoped = self.login_as('sam.scope', ['logs.view'], scopes=['missing-cat'])
+        self.assertEqual(scoped.get('/api/audit?limit=1000&fields=' + self.FIELDS)['total'], 0)
+        self.assertEqual(scoped.get('/api/audit?limit=1000')['total'], 0)
+
+
 if __name__ == '__main__':
     unittest.main()

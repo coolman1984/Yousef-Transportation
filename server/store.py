@@ -568,11 +568,11 @@ class Store:
     def log_activity(self, user, ip, events):
         self.journal.log_activity(user, ip, events[:500])
 
-    def query_log(self, kind, q='', user='', typ='', scope='', frm='', to='', limit=200, offset=0, scopes=None, node='', admin=True):
+    def query_log(self, kind, q='', user='', typ='', scope='', frm='', to='', limit=200, offset=0, scopes=None, node='', admin=True, columns=None):
         if kind == 'activity':
             self.journal.flush_activity()
         return self.journal.query('audit' if kind == 'audit' else 'activity', q, user, typ, scope, frm, to, node, limit, offset, scopes,
-                                  business_only=not admin)
+                                  business_only=not admin, columns=columns)
 
     # ------------------------------------------------------------ conflicts and convergence
     def conflicts(self):

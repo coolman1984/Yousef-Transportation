@@ -103,23 +103,54 @@
       return byTime || Number(b.id) - Number(a.id);
     });
   }
-  function searchRows(needle) {
-    needle = String(needle || '').trim();
-    var url = '/api/audit?limit=200' + (needle ? '&q=' + encodeURIComponent(needle) : '');
-    if (!needle) return TO.get(url).then(function (r) {
-      return { rows: newestUnique(r.rows || []), translatedUsed: false };
+  var RECENT_FIELDS = 'id,ts,user,node,label,entity,op,entity_id';
+  // The narrow fetch does not include node_name. The names list is the PC display name.
+  function withPcNames(rows, nodes) {
+    var names = Object.create(null);
+    (nodes || []).forEach(function (n) {
+      if (n && n.id != null && n.id !== '') names[n.id] = n.name || n.id;
     });
-    return Promise.all([TO.get(url), TO.get('/api/audit?limit=1000')]).then(function (results) {
+    return (rows || []).map(function (row) {
+      if (!row || row.node_name || row.node == null || row.node === '') return row;
+      var copy = {};
+      Object.keys(row).forEach(function (key) { copy[key] = row[key]; });
+      copy.node_name = Object.prototype.hasOwnProperty.call(names, row.node) ? names[row.node] : row.node;
+      return copy;
+    });
+  }
+  function windowTruncated(payload) {
+    var rows = (payload && payload.rows) || [];
+    var total = Number(payload && payload.total);
+    return Number.isFinite(total) && total > rows.length;
+  }
+  function searchRows(needle, signal) {
+    needle = String(needle || '').trim();
+    var opts = signal ? { signal: signal } : undefined;
+    var url = '/api/audit?limit=200' + (needle ? '&q=' + encodeURIComponent(needle) : '');
+    if (!needle) return TO.get(url, opts).then(function (r) {
+      return { rows: newestUnique(r.rows || []), truncated: false, searching: false };
+    });
+    // The newest 1,000 rows, and only the columns this screen matches. The server refuses any other column.
+    return Promise.all([
+      TO.get(url, opts),
+      TO.get('/api/audit?limit=1000&fields=' + RECENT_FIELDS, opts)
+    ]).then(function (results) {
       var serverRows = results[0].rows || [];
-      var translatedRows = (results[1].rows || []).filter(function (row) { return matches(row, needle); });
+      var recent = results[1] || {};
+      var recentRows = withPcNames(recent.rows || [], recent.nodes);
+      var translatedRows = recentRows.filter(function (row) { return matches(row, needle); });
       return {
         rows: newestUnique(serverRows.concat(translatedRows)),
-        translatedUsed: translatedRows.length > 0
+        truncated: windowTruncated(recent),
+        searching: true
       };
     });
   }
-  function rowsHTML(rows) {
-    if (!rows.length) return U.empty('activity', TO.t('act.none.t'), TO.t('act.none.b'));
+  function rowsHTML(rows, searching) {
+    if (!rows.length) {
+      if (searching) return U.empty('search', TO.t('act.none.search.t'), TO.t('act.none.search.b'));
+      return U.empty('activity', TO.t('act.none.t'), TO.t('act.none.b'));
+    }
     return U.table([
       { h: 'f.time', cell: function (r) { return '<span class="num"><bdi dir="ltr">' + U.dt(r.ts) + '</bdi></span>'; } },
       { h: 'f.user', cell: function (r) { return TO.esc(r.user || ''); } },
@@ -134,18 +165,19 @@
     },
     mount: function (root) {
       var body = root.querySelector('[data-body]'), input = root.querySelector('[data-q]');
-      var note = root.querySelector('[data-search-note]'), loadSeq = 0;
+      var note = root.querySelector('[data-search-note]'), loadSeq = 0, inflight = null;
       function load() {
         var mine = ++loadSeq;
-        searchRows(q).then(function (result) {
+        if (inflight) inflight.abort();
+        inflight = new AbortController();
+        searchRows(q, inflight.signal).then(function (result) {
           if (mine !== loadSeq) return;
-          note.hidden = !result.translatedUsed;
-          body.innerHTML = rowsHTML(result.rows);
+          note.hidden = !result.truncated;
+          body.innerHTML = rowsHTML(result.rows, result.searching);
         }, function (e) {
-          if (mine === loadSeq) {
-            note.hidden = true;
-            body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e));
-          }
+          if (mine !== loadSeq || (e && e.name === 'AbortError')) return;
+          note.hidden = true;
+          body.innerHTML = U.empty('lock', TO.t('common.error'), U.errorText(e));
         });
       }
       input.value = q;

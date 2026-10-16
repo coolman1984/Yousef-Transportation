@@ -2,7 +2,7 @@
 // Guides, problems and learning paths are complete in both languages and point at real things (run by test_guide_gate.py).
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
-const { startup } = require('./guide_loader.js');
+const { startup, contextOf } = require('./guide_loader.js');
 
 test('every guide and problem is complete in both languages and names real buttons', () => {
   for (const lang of ['ar', 'en']) {
@@ -118,6 +118,8 @@ test('English activity labels use English punctuation and keep the restore prefi
   assert.equal(TO.auditLabel('Restore backup of 2026-10-16 09:30', false), 'Restore backup of 2026-10-16 09:30');
 });
 
+const RECENT_AUDIT = '/api/audit?limit=1000&fields=id,ts,user,node,label,entity,op,entity_id';
+
 test('activity search merges stored text with one recent translated-label fetch', async () => {
   const TO = startup('ar');
   const calls = [];
@@ -126,7 +128,7 @@ test('activity search merges stored text with one recent translated-label fetch'
     if (url.includes('&q=')) {
       return Promise.resolve({ rows: [{ id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' }] });
     }
-    return Promise.resolve({ rows: [
+    return Promise.resolve({ total: 3, rows: [
       { id: 'dup', label: 'Closed trip 26-A-00003', ts: '2026-10-16T09:00:00Z' },
       { id: '9', label: 'Closed trip 26-A-00001', ts: '2026-10-17T09:00:00Z' },
       { id: '10', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
@@ -136,11 +138,15 @@ test('activity search merges stored text with one recent translated-label fetch'
   assert.equal(calls[0], '/api/audit?limit=200&q=' + encodeURIComponent('قفل مشوار'));
   assert.deepEqual(calls, [
     '/api/audit?limit=200&q=' + encodeURIComponent('قفل مشوار'),
-    '/api/audit?limit=1000'
+    RECENT_AUDIT
   ]);
   assert.deepEqual(Array.from(result.rows, (r) => r.id), ['10', '9', 'dup']);
-  assert.equal(result.translatedUsed, true);
+  assert.equal(result.truncated, false);
+  assert.equal(result.searching, true);
   assert.match(TO.t('act.search.recentNote'), /1000/);
+  assert.equal(TO.t('act.none.search.t'), 'لا يوجد نشاط مطابق');
+  assert.equal(TO.t('act.none.search.b'), 'جرّب كلمات أخرى.');
+  assert.ok(!/مفيش|لسه|إمتى/.test(TO.t('act.none.search.t') + TO.t('act.none.search.b')));
 
   calls.length = 0;
   TO.get = (url) => {
@@ -148,12 +154,12 @@ test('activity search merges stored text with one recent translated-label fetch'
     if (url.includes('&q=')) return Promise.resolve({ rows: [
       { id: 'ancient', label: 'payload match', ts: '2020-01-01T00:00:00Z' }
     ] });
-    return Promise.resolve({ rows: [] });
+    return Promise.resolve({ total: 0, rows: [] });
   };
   const stored = await TO.activitySearch('payload match');
   assert.equal(stored.rows[0].id, 'ancient');
-  assert.equal(stored.translatedUsed, false);
-  assert.deepEqual(calls, ['/api/audit?limit=200&q=payload%20match', '/api/audit?limit=1000']);
+  assert.equal(stored.truncated, false);
+  assert.deepEqual(calls, ['/api/audit?limit=200&q=payload%20match', RECENT_AUDIT]);
 
   const EN = startup('en');
   const fallbackCalls = [];
@@ -162,26 +168,54 @@ test('activity search merges stored text with one recent translated-label fetch'
     if (url.includes('&q=')) return Promise.resolve({ rows: [
       { id: 'stored', label: 'Unrelated translated phrase in stored text', ts: '2026-10-16T09:00:00Z' }
     ] });
-    return Promise.resolve({ rows: [
+    return Promise.resolve({ total: 1, rows: [
       { id: 'translated', label: 'Driver link for trip 26-A-00004 replaced', ts: '2026-10-15T09:00:00Z' }
     ] });
   };
   const english = await EN.activitySearch('Driver link replaced for trip');
   assert.deepEqual(Array.from(english.rows, (r) => r.id), ['stored', 'translated']);
-  assert.equal(english.translatedUsed, true);
+  assert.equal(english.truncated, false);
+  assert.equal(EN.t('act.none.search.t'), 'No matching activity');
   assert.deepEqual(fallbackCalls, [
     '/api/audit?limit=200&q=Driver%20link%20replaced%20for%20trip',
-    '/api/audit?limit=1000'
+    RECENT_AUDIT
   ]);
 
   let recentFetches = 0;
-  EN.get = (url) => {
+  EN.get = (url, opts) => {
     if (url.includes('&q=')) return Promise.resolve({ rows: [] });
     recentFetches += 1;
+    assert.equal(url, RECENT_AUDIT);
+    assert.ok(!/changes|before|after|\bip\b|user_id/.test(url));
+    assert.equal(opts, undefined);
     return Promise.resolve({ total: 20000, rows: [{ id: 'recent', label: 'No match', ts: '' }] });
   };
-  await EN.activitySearch('translated phrase');
+  const missed = await EN.activitySearch('translated phrase');
   assert.equal(recentFetches, 1, 'translated labels use one bounded request');
+  assert.equal(missed.rows.length, 0);
+  assert.equal(missed.truncated, true);
+});
+
+test('a projected recent row takes its PC name from the nodes list', async () => {
+  const TO = startup('en');
+  const projected = { id: '4', node: 'pc-1', label: 'Closed trip 26-A-00004', entity: 'trips', op: 'update', user: 'clerk', ts: '2026-10-16T09:00:00Z' };
+  TO.get = (url) => {
+    if (url.includes('&q=')) return Promise.resolve({ rows: [] });
+    return Promise.resolve({
+      total: 1,
+      nodes: [{ id: 'pc-1', name: 'Office PC' }],
+      rows: [projected]
+    });
+  };
+  const found = await TO.activitySearch('Office PC');
+  assert.equal(found.rows.length, 1);
+  assert.equal(found.rows[0].node_name, 'Office PC');
+  assert.equal(Object.prototype.hasOwnProperty.call(projected, 'node_name'), false);
+  const ui = mountActivity(TO);
+  ui.input.value = 'Office PC';
+  ui.input.onInput();
+  await wait(300);
+  assert.match(ui.body.innerHTML, /Office PC/);
 });
 
 test('activity ignores an older response after the search changes', async () => {
@@ -192,7 +226,7 @@ test('activity ignores an older response after the search changes', async () => 
       return new Promise((resolve) => { resolveInitial = resolve; });
     }
     if (url.includes('&q=')) return Promise.resolve({ rows: [] });
-    return Promise.resolve({ rows: [
+    return Promise.resolve({ total: 1001, rows: [
       { id: '2', label: 'Closed trip 26-A-00002', ts: '2026-10-17T09:00:00Z' }
     ] });
   };
@@ -223,4 +257,179 @@ test('activity ignores an older response after the search changes', async () => 
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.match(body.innerHTML, /26-A-00002/);
   assert.ok(!body.innerHTML.includes('26-A-00001'));
+});
+
+function mountActivity(TO) {
+  const body = { innerHTML: '' };
+  const note = { hidden: true };
+  const input = { value: '', addEventListener: (name, fn) => { input.onInput = fn; } };
+  const root = {
+    querySelector: (selector) => ({
+      '[data-body]': body,
+      '[data-q]': input,
+      '[data-search-note]': note
+    })[selector]
+  };
+  TO.views.activity.mount(root);
+  return { body, note, input };
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+test('a search with no matches is not the empty log, even when the newest window is truncated', async () => {
+  const ar = startup('ar');
+  ar.get = (url) => {
+    if (url.includes('&q=')) return Promise.resolve({ rows: [], total: 0 });
+    return Promise.resolve({ total: 1001, rows: [
+      { id: '9', label: 'New trip 26-A-00009', ts: '2026-10-17T09:00:00Z', user: 'clerk', node_name: 'Office', entity: 'trips', op: 'update' }
+    ] });
+  };
+  const ui = mountActivity(ar);
+  ui.input.value = 'قفل مشوار';
+  ui.input.onInput();
+  await wait(300);
+  assert.equal(ui.note.hidden, false);
+  assert.ok(ui.body.innerHTML.includes(ar.t('act.none.search.t')));
+  assert.ok(ui.body.innerHTML.includes(ar.t('act.none.search.b')));
+  assert.ok(!ui.body.innerHTML.includes(ar.t('act.none.t')));
+
+  const en = startup('en');
+  en.get = (url) => {
+    if (url === '/api/audit?limit=200') return Promise.resolve({ rows: [], total: 0 });
+    if (url.includes('&q=')) return Promise.resolve({ rows: [], total: 0 });
+    return Promise.resolve({ total: 2, rows: [
+      { id: '1', label: 'Other', ts: '2026-10-16T09:00:00Z' },
+      { id: '2', label: 'Also other', ts: '2026-10-16T10:00:00Z' }
+    ] });
+  };
+  const complete = mountActivity(en);
+  complete.input.value = 'missing words';
+  complete.input.onInput();
+  await wait(300);
+  assert.equal(complete.note.hidden, true, 'a complete window does not show the partial note');
+  assert.ok(complete.body.innerHTML.includes(en.t('act.none.search.t')));
+  assert.ok(!complete.body.innerHTML.includes(en.t('act.none.t')));
+
+  const empty = startup('en');
+  empty.get = () => Promise.resolve({ rows: [], total: 0 });
+  const blank = mountActivity(empty);
+  await wait(0);
+  assert.equal(blank.note.hidden, true);
+  assert.ok(blank.body.innerHTML.includes(empty.t('act.none.t')));
+  assert.ok(blank.body.innerHTML.includes(empty.t('act.none.b')));
+  assert.ok(!blank.body.innerHTML.includes(empty.t('act.none.search.t')));
+});
+
+test('activity cancels both searches and ignores a stale error, including when the search is cleared', async () => {
+  const TO = startup('ar');
+  const requests = [];
+  TO.get = (url, opts) => new Promise((resolve, reject) => {
+    requests.push({ url, signal: opts && opts.signal, resolve, reject });
+  });
+  const ui = mountActivity(TO);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url, '/api/audit?limit=200');
+  assert.ok(requests[0].signal);
+
+  ui.input.value = 'قفل مشوار';
+  ui.input.onInput();
+  await wait(300);
+  assert.equal(requests[0].signal.aborted, true);
+  assert.equal(requests.length, 3);
+  assert.equal(requests[1].signal, requests[2].signal);
+  assert.ok(requests[1].url.includes('&q='));
+  assert.equal(requests[2].url, RECENT_AUDIT);
+
+  requests[0].reject(new Error('stale failure'));
+  await wait(0);
+  assert.equal(ui.body.innerHTML, '');
+  assert.equal(ui.note.hidden, true);
+
+  ui.input.value = 'other';
+  ui.input.onInput();
+  await wait(300);
+  assert.equal(requests[1].signal.aborted, true);
+  assert.equal(requests.length, 5);
+  assert.equal(requests[3].signal, requests[4].signal);
+  assert.notEqual(requests[3].signal, requests[1].signal);
+  requests[1].reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+  requests[2].reject(new Error('stale window'));
+  await wait(0);
+  assert.equal(ui.body.innerHTML, '');
+
+  requests[3].resolve({ rows: [], total: 0 });
+  requests[4].resolve({ total: 1001, rows: [] });
+  await wait(0);
+  assert.equal(ui.note.hidden, false);
+  assert.ok(ui.body.innerHTML.includes(TO.t('act.none.search.t')));
+  assert.ok(!ui.body.innerHTML.includes(TO.t('common.error')));
+
+  ui.input.value = 'again';
+  ui.input.onInput();
+  await wait(300);
+  assert.equal(requests.length, 7);
+  ui.input.value = '';
+  ui.input.onInput();
+  await wait(300);
+  assert.equal(requests[5].signal.aborted, true);
+  assert.equal(requests.length, 8);
+  assert.equal(requests[7].url, '/api/audit?limit=200');
+  requests[5].reject(new Error('stale search'));
+  requests[6].reject(new Error('stale window'));
+  await wait(0);
+  assert.ok(ui.body.innerHTML.includes(TO.t('act.none.search.t')));
+  assert.ok(!ui.body.innerHTML.includes(TO.t('common.error')));
+  requests[7].resolve({ rows: [], total: 0 });
+  await wait(0);
+  assert.equal(ui.note.hidden, true);
+  assert.ok(ui.body.innerHTML.includes(TO.t('act.none.t')));
+  assert.ok(!ui.body.innerHTML.includes(TO.t('act.none.search.t')));
+});
+
+test('a current search error still shows', async () => {
+  const TO = startup('en');
+  const requests = [];
+  TO.get = (url, opts) => new Promise((resolve, reject) => {
+    requests.push({ url, signal: opts && opts.signal, resolve, reject });
+  });
+  const ui = mountActivity(TO);
+  requests[0].reject(new Error('offline'));
+  await wait(0);
+  assert.ok(ui.body.innerHTML.includes(TO.t('common.error')));
+  assert.equal(ui.note.hidden, true);
+  assert.ok(requests[0].signal);
+});
+
+test('GET passes the abort signal through and does not turn a cancel into an offline error', async () => {
+  const TO = startup('en');
+  const ctx = contextOf(TO);
+  const seen = [];
+  ctx.fetchImpl = (url, init) => {
+    seen.push({ url, method: init && init.method, signal: init && init.signal, body: init && init.body, credentials: init && init.credentials });
+    if (init && init.signal && init.signal.aborted) {
+      return Promise.reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+    }
+    if (url.endsWith('/offline')) return Promise.reject(new TypeError('failed'));
+    return Promise.resolve({
+      ok: true,
+      headers: { get: () => 'application/json' },
+      json: () => Promise.resolve({ total: 2, rows: [{ id: 1 }] })
+    });
+  };
+  const ctrl = new AbortController();
+  const data = await TO.get('/api/audit?limit=1', { signal: ctrl.signal });
+  assert.equal(data.total, 2);
+  assert.equal(seen[0].url, '/api/audit?limit=1');
+  assert.equal(seen[0].method, 'GET');
+  assert.equal(seen[0].body, undefined);
+  assert.equal(seen[0].credentials, 'same-origin');
+  assert.equal(seen[0].signal, ctrl.signal);
+  ctrl.abort();
+  await assert.rejects(TO.get('/api/audit?limit=1', { signal: ctrl.signal }), (err) => err && err.name === 'AbortError' && !(err instanceof TO.ApiError));
+  await assert.rejects(TO.get('/offline'), (err) => err instanceof TO.ApiError && err.code === 0);
+  const plain = await TO.get('/api/audit?limit=1');
+  assert.equal(plain.total, 2);
+  assert.equal(seen[seen.length - 1].signal, undefined);
 });

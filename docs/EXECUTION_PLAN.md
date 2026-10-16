@@ -508,6 +508,7 @@ Do not edit `server/` or `js/` while multi-PC or browser tests run.
 - RTL: never use `left/right`; mirror directional icons; numbers stay LTR inside RTL text (`<bdi>` / `dir="ltr"`
   on km, plates digits, trip numbers).
 - Tokens only as hashes in the office DB and gateway; never in logs, Excel, error messages or the activity log.
+- Activity search may pass `fields` or `columns` on `GET /api/audit`, but only `id, ts, user, node, label, entity, op, entity_id`. No list means the full row, which still includes `node_name`. A projected row has exactly the requested names and does not gain `node_name`. Never add `changes`, `before`, `after` or `ip` to that whitelist.
 - The repository is public: never commit the owner's workbook, form, photos, secrets or real names.
 - Kill test servers by PID, not `pkill -f` (matches your own shell).
 - Wait for automatic PR reviews too before merging; merge only when the owner says so.

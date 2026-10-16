@@ -27,6 +27,7 @@ description: Working memory for the Trip Orders project (vehicle trip orders, dr
 - Branch + push only; never `main`, never force-push; merge only when the owner says so.
 
 ## Pitfalls
+- Activity search may pass `fields` or `columns` on `GET /api/audit`, but only `id, ts, user, node, label, entity, op, entity_id`. No list means the full row, which still includes `node_name`. A projected row has exactly the requested names and does not gain `node_name`. Never add `changes`, `before`, `after` or `ip` to that whitelist.
 - Permissions: a new permission, page or ready-made profile needs its words in both dictionaries (`perm.*`, `permgroup.*`, `prof.*`);
   `tests/test_access_gate.py` runs the factory gate (`server/afaccess.py`; update from Apps-Factory with `python scripts/vendor_access.py ../Yousef-Transportation`).
   Standard: `Apps-Factory/docs/ACCESS_AND_ADMINISTRATION_STANDARD.md`.

@@ -898,6 +898,7 @@
     'link.print': 'Print the order',
     'link.word': 'Word form',
     'link.notset': 'The internet mailbox is not set up yet. An administrator sets it up in Settings, Mailbox.',
+    'link.noMobile': 'Add the driver\'s mobile number in Drivers before sending on WhatsApp.',
     'wa.msg': 'Trip order {no} - {date}\nCar: {plate}\nTo: {dest}\nOpen the link and start the trip:\n{link}',
     'gw.status': 'Mailbox status',
     'gw.st.off': 'Not set up',

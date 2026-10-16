@@ -253,7 +253,11 @@
           else if (a.dataset.a === 'start') U.run(TO.post('/api/trips/start', { id: id }), 'trip.started').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'print') TO.printTrip(cur);
           else if (a.dataset.a === 'copylink') sendLink(cur, false, false, function (r) { linkDialog(r.url); });
-          else if (a.dataset.a === 'wa') sendLink(cur, false, true, function (r) { var d = String(r.mobile || '').replace(/\D/g, ''); window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
+          else if (a.dataset.a === 'wa') {
+            var mob = String((TO.data.get('drivers', cur.driverId) || {}).mobile || '').replace(/\D/g, '');
+            if (!mob) { TO.toast(TO.t('link.noMobile'), 'bad', 6000); return; }
+            sendLink(cur, false, true, function (r) { var d = String(r.mobile || mob).replace(/\D/g, ''); if (!d) { TO.toast(TO.t('link.noMobile'), 'bad', 6000); return; } window.open('https://wa.me/' + d + '?text=' + encodeURIComponent(waMessage(cur, r)), '_blank', 'noopener'); });
+          }
           else if (a.dataset.a === 'newlink') U.confirm({ title: TO.t('link.new'), body: TO.t('link.new.body'), danger: true, ok: TO.t('link.new') }).then(function (ok) { if (ok) sendLink(cur, true, false, function (r) { linkDialog(r.url); }); });
           else if (a.dataset.a === 'release') U.run(TO.post('/api/trips/release-device', { id: id }), 'link.released').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });
           else if (a.dataset.a === 'review') U.run(TO.post('/api/trips/review', { id: id }), 'trip.reviewed').then(function () { return TO.data.load(); }).then(function () { refreshPanel(id); TO.rerender(); });

@@ -105,6 +105,7 @@
       TO.get('/api/licence').then(function (lic) {
         if (TO.me) TO.me.licence = lic;
         if (TO.licenceBanner) TO.licenceBanner();
+        if (TO.licenceBgPoll) TO.licenceBgPoll.kick();
       }, function () { /* read-only users still get the shell */ });
       if (!TO.prefs.data.welcomed) setTimeout(function () { TO.slides.open(true); }, 500);
     },

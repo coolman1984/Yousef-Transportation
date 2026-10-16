@@ -60,8 +60,11 @@
     var fields = tripFields(true);
     var last = TO.data.list('tripCategories')[0];
     var el = TO.dialog({ title: TO.t('trip.new'), wide: true,
-      body: '<form id="nt-form" data-guide="trips.form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) + '</form><div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
-      footer: '<span class="faint grow">' + TO.esc(TO.t('trip.new.hint')) + '</span><button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save data-guide="trips.save">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button>' });
+      body: '<form id="nt-form" data-guide="trips.form" autocomplete="off" class="grid cols-2">' + U.fields(fields, { date: U.today(), categoryId: last && TO.data.list('tripCategories').length === 1 ? last.id : '' }) +
+        '<div class="row" style="grid-column:1/-1;justify-content:flex-end;gap:.5rem;margin-top:.25rem"><span class="faint grow" style="align-self:center">' + TO.esc(TO.t('trip.new.hint')) + '</span>' +
+        '<button type="button" class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button type="submit" class="btn primary" data-save data-guide="trips.save">' + TO.icon('check', 'sm') + TO.esc(TO.t('trip.new.save')) + '</button></div></form>' +
+        '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+      footer: '' });
     var form = el.querySelector('#nt-form'), err = el.querySelector('.err');
     // choosing a requester fills their department
     form.querySelector('[name="requesterId"]').addEventListener('change', function () {

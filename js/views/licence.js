@@ -99,7 +99,7 @@
         var warn = lic.state === 'warning';
         var good = !warn && lic.full && ['trial', 'active', 'grace', 'contract'].indexOf(lic.state) >= 0;
         var showLicenceTools = canEdit && (lic.activation_ui || lic.enforced) && (!lic.full || lic.state === 'trial' || lic.state === 'expired' || lic.reason === 'no_keys');
-        var canHubRequest = showLicenceTools && q.available && !lic.full && q.status === 'none';
+        var canHubRequest = showLicenceTools && q.available && hubActivationNeeded(lic) && q.status === 'none';
         var showRequestLine = showLicenceTools && q.status !== 'none' && ln.html;
         var shopField = showLicenceTools && q.available ? '<div class="field"><label for="lic-shop">' + TO.esc(TO.t('lic.orgName')) + '</label><input id="lic-shop" class="input" maxlength="60" value="' + TO.esc(draftShop || defaultShop) + '"></div>' : '';
         host.innerHTML = (lic.build_channel === 'ci-test' ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<b>' + TO.esc(TO.t('lic.ciTest')) + '</b></div>' : '') +
@@ -121,6 +121,7 @@
             '<div class="field"><label for="lic-code">' + TO.esc(TO.t('lic.pasteActivation')) + '</label>' +
             '<textarea id="lic-code" class="input code-box" dir="ltr" spellcheck="false" autocomplete="off">' + TO.esc(draftCode) + '</textarea>' +
             '<span class="err small" id="lic-err" role="alert"></span></div>' +
+            (canHubRequest ? '<button type="button" class="btn" data-req="trial">' + TO.esc(TO.t('lic.req.trial')) + '</button>' : '') +
             '<button class="btn primary lic-simple-cta" data-activate>' + TO.esc(TO.t('lic.activate')) + '</button>' +
             '</div>' : '') +
           (showLicenceTools ? '<button type="button" class="btn ghost sm lic-details-toggle" data-details>' + TO.esc(TO.t('lic.details')) + '</button>' : '') +
@@ -163,12 +164,12 @@
           });
         });
         stop();
-        if (requestOpen(q)) timer = setInterval(function () { if (!host.isConnected) { stop(); return; } refresh(); }, 15000);
+        if (requestOpen(q)) { timer = setInterval(function () { if (!host.isConnected) { stop(); return; } refresh(); }, 15000); TO.licenceBgPoll.kick(); }
       }
       function send(kind, btn, shop) {
         var body = { kind: kind };
         if (shop !== undefined && String(shop).trim()) body.shop = String(shop).trim().slice(0, 60);
-        TO.ui.run(TO.post('/api/licence/request', body), null, btn).then(refresh, function () { /* the toast says why */ });
+        TO.ui.run(TO.post('/api/licence/request', body), null, btn).then(function () { refresh(); TO.licenceBgPoll.kick(); }, function () { /* the toast says why */ });
       }
       function refresh() {
         return TO.get('/api/licence').then(function (lic) {
@@ -183,6 +184,33 @@
       TO.get('/api/licence/preview?kind=trial').then(function (p) { defaultShop = (p.sends && p.sends.shop) || ''; refresh(); }, refresh);
     }
   };
+
+  function hubActivationNeeded(lic) {
+    return lic.activation_ui && (!lic.full || lic.reason === 'no_keys' || lic.state === 'expired' || lic.state === 'trial');
+  }
+  function requestOpen(q) {
+    q = q || {};
+    return q.status === 'sending' || q.status === 'waiting' || q.status === 'issued' || (q.status === 'failed' && /^(offline|http_|busy|token|relay_off|recovery_unavailable)/.test(q.error || ''));
+  }
+  var bgTimer = null, bgDelay = 15000;
+  function stopBgPoll() { if (bgTimer) { clearTimeout(bgTimer); bgTimer = null; } bgDelay = 15000; }
+  function scheduleBgPoll() {
+    stopBgPoll();
+    function tick() {
+      if (!TO.me) { stopBgPoll(); return; }
+      TO.get('/api/licence').then(function (lic) {
+        var wasWaiting = requestOpen((TO.me.licence || {}).request);
+        TO.me.licence = lic;
+        banner();
+        TO.emit('licence', lic);
+        if (wasWaiting && lic.full && (lic.request || {}).status === 'activated') TO.toast(TO.t('lic.done'));
+        if (requestOpen(lic.request)) { bgDelay = Math.min(Math.round(bgDelay * 1.5), 180000); bgTimer = setTimeout(tick, bgDelay); }
+        else stopBgPoll();
+      }, function () { bgDelay = Math.min(bgDelay * 2, 180000); bgTimer = setTimeout(tick, bgDelay); });
+    }
+    bgTimer = setTimeout(tick, bgDelay);
+  }
+  TO.licenceBgPoll = { kick: function () { if (TO.me && requestOpen((TO.me.licence || {}).request)) scheduleBgPoll(); }, stop: stopBgPoll };
 
   TO.views.licence = {
     render: function () {

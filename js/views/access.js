@@ -73,7 +73,9 @@
         (u && mode === 'link' ? linkBox(u, l) : '') +
         '<div class="field"><label>' + TO.esc(TO.t('acc.perms')) + '</label><div class="row wrap"><button type="button" class="btn sm" data-all>' + TO.esc(TO.t('acc.selectAll')) + '</button><button type="button" class="btn sm ghost" data-none>' + TO.esc(TO.t('acc.clearAll')) + '</button></div></div>' + ticks(perms) +
         '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div></form>',
-      footer: (u ? '<div class="row wrap" style="margin-inline-end:auto"><button class="btn sm" data-reset>' + TO.esc(TO.t('acc.reset')) + '</button><button class="btn sm" data-reset-code>' + TO.esc(TO.t('acc.resetCode')) + '</button><button class="btn sm" data-logout>' + TO.esc(TO.t('acc.logout')) + '</button><button class="btn sm danger" data-del>' + TO.esc(TO.t('common.delete')) + '</button></div>' : '') +
+      footer: (u ? '<div class="row wrap" style="margin-inline-end:auto"><button class="btn sm" data-reset>' + TO.esc(TO.t('acc.reset')) + '</button><button class="btn sm" data-reset-code>' + TO.esc(TO.t('acc.resetCode')) + '</button>' +
+        (u.status === 'approved' && u.active ? '<button class="btn sm warn" data-suspend>' + TO.esc(TO.t('acc.suspend')) + '</button>' : '') +
+        '<button class="btn sm" data-logout>' + TO.esc(TO.t('acc.logout')) + '</button><button class="btn sm danger" data-del>' + TO.esc(TO.t('common.delete')) + '</button></div>' : '') +
         '<button class="btn ghost" data-cancel>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-save>' + TO.esc(TO.t('common.save')) + '</button>',
       mount: function (el) { mountUser(el, u, mode, profiles); } });
   }
@@ -101,6 +103,10 @@
       else if (b.hasAttribute('data-reset-code')) U.run(TO.post('/api/users/reset-code', { id: u.id }), null).then(function (r) {
         TO.dialog({ title: TO.t('acc.resetCode.title'), body: '<p>' + TO.esc(TO.t('acc.resetCode.body')) + '</p><p class="num" dir="ltr"><bdi>' + TO.esc(r.code) + '</bdi></p><p class="muted small">' + TO.esc(TO.t('acc.resetCode.expires', { when: r.expires })) + '</p>',
           footer: '<button class="btn primary" data-close>' + TO.esc(TO.t('common.close')) + '</button>' });
+      });
+      else if (b.hasAttribute('data-suspend')) U.confirm({ title: TO.t('acc.suspend'), body: TO.t('acc.suspend.body'), reason: TO.t('acc.suspend.reason'), ok: TO.t('acc.suspend') }).then(function (reason) {
+        if (!reason) return;
+        U.run(TO.post('/api/users/review', { id: u.id, decision: 'suspend', reason: reason }), 'acc.suspend.done').then(function () { TO.panel.close(); return load(); }).then(function () { TO.rerender(); });
       });
       else if (b.hasAttribute('data-logout')) U.run(TO.post('/api/users/logout', { id: u.id }), 'acc.logout.done');
       else if (b.hasAttribute('data-del')) U.confirm({ title: TO.t('common.delete'), body: TO.t('acc.delete.body', { n: u.full_name }), danger: true, ok: TO.t('common.delete') }).then(function (ok) { if (ok) U.run(TO.post('/api/users/delete', { id: u.id }), 'list.deleted.toast').then(function () { TO.panel.close(); TO.rerender(); }); });
@@ -196,7 +202,16 @@
     }
     var profiles = cache.users.profiles;
     var viewer = profiles.filter(function (p) { return p.id === 'viewer'; })[0] || profiles[0];
-    U.run(TO.post('/api/users/review', { id: uid, decision: 'approve', role: viewer.name, perms: viewer.perms }), 'acc.pending.approved').then(function () { return load(); }).then(function () { TO.rerender(); });
+    var opts = profiles.map(function (p) { return '<option value="' + TO.esc(p.name) + '"' + (p.id === 'viewer' ? ' selected' : '') + '>' + TO.esc(roleLabel(p.name)) + '</option>'; }).join('');
+    TO.dialog({ title: TO.t('acc.pending.approve'), body: '<p class="muted">' + TO.esc(TO.t('acc.pending.approve.body')) + '</p><div class="field"><label for="pend-role">' + TO.esc(TO.t('acc.profile')) + '</label><select class="input" id="pend-role">' + opts + '</select></div>',
+      footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t('acc.pending.approve')) + '</button>',
+      mount: function (el) {
+        el.querySelector('[data-ok]').addEventListener('click', function () {
+          var role = el.querySelector('#pend-role').value;
+          var prof = profiles.filter(function (p) { return p.name === role; })[0] || viewer;
+          U.run(TO.post('/api/users/review', { id: uid, decision: 'approve', role: role, perms: prof.perms }), 'acc.pending.approved').then(function () { TO.overlay.close(); return load(); }).then(function () { TO.rerender(); });
+        });
+      } });
   }
 
   /* ---------- the tab ---------- */

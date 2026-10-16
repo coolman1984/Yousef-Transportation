@@ -1,6 +1,12 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review round 4 — reset-code burn replication, insights refetch (2026-10-16)
+
+**What/why:** Address `review-grok-r4.md`: replicate burned reset codes with `clear-reset-code` userCommand on success and after three wrong guesses; decide expiry/hash inside the reset write lock; refetch full insights when state loads ahead of a slim insights reply; valid reset still clears login lock locally.
+**Checks:** Full CI Python list — 542 run, OK, skipped=3 (e2e included). Gateway 24/24. Commits local only, no push. `fix-table.md` in `/workspace/y115/` updated with Status column.
+**Next:** Owner PR review.
+
 ## Grok review round 3 — local lockout, insights race, WhatsApp guard (2026-10-16)
 
 **What/why:** Address `review-grok-r3.md`: keep `failed`, `locked_until`, and reset-hash fields local (not replicated/materialized); re-verify reset hash inside the write transaction; ignore slim `{unchanged:true}` insights and drop stale parallel `D.load` replies; block WhatsApp send without driver mobile while keeping `[data-a=wa]` visible.

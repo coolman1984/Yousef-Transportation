@@ -488,6 +488,7 @@
     'act.label.amendTrip': 'Amend trip {no}: {field}',
     'act.label.reviewedTrip': 'Reviewed trip {no}',
     'act.label.driverLink': 'Driver link for trip {no}',
+    'act.label.driverLinkReplaced': 'Driver link replaced for trip {no}',
     'act.label.gaApprovedTrip': 'GA approved trip {no}',
     'act.label.gaDeclinedTrip': 'GA declined trip {no}',
     'act.label.restoreDeleted': 'Restore deleted:',

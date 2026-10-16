@@ -28,6 +28,12 @@ class WorkflowTest(unittest.TestCase):
         src = open(os.path.join(ROOT, 'tools', 'journey_exe.py'), encoding='utf-8').read()
         for needle in ('/api/auth/setup', 'expect=402', '/api/licence/activate', '/api/trips/new', '/api/backups', 'proc.kill()', 'exactly once'):
             self.assertIn(needle, src, needle)
+        self.assertIn("'licence_hub_url': ''", src)
+        self.assertIn("'FACTORY_LICENCE_HUB_URL': hub", open(os.path.join(ROOT, 'tools', 'customer_release_check.py'), encoding='utf-8').read())
+
+    def test_windows_smoke_does_not_contact_the_customer_licence_hub(self):
+        smoke = next(line for line in WORKFLOW.splitlines() if '"port": 18080' in line)
+        self.assertIn('"licence_hub_url": ""', smoke)
 
     def test_build_ships_the_guide_and_the_taxonomy(self):
         self.assertIn("'guide'", open(os.path.join(ROOT, 'tools', 'make_assets.py'), encoding='utf-8').read())

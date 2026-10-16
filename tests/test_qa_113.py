@@ -132,6 +132,17 @@ class ReviewFixes(unittest.TestCase):
         src = open(os.path.join(ROOT, 'js', 'views', 'activity.js'), encoding='utf-8').read()
         for needle in ('GA approved trip', 'GA declined trip', 'Restore backup of', 'Word import', 'act.entity.'):
             self.assertIn(needle, src)
+        self.assertIn("act.label.driverLinkReplaced", src)
+        self.assertIn("label.slice(18)", src)
+        self.assertNotIn("label.slice(19)", src)
+
+    def test_reviewed_arabic_wording_is_consistent(self):
+        ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
+        for needle in ('ساعة الجهاز اترجعت لورا', 'إيه اللي بيتبعت؟', 'مفيش مشاوير ولا أشخاص ولا مبالغ',
+                       "'act.label.driverLinkReplaced'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة'):
+            self.assertIn(needle, ar)
+        for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة'):
+            self.assertNotIn(leftover, ar)
 
 
 class N1_LicenceHubDefault(unittest.TestCase):

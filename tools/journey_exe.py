@@ -65,7 +65,7 @@ def free_port():
 def start(cmd, home, env):
     port = free_port()
     with open(os.path.join(home, 'config.json'), 'w', encoding='utf-8') as f:
-        json.dump({'port': port, 'sync_port': free_port(), 'open_browser': False, 'host': '127.0.0.1'}, f)
+        json.dump({'port': port, 'sync_port': free_port(), 'open_browser': False, 'host': '127.0.0.1', 'licence_hub_url': ''}, f)
     log = open(os.path.join(home, 'journey-output.txt'), 'a', encoding='utf-8', errors='replace')
     args = list(cmd) + (['--background'] if cmd[0].lower().endswith('.exe') else [])
     proc = subprocess.Popen(args, stdout=log, stderr=subprocess.STDOUT, env={**os.environ, 'TO_HOME': home, **env})

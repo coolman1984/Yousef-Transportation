@@ -73,37 +73,49 @@ class YT115(unittest.TestCase):
 
     def test_YT115_lock_survives_profile_save_after_reset(self):
         """Local lockout must not be cleared when a later replicated user save materializes stale fields (Grok r3 P2-1)."""
-        self.ac.post('/api/users/save', {'username': 'locksave', 'full_name': 'Lock Save', 'password': 'Office-pass12', 'must_change': False,
+        S = Server('yt115lock').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'locksave', 'full_name': 'Lock Save', 'password': 'Office-pass12', 'must_change': False,
                                          'perms': ['overview.view'], 'scopes': None})
-        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'locksave'][0]['id']
-        code = self.ac.post('/api/users/reset-code', {'id': uid})['code']
-        self.S.client().post('/api/auth/reset', {'username': 'locksave', 'code': code, 'password': 'Fresh-pass42'})
-        for _ in range(6):
-            try:
-                self.S.client().login('locksave', 'wrong-password')
-            except ApiError:
-                pass
-        self.assertTrue({u['username']: u for u in self.ac.get('/api/users')['users']}['locksave']['locked'])
-        cur = [u for u in self.ac.get('/api/users')['users'] if u['id'] == uid][0]
-        self.ac.post('/api/users/save', {'id': uid, 'ver': cur['ver'], 'username': 'locksave', 'full_name': 'Lock Save Renamed', 'password': 'Fresh-pass42',
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'locksave'][0]['id']
+            code = ac.post('/api/users/reset-code', {'id': uid})['code']
+            cl.post('/api/auth/reset', {'username': 'locksave', 'code': code, 'password': 'Fresh-pass42'})
+            for _ in range(6):
+                try:
+                    cl.login('locksave', 'wrong-password')
+                except ApiError:
+                    pass
+            self.assertTrue({u['username']: u for u in ac.get('/api/users')['users']}['locksave']['locked'])
+            cur = [u for u in ac.get('/api/users')['users'] if u['id'] == uid][0]
+            ac.post('/api/users/save', {'id': uid, 'ver': cur['ver'], 'username': 'locksave', 'full_name': 'Lock Save Renamed', 'password': 'Fresh-pass42',
                                          'must_change': False, 'perms': ['overview.view'], 'scopes': None})
-        self.assertTrue({u['username']: u for u in self.ac.get('/api/users')['users']}['locksave']['locked'])
+            self.assertTrue({u['username']: u for u in ac.get('/api/users')['users']}['locksave']['locked'])
+        finally:
+            S.cleanup()
 
     def test_YT115_used_reset_code_not_revived_by_profile_save(self):
-        self.ac.post('/api/users/save', {'username': 'coderevive', 'full_name': 'Code Revive', 'password': 'Office-pass12', 'must_change': False,
+        S = Server('yt115code').start()
+        try:
+            ac = make_authority(S)
+            cl = S.client()
+            ac.post('/api/users/save', {'username': 'coderevive', 'full_name': 'Code Revive', 'password': 'Office-pass12', 'must_change': False,
                                           'perms': ['overview.view'], 'scopes': None})
-        uid = [u for u in self.ac.get('/api/users')['users'] if u['username'] == 'coderevive'][0]['id']
-        code = self.ac.post('/api/users/reset-code', {'id': uid})['code']
-        for _ in range(3):
-            try:
-                self.S.client().post('/api/auth/reset', {'username': 'coderevive', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
-            except ApiError:
-                pass
-        cur = [u for u in self.ac.get('/api/users')['users'] if u['id'] == uid][0]
-        self.ac.post('/api/users/save', {'id': uid, 'ver': cur['ver'], 'username': 'coderevive', 'full_name': 'Code Revive', 'password': 'Office-pass12',
+            uid = [u for u in ac.get('/api/users')['users'] if u['username'] == 'coderevive'][0]['id']
+            code = ac.post('/api/users/reset-code', {'id': uid})['code']
+            for _ in range(3):
+                try:
+                    cl.post('/api/auth/reset', {'username': 'coderevive', 'code': 'BADCODE1', 'password': 'Fresh-pass42'})
+                except ApiError:
+                    pass
+            cur = [u for u in ac.get('/api/users')['users'] if u['id'] == uid][0]
+            ac.post('/api/users/save', {'id': uid, 'ver': cur['ver'], 'username': 'coderevive', 'full_name': 'Code Revive', 'password': 'Office-pass12',
                                          'must_change': False, 'perms': ['overview.view'], 'scopes': None})
-        with self.assertRaises(ApiError):
-            self.S.client().post('/api/auth/reset', {'username': 'coderevive', 'code': code, 'password': 'Fresh-pass42'})
+            with self.assertRaises(ApiError):
+                cl.post('/api/auth/reset', {'username': 'coderevive', 'code': code, 'password': 'Fresh-pass42'})
+        finally:
+            S.cleanup()
 
     def test_YT03_suspended_username_cannot_reregister(self):
         self.ac.post('/api/users/save', {'username': 'wasactive', 'full_name': 'Was Active', 'password': 'Office-pass12', 'must_change': False,

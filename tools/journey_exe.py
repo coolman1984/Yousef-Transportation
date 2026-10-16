@@ -174,8 +174,11 @@ def after(home, cmd):
             assert len(trips) == 1 and trips[0]['id'] == state['trip'], f'the trip before the update must be there exactly once: {trips}'
         assert state['backup'] in [b['name'] for b in app.call('GET', '/api/backups')], 'the backup made before the update is missing'
         if state.get('trip'):
-            newer = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'After the update'})
-            print(f"OK after: trip {state['no']} and backup {state['backup']} kept, licence kept; created {newer['no']} after the update")
+            if lic['full']:
+                newer = app.call('POST', '/api/trips/new', {'categoryId': 'jc1', 'vehicleId': 'jv1', 'driverId': 'jd1', 'requesterId': 'jp1', 'destination': 'After the update'})
+                print(f"OK after: trip {state['no']} and backup {state['backup']} kept, licence kept; created {newer['no']} after the update")
+            else:
+                print(f"OK after: trip {state['no']} and backup {state['backup']} kept, enforced office still unlicensed")
         else:
             print(f"OK after: backup {state['backup']} kept, enforced office still unlicensed")
     finally:

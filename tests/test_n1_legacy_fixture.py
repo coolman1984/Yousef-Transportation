@@ -53,6 +53,15 @@ class N1LegacyFixtureTest(unittest.TestCase):
         self.assertNotIn('TO_TEST_SIGNING_KEY_FILE', legacy)
         self.assertNotIn('_activate_enforced_legacy', src)
 
+    def test_journey_after_skips_new_trip_when_enforced_not_full(self):
+        src = open(os.path.join(ROOT, 'tools', 'journey_exe.py'), encoding='utf-8').read()
+        after = src.split('def after(home, cmd):')[1].split('\n\nif __name__')[0]
+        trip_block = after.split("if state.get('trip'):")[-1]
+        self.assertIn("if lic['full']:", after)
+        self.assertIn("'/api/trips/new'", trip_block)
+        self.assertLess(trip_block.index("if lic['full']:"), trip_block.index("'/api/trips/new'"))
+        self.assertIn('enforced office still unlicensed', after)
+
     def test_customer_release_workflow_sets_n1_in_process(self):
         yml = open(os.path.join(ROOT, '.github', 'workflows', 'customer-release.yml'), encoding='utf-8').read()
         self.assertIn('$env:N1_SETUP_EXE = $Matches[1]', yml)

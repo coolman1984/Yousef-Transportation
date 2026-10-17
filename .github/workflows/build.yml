@@ -67,6 +67,8 @@ jobs:
           python -m pip install "nuitka>=2.4,<3" ordered-set zstandard cryptography
           choco upgrade innosetup -y --no-progress
       - name: Build a NON-CUSTOMER test installer
+        env:
+          TO_BUILD_CHANNEL: ci-test   # own AppId and folder (TripOrders-CITest): it can never replace a customer install
         run: python tools/build_windows.py
       - name: Check that the built program folder starts and serves its pages
         shell: pwsh

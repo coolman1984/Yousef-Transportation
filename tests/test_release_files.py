@@ -1,5 +1,5 @@
 """B6 (the part code can prove): CI runs every test module, including the access gate, and exercises the INSTALLED product on Windows
-(silent install, folder protection, firewall rule private/domain only, this-PC-only install without a rule, core journey, update over it, N-1 update, uninstall keeps data)."""
+(silent install, folder protection, firewall rule private/domain only, this-PC-only install without a rule, core journey, update over it, uninstall keeps data)."""
 import os
 import re
 import unittest
@@ -15,6 +15,12 @@ class WorkflowTest(unittest.TestCase):
         here = {f[:-3] for f in os.listdir(os.path.join(ROOT, 'tests')) if f.startswith('test_') and f.endswith('.py')}
         self.assertEqual(sorted(here - listed), [], 'a test module that CI never runs')
         self.assertIn('test_access_gate', listed)
+
+    def test_the_ci_installer_is_built_as_a_test_build(self):
+        # Regression (PR 51): the channel came from the removed signing-key script; without it the build was "commercial",
+        # installed to Program Files\\TripOrders and the checks looking in TripOrders-CITest failed.
+        self.assertRegex(WORKFLOW, r'TO_BUILD_CHANNEL: ci-test')
+        self.assertIn('TripOrders-CITest', WORKFLOW)
 
     def test_the_installed_product_is_exercised_on_windows(self):
         for needle in ('/VERYSILENT', 'journey_exe.py first', 'journey_exe.py after', 'icacls', 'firewall show rule',

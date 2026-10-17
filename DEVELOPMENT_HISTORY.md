@@ -8,6 +8,7 @@
 - `server/training.py`: `POST /api/training/open` starts a second copy of the program (same exe or `python app.py`, `TO_HOME=<home>/training`, own `config.json` with `training: true`, port `training_port` or office port + 10) and waits until it answers; `POST /api/training/reset` stops it, deletes its data and backups and starts it again with fresh samples. Only the training copy loads `demo.seed`.
 - The training copy shows a sticky yellow bar "Training mode ... Back to real work" (`me.training`, `me.realPort`) and a tab title prefix; the real office shows a "Training mode" button in the top bar, a big card on the home page and a palette action.
 - The training copy stops by itself when the real program stops answering (`training.watch_real`), so it is never left running alone; the office stops it on exit too.
+**Mistake:** removing `tools/ci_signing_key.py` also removed the line that set `TO_BUILD_CHANNEL=ci-test`, so the Windows CI built a "commercial" installer in the wrong folder ("the installed program is missing"). The workflow now sets the channel itself; `test_release_files` guards it.
 **Lesson:** the harness uses `TO_CONFIG` with the repo as home, so the training test sets `TO_HOME` to a temp folder to keep the training copy out of the repository; `training/` is also in `.gitignore` for the portable folder.
 
 ## Demo mode, no sign-in, no licence (2026-10-17)

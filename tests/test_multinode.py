@@ -975,7 +975,7 @@ class T34_InstalledMode(unittest.TestCase):
                               stdout=subprocess.DEVNULL)
         port = free_port()
         with open(os.path.join(home, 'config.json'), 'w') as f:
-            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1'}, f)
+            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1', 'demo_mode': False}, f)
         env = {**os.environ, 'TO_HOME': home, 'PYTHONPATH': packed, 'TO_MACHINE_ID': 'installed-test'}
         main = os.path.join(root, 'server', 'to_main.py')
         proc = subprocess.Popen([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)

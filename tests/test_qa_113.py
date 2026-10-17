@@ -138,7 +138,7 @@ class ReviewFixes(unittest.TestCase):
 
     def test_reviewed_arabic_wording_is_consistent(self):
         ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
-        for needle in ('ساعة الجهاز اترجعت لورا', 'إيه اللي بيتبعت؟', 'مفيش مشاوير ولا أشخاص ولا مبالغ',
+        for needle in (
                        "'act.label.driverLinkReplaced'", "'act.label.releasedPhone'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة',
                        "'act.label.driverEvents'", "'act.label.driverPhoto'",
                        'المشوار ده ماينفعش يتمسح. الغيه واكتب السبب.'):

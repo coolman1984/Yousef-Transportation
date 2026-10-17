@@ -72,8 +72,9 @@ def upgraded(home, exe, hub):
         app.call('POST', '/api/auth/login', {'username': journey_exe.ADMIN, 'password': journey_exe.PASSWORD})
         lic = app.call('GET', '/api/licence')
         commercial_unlicensed(lic)
-        trips = [t for t in app.call('GET', '/api/state')['trips'] if t['destination'] == 'Journey Factory']
-        assert len(trips) == 1 and trips[0]['id'] == state['trip'], f'the trip from the previous release is not there exactly once: {trips}'
+        if state.get('trip'):
+            trips = [t for t in app.call('GET', '/api/state')['trips'] if t['destination'] == 'Journey Factory']
+            assert len(trips) == 1 and trips[0]['id'] == state['trip'], f'the trip from the previous release is not there exactly once: {trips}'
         assert state['backup'] in [b['name'] for b in app.call('GET', '/api/backups')], 'the previous backup is missing'
         forged_refused(app, lic['device'])
         got = None

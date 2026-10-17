@@ -1,6 +1,24 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Grok review r2 (PR 116) — journey after() licence gate (2026-10-17)
+
+**What/why:** Address `review-116-grok-r2.md` P1: `journey_exe.py after()` only posts `/api/trips/new` when `lic['full']`; enforced unlicensed upgrade keeps saved trip and backup without a 402 write.
+**Checks:** Gateway 24/24. Full CI Python list — 552 run, OK, skipped=3 (e2e with `TO_CHROMIUM`).
+**Next:** Owner PR review.
+
+## Grok review r1 (PR 116) — published N-1 installer, auth reset P2/P3 (2026-10-17)
+
+**What/why:** Address `review-116-grok-r1.md`: customer-release always `gh release download` for N-1 (no tag rebuild or CI signing key); workflow sets `N1_SETUP_EXE` in-process; enforced N-1 legacy stays unlicensed (402, backup, upgrade keeps admin); proof names `PREVIOUS_TAG`. Auth: `clear-reset-code` on reject/suspend re-reads `reset_hash` inside `check()`; failed-guess `_notify` after lock; regression tests for reject, rejected re-signup, and failed `COMMIT` burn.
+**Checks:** Gateway 24/24. Full CI Python list — 551 run, 2 flaky fails (`test_network` connection limit, `test_YT17_harness_closes_server` ResourceWarning) then OK on re-run; skipped=3 (e2e with `TO_CHROMIUM`). Commits local only, no push.
+**Next:** Owner PR review.
+
+## Grok review round 6 — N-1 CI fixture, reset-code journal P3 (2026-10-17)
+
+**What/why:** Address `review-grok-r6.md` P3: failed-guess burn matches `_write` rollback/fold/notify-after-commit; journal `clear-reset-code` on reject, suspend, and rejected re-signup; stronger `test_yt_115` fold assertions. Customer-release N-1 legacy on enforced tags (v1.1.3+) via `prepare_n1_for_legacy.py` + ephemeral `ci_signing_key` studio PUBLIC key in a throwaway prior-tag build only.
+**Checks:** Full CI Python list — 545 run, OK, skipped=3 (e2e with `TO_CHROMIUM`). Gateway not re-run. Commits local only, no push.
+**Next:** Owner PR review.
+
 ## Grok review round 4 — reset-code burn replication, insights refetch (2026-10-16)
 
 **What/why:** Address `review-grok-r4.md`: replicate burned reset codes with `clear-reset-code` userCommand on success and after three wrong guesses; decide expiry/hash inside the reset write lock; refetch full insights when state loads ahead of a slim insights reply; valid reset still clears login lock locally.

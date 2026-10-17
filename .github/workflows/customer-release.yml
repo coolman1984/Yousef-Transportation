@@ -20,6 +20,7 @@ permissions:
 env:
   # owner PUBLIC keys: trial-hub (licence hub trial + calendar) and paid (hub monthly/permanent)
   TO_RELEASE_PUBLIC_KEYS: 'trial-hub:I4syALksvwqkGv5XUANtX32LandWOABv4-RveQU-vhM,paid:INmxPP1zYT4XyHDJQaS3_R_6nt4HCIlG-6-3kAIgfJI'
+  TO_COMMERCIAL_PUBLIC_KEYS: 'trial-hub:I4syALksvwqkGv5XUANtX32LandWOABv4-RveQU-vhM,paid:INmxPP1zYT4XyHDJQaS3_R_6nt4HCIlG-6-3kAIgfJI'
   TO_BUILD_CHANNEL: commercial
   LICENCE_HUB_URL: 'https://trip-orders-licence-hub.mflma2040.workers.dev'
   VERSION_IN: ${{ inputs.expected_version }}
@@ -66,10 +67,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           pip install cryptography
-          $dir = Join-Path $env:RUNNER_TEMP 'previous'
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          gh release download $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir $dir
-          $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-*.exe' | Select-Object -First 1
+          python tools/prepare_n1_for_legacy.py | ForEach-Object {
+            if ($_ -match '^N1_SETUP_EXE=(.+)$') { $env:N1_SETUP_EXE = $Matches[1].Trim() }
+          }
+          if ($LASTEXITCODE -ne 0) { throw 'could not prepare the N-1 installer' }
+          if (-not $env:N1_SETUP_EXE) { throw 'prepare_n1_for_legacy did not set N1_SETUP_EXE' }
+          Write-Host "N-1 installer: $env:N1_SETUP_EXE"
+          $old = Get-Item -LiteralPath $env:N1_SETUP_EXE
           (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
           if (-not (Test-Path $exe)) { throw 'the previous release did not install' }
@@ -106,7 +110,7 @@ jobs:
             "installer: $($setup.Name)", "size: $($setup.Length)", "installer_sha256: $hash",
             "public_keys: ${env:TO_RELEASE_PUBLIC_KEYS}",
             "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
-            "checks: silent install of 1.1.2 + journey, silent upgrade, commercial+enforced, data kept, forged code refused, live hub signed calendar accepted by pinned trial-hub key, fresh install starts enforced") |
+            "checks: silent install of $($env:PREVIOUS_TAG) + legacy journey, silent upgrade, commercial+enforced, admin+backup kept, forged code refused, live hub signed calendar accepted by pinned trial-hub key, fresh install starts enforced") |
             Set-Content -Encoding utf8 dist/RELEASE-PROOF.txt
           Get-Content dist/RELEASE-PROOF.txt
       - uses: actions/upload-artifact@v7

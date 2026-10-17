@@ -755,8 +755,14 @@ class Auth:
                 cur = c.execute('SELECT status FROM users WHERE id=? AND deleted=0', (uid,)).fetchone()
                 if not cur or (cur['status'] or 'approved') != 'rejected':
                     raise AuthError('This sign-up request is no longer waiting.')
+                prior_reset = c.execute('SELECT reset_hash FROM users WHERE id=?', (uid,)).fetchone()
+                bound_reset = (prior_reset['reset_hash'] or '') if prior_reset else ''
                 c.execute('UPDATE users SET failed=0, locked_until=NULL, reset_hash=?, reset_expires=? WHERE id=?', ('', '', uid))
-                return [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'pending']}}]
+                ops = [{'e': 'users', 'id': uid, 'op': 'update', 's': row, 'c': {'status': [st, 'pending']}}]
+                if bound_reset:
+                    ops.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                                's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': bound_reset}})
+                return ops
             self._write('Self sign-up', ip, f'Sign-up request {username}', [], check=check)
             self.log(full_name + ' (' + username + ')', ip, 'signup-pending', username, f'Re-request code {code}')
             return {'ok': True, 'request_code': code}
@@ -795,8 +801,7 @@ class Auth:
                 if len(self.folder.problems) != before:
                     raise AuthError('This change could not be saved: ' + self.folder.problems[-1])
                 self.journal.append_local(rec)
-            self.journal._notify([rec])
-            return rec
+            return {'rec': rec, 'appended': True}
         self._write('Password reset', ip, 'Clear reset code for ' + username, ops)
         return None
 
@@ -813,6 +818,8 @@ class Auth:
         ok_code = False
         failed = 0
         clear_replicate_hash = None
+        burn_journal = None
+        notify_rec = None
         with self.lock:
             self.conn.execute('BEGIN IMMEDIATE')
             try:
@@ -848,13 +855,29 @@ class Auth:
                         self.conn.execute('UPDATE users SET failed=?, locked_until=?, reset_hash=?, reset_expires=? WHERE id=?',
                                           (0 if locked else failed, locked, rh, re, u['id']))
                     if clear_replicate_hash:
-                        self._replicate_clear_reset_code(u['id'], ip, username, clear_replicate_hash, conn=self.conn)
+                        burn_journal = self._replicate_clear_reset_code(u['id'], ip, username, clear_replicate_hash, conn=self.conn)
                     self.conn.execute('COMMIT')
+                    if burn_journal and burn_journal.get('rec'):
+                        notify_rec = burn_journal['rec']
             except AuthError:
+                try:
+                    self.conn.execute('ROLLBACK')
+                except sqlite3.OperationalError:
+                    pass
                 raise
             except Exception:
-                self.conn.execute('ROLLBACK')
+                try:
+                    self.conn.execute('ROLLBACK')
+                except sqlite3.OperationalError:
+                    pass
+                if burn_journal and burn_journal.get('appended'):
+                    try:
+                        self.fold_pending()
+                    except Exception as e:  # noqa: BLE001
+                        self.journal.alert('fold', f'A saved account change could not be applied yet ({e}).', '', 'warning')
                 raise
+        if notify_rec:
+            self.journal._notify([notify_rec])
         if not ok_code:
             self.log(u['display'], ip, 'reset-code-failed', username, f'Wrong or expired reset code (attempt {failed})')
             raise AuthError(generic)
@@ -951,7 +974,14 @@ class Auth:
                     raise AuthError('At least one active user must keep the right to manage users.')
             elif decision in ('reject', 'suspend') and self._loses_last_admin(c, uid, False):
                 raise AuthError('At least one active user must keep the right to manage users.')
-            return None
+            extra = []
+            if decision in ('reject', 'suspend'):
+                cur = c.execute('SELECT reset_hash FROM users WHERE id=?', (uid,)).fetchone()
+                bound = (cur['reset_hash'] or '') if cur else ''
+                if bound:
+                    extra.append({'e': 'userCommands', 'id': uuid.uuid4().hex, 'op': 'insert', 'noaudit': True,
+                                  's': {'cmd': 'clear-reset-code', 'user': uid, 'reset_hash': bound}})
+            return extra or None
 
         self._write(actor, ip, label, ops, check=check)
         self.log(actor['display'], ip, 'signup-' + decision, u['display'], reason or decision)

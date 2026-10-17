@@ -26,11 +26,15 @@ def ensure_user(auth, node):
 
 
 def user(auth):
-    """The built-in administrator, or None (another PC's accounts, or it was disabled)."""
+    """The administrator every request works as: the built-in one, else the office's first administrator (an office that used
+    sign-in before, whatever its administrator's name). None when there is no usable administrator (another PC's accounts)."""
     with auth.lock:
-        r = auth.conn.execute('SELECT id FROM users WHERE username=? AND deleted=0', (USERNAME,)).fetchone()
-    u = auth.get(r[0]) if r else None
-    return u if u and u['active'] and (u.get('status') or 'approved') == 'approved' and 'users.manage' in u['perms'] else None
+        rows = auth.conn.execute('SELECT id FROM users WHERE deleted=0 ORDER BY username<>?, created_at', (USERNAME,)).fetchall()
+    for (uid,) in rows:
+        u = auth.get(uid)
+        if u and u['active'] and (u.get('status') or 'approved') == 'approved' and 'users.manage' in u['perms']:
+            return u
+    return None
 
 
 CATEGORIES = [  # id, name, Arabic name, Excel sheet, daily sequence, rate per km, rate per overtime hour, vendor

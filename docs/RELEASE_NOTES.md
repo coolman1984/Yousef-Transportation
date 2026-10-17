@@ -6,7 +6,8 @@
 - **No sign-in:** the program opens straight away, without a sign-in screen. Your real work starts empty.
 - **Training mode:** a big "Enter training mode" button (home page and top bar) opens a separate training copy full of sample trips, cars, drivers, people, places and reports. Practise anything there: it never touches your real work. A yellow bar inside it has the "Back to real work" button, and "Start the training again" brings the samples back.
 - **No licence or activation:** the Licence page, the activation codes and the licence hub are gone. Every feature works from the first start.
-- To ask for sign-in again, set `"sign_in": true` in `config.json`.
+- To ask for sign-in again, set `"sign_in": true` in `config.json`, then run `TripOrders.exe tool reset-admin` once on the main PC to get a temporary administrator password.
+- An office that used sign-in before keeps its data and opens as its own administrator.
 
 # Trip Orders 1.1.6
 

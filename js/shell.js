@@ -316,7 +316,7 @@
 
   /* ---------- training mode (server/training.py): a separate copy with sample data, one button in and one button back ---------- */
   function trainTitle() { return TO.me && TO.me.training ? TO.t('train.btn') + ' · ' : ''; }   // the training tab never looks like the real one
-  function portUrl(port) { return location.protocol + '//' + location.hostname + ':' + port + '/'; }
+  function portUrl(port) { return 'http://' + location.hostname + ':' + port + '/'; }   // both copies listen on plain http ports, also behind an https front
   TO.training = {
     open: function () {
       var el = TO.dialog({ title: TO.t('train.title'),

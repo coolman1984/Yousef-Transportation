@@ -448,7 +448,10 @@ class NotLoggedIn(Exception):
 
 def demo_user():
     """Without sign-in (the default): a request without a session works as the built-in administrator."""
-    return None if CFG.get('sign_in') else demo.user(AUTH)
+    if CFG.get('sign_in'):
+        return None
+    u = demo.user(AUTH)
+    return {**u, 'must_change': False} if u else None   # nobody types a password without sign-in, so nobody is asked to change one
 
 
 def start_demo():

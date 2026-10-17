@@ -140,6 +140,31 @@ class SignInTest(unittest.TestCase):
         self.assertEqual(ac.get('/api/state')['trips'], [])
 
 
+class UpgradeFromSignInTest(unittest.TestCase):
+    """An office that used sign-in before (administrator "boss", not "admin") opens without signing in after the update."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.S = Server('upgrade', extra_cfg={'sign_in': True}).start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+
+    def test_the_existing_administrator_is_used(self):
+        ac = make_authority(self.S)
+        ac.post('/api/commit', {'label': 'lists', 'ops': [
+            {'e': 'tripCategories', 'id': 'uc1', 'op': 'put', 'row': {'id': 'uc1', 'name': 'Old car', 'exportSheet': 'All'}}]})
+        self.S.set_cfg(sign_in=False)
+        self.S.start()
+        c = self.S.client()                                   # no cookie
+        me = c.get('/api/auth/status')['me']
+        self.assertEqual(me['username'], 'boss')
+        self.assertFalse(me['must_change'])
+        self.assertEqual([x['name'] for x in c.get('/api/state')['tripCategories']], ['Old car'])
+        self.assertEqual([u['username'] for u in c.get('/api/users')['users']], ['boss'], 'no second built-in administrator')
+
+
 class ShippedConfigTest(unittest.TestCase):
     def test_sign_in_is_off_and_the_licence_hub_is_gone(self):
         with open(os.path.join(ROOT, 'config.json'), encoding='utf-8') as f:

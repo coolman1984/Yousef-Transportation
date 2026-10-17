@@ -3,7 +3,7 @@
 
 # Build and release
 
-**17 October 2026 (owner):** the program has no licence or activation any more and opens in demo mode (no sign-in, sample data on a new folder; `"demo_mode"` in `config.json`). The licence hub, the signing keys, `tools/release_policy.py` and the `Customer release build` workflow were removed.
+**17 October 2026 (owner):** the program has no licence or activation any more and opens without sign-in (`"sign_in"` in `config.json`); sample data lives only in the training copy that the "Training mode" button starts (`server/training.py`). The licence hub, the signing keys, `tools/release_policy.py` and the `Customer release build` workflow were removed.
 
 Every push and pull request runs all tests and the installed Windows journey (`tools/journey_exe.py`). The resulting installers are labelled **CI TEST / NOT FOR CUSTOMERS**, and the CI workflow **does not publish them as customer releases**.
 

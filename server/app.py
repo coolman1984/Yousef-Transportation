@@ -40,6 +40,7 @@ import assist as assist_mod  # noqa: E402
 import demo  # noqa: E402
 import errkeys  # noqa: E402
 import netpolicy  # noqa: E402
+import training as training_mod  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
@@ -80,7 +81,9 @@ DEFAULT_CONFIG = {
     'sync_interval_seconds': 5,
     'peer_addresses': {},
     'secure_cookie': False,         # true only behind HTTPS (a TLS front); on plain http the browser would drop the cookie
-    'demo_mode': True,              # no sign-in: everybody works as the built-in administrator, and a new folder starts with sample data (server/demo.py)
+    'sign_in': False,               # False: nobody signs in, everybody works as the built-in administrator (server/demo.py)
+    'training': False,              # True only in the training copy (server/training.py): sample data on a new folder and the "back to real work" bar
+    'training_port': 0,             # port of the training copy; 0 = this port + 10
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/', '/guide/')
@@ -444,21 +447,33 @@ class NotLoggedIn(Exception):
 
 
 def demo_user():
-    """Demo mode: a request without a session works as the built-in administrator (nobody signs in)."""
-    return demo.user(AUTH) if CFG.get('demo_mode') else None
+    """Without sign-in (the default): a request without a session works as the built-in administrator."""
+    return None if CFG.get('sign_in') else demo.user(AUTH)
 
 
 def start_demo():
-    """Demo mode on a brand-new data folder: make the built-in administrator and load the sample data once."""
-    if not CFG.get('demo_mode'):
+    """Without sign-in: make the built-in administrator. In the training copy, a brand-new folder also gets the sample data once."""
+    if CFG.get('sign_in'):
         return
     try:
         demo.ensure_user(AUTH, NODE)
         who = demo.user(AUTH)
-        if who and STORE.claim_first_run():
-            say(f'Demo mode: {demo.seed(STORE, JOURNAL, NODE.id, who)} sample trips loaded')
+        if who and CFG.get('training') and STORE.claim_first_run():
+            say(f'Training copy: {demo.seed(STORE, JOURNAL, NODE.id, who)} sample trips loaded')
+        if who and CFG.get('training') and ASSIST:   # practice data is never sent anywhere, and the remote-help card must not cover the first look
+            ask = ASSIST.prompt_for(who, 'ar')
+            if ask['ask']:
+                ASSIST.decide(who, {'decision': 'decline', 'text_id': ask['text_id'], 'lang': ask['lang'], 'scope': ask['scope']})
     except Exception:  # noqa: BLE001 - the program must still start; the log says what went wrong
-        log.error('Demo mode setup failed\n%s', traceback.format_exc())
+        log.error('Built-in administrator / sample data setup failed\n%s', traceback.format_exc())
+
+
+def self_command():
+    """How to start this program again (the training copy): the compiled TripOrders.exe, or Python with this file."""
+    return [sys.executable] if '__compiled__' in globals() else [sys.executable, os.path.abspath(__file__)]
+
+
+TRAINING = None if CFG.get('training') else training_mod.Training(HOME, CFG, self_command(), log=say)
 
 
 def is_admin(u):
@@ -704,7 +719,8 @@ class Handler(BaseHTTPRequestHandler):
         u = self.u
         return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'adminPerms': sorted(ADMIN_PERMS),
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
-                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}, 'demo': bool(CFG.get('demo_mode'))}
+                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority},
+                'signIn': bool(CFG.get('sign_in')), 'training': bool(CFG.get('training')), 'realPort': CFG.get('real_port') if CFG.get('training') else None}
 
     def need_all_scopes(self):
         if self.u['scopes'] is not None:
@@ -1031,6 +1047,13 @@ class Handler(BaseHTTPRequestHandler):
             raise Forbidden('This PC needs a decision first: its data folder seems to come from another PC. Open the system on this PC itself.')
         if p.startswith('/api/guide/') or p.startswith('/api/consent/') or p.startswith('/api/telemetry/'):
             return self.assist_post(p)
+        if p in ('/api/training/open', '/api/training/reset'):
+            if not TRAINING:
+                raise BadRequest('This is already the training copy.')
+            try:
+                return self.send(200, {'port': TRAINING.reset() if p.endswith('/reset') else TRAINING.open()})
+            except training_mod.TrainingError as e:
+                raise BadRequest(str(e))
         if p == '/api/commit':
             d = self.json_body()
             label = str(d.get('label') or 'Change')[:200]
@@ -1508,12 +1531,16 @@ def main(background=False):
     say('Server started')
     if CFG.get('open_browser', True) and not background:
         threading.Timer(0.8, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
+    if CFG.get('training') and CFG.get('real_port'):
+        training_mod.watch_real(int(CFG['real_port']), httpd.shutdown)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         GATE.stop()
+        if TRAINING:
+            TRAINING.stop()
         ASSIST.close()
         SYNC.shutdown()
         JOURNAL.flush_activity()

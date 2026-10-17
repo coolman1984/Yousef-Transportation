@@ -26,7 +26,7 @@ class WorkflowTest(unittest.TestCase):
 
     def test_the_journey_tool_covers_the_core_steps(self):
         src = open(os.path.join(ROOT, 'tools', 'journey_exe.py'), encoding='utf-8').read()
-        for needle in ("['demo']", '/api/trips/new', '/api/backups', 'proc.kill()', 'exactly once'):
+        for needle in ("['signIn']", '/api/trips/new', '/api/backups', 'proc.kill()', 'exactly once'):
             self.assertIn(needle, src, needle)
         self.assertNotIn('/api/licence', src)
 

@@ -1,5 +1,5 @@
-"""Demo mode: the program opens without signing in and a new data folder starts with sample data on every page,
-so a person can learn with examples (owner request, 17 October 2026).
+"""The built-in administrator (the program opens without signing in) and the sample data of the training copy
+(server/training.py), so a person can learn with examples on every page (owner requests, 17 October 2026).
 
 Everything here is made up: fake names, fake plates, fake phone numbers. The sample trips are written through the same
 service functions as a real dispatcher's clicks (tripsvc), so they carry history, amendments and trip numbers like real ones.
@@ -21,7 +21,7 @@ def ensure_user(auth, node):
     """The one built-in administrator every request works as. Created once, on a PC that is not a member of another PC."""
     if auth.has_users() or node.role == 'member':
         return
-    # nobody types this password: demo mode never asks for one
+    # nobody types this password: without sign-in nobody is asked for one
     auth.setup(USERNAME, FULL_NAME, 'Demo-' + secrets.token_urlsafe(18) + '-7', IP)
 
 

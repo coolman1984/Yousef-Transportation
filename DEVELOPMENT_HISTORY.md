@@ -1,6 +1,15 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Training mode: one big button in, one button back (2026-10-17)
+
+**What/why:** Owner request (Fawzy, 17 Oct, same day): the sample data must be reached by a big clear button so a learner can practise without worry, and inside training there must be a button back to the real work. So the samples no longer go into the real data.
+- `"demo_mode"` became `"sign_in": false` (default: nobody signs in, everybody is the built-in administrator). The real work starts empty.
+- `server/training.py`: `POST /api/training/open` starts a second copy of the program (same exe or `python app.py`, `TO_HOME=<home>/training`, own `config.json` with `training: true`, port `training_port` or office port + 10) and waits until it answers; `POST /api/training/reset` stops it, deletes its data and backups and starts it again with fresh samples. Only the training copy loads `demo.seed`.
+- The training copy shows a sticky yellow bar "Training mode ... Back to real work" (`me.training`, `me.realPort`) and a tab title prefix; the real office shows a "Training mode" button in the top bar, a big card on the home page and a palette action.
+- The training copy stops by itself when the real program stops answering (`training.watch_real`), so it is never left running alone; the office stops it on exit too.
+**Lesson:** the harness uses `TO_CONFIG` with the repo as home, so the training test sets `TO_HOME` to a temp folder to keep the training copy out of the repository; `training/` is also in `.gitignore` for the portable folder.
+
 ## Demo mode, no sign-in, no licence (2026-10-17)
 
 **What/why:** Owner request (Fawzy, 17 Oct): remove the sign-in and put a demo mode with sample data everywhere for learners; remove activation completely; keep the program simple and practical. Branch `feat/demo-mode-no-login`.

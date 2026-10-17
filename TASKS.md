@@ -3,7 +3,8 @@
 
 ## Current work queue — first sale
 
-- [x] Demo mode + no licence (owner 2026-10-17): no sign-in, sample data on a new folder, licence/activation removed. Test map: `test_demo` (demo on/off, samples, no licence, restart), `test_assist.NoHubTest.test_a`, `test_yt_115.test_YT16`, `tools/journey_exe.py`.
+- [x] Training mode (owner 2026-10-17): big button opens a separate training copy with sample data, "Back to real work" bar, start again. Test map: `test_demo.NoSignInTest.test_e`, `test_demo.TrainingWatchTest`.
+- [x] No sign-in + no licence (owner 2026-10-17): no sign-in, real work starts empty, licence/activation removed. Test map: `test_demo` (sign-in on/off, no licence, restart), `test_assist.NoHubTest.test_a`, `test_yt_115.test_YT16`, `tools/journey_exe.py`.
 
 - [x] QA 1.1.4 findings (2026-10-16, Yousef deep QA N1–N4/N6/reprint): default licence hub URL, overview checklist from guide-facts, block hard-delete of closed trips, activity log Arabic labels, licence waiting UX, closed-trip Word form km/times. Version **1.1.4**. Test map: `test_qa_113.N1_LicenceHubDefault`, `test_trips_api` (delete guard), `test_word_io`, `test_guides_frontend.js`, full suite before push.
   - [x] Review P2/P3 licence hub precedence: resolve the default only after explicit environment/config and the saved database setting; preserve disabled settings. Updated setup guide. Test map: `test_qa_113.N1_LicenceHubPrecedence` (upgrade, recreated config, fresh install, overrides and disable).

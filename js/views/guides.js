@@ -229,7 +229,7 @@
     learner().pathHidden = true; TO.prefs.save(); var c = e.target.closest('[data-pathcard]'); if (c) c.innerHTML = '';
   });
 
-  function demo() { return !!(TO.me && TO.me.demo); }   // demo mode: no sign-in, so no passwords or user accounts to learn about
+  function demo() { return !!(TO.me && !TO.me.signIn); }   // no sign-in: no passwords or user accounts to learn about
   function allowed(g) { return !(g.account && demo()) && (!g.perm || TO.can(g.perm)); }
   function guideFor(sid) { var id = SIT_GUIDE[sid]; return GUIDES.filter(function (g) { return g.id === id && allowed(g); })[0]; }
   function label(key) { return TO.has(key) ? TO.t(key) : key; }

@@ -3,9 +3,10 @@
 
 # Next (not released yet)
 
-- **Demo mode:** the program opens straight away, without a sign-in screen. A new office starts with sample trips, cars, drivers, people, places and reports, so a new person can learn with examples. A small "Demo mode" badge sits in the top bar.
+- **No sign-in:** the program opens straight away, without a sign-in screen. Your real work starts empty.
+- **Training mode:** a big "Enter training mode" button (home page and top bar) opens a separate training copy full of sample trips, cars, drivers, people, places and reports. Practise anything there: it never touches your real work. A yellow bar inside it has the "Back to real work" button, and "Start the training again" brings the samples back.
 - **No licence or activation:** the Licence page, the activation codes and the licence hub are gone. Every feature works from the first start.
-- To ask for sign-in again, set `"demo_mode": false` in `config.json`.
+- To ask for sign-in again, set `"sign_in": true` in `config.json`.
 
 # Trip Orders 1.1.6
 

@@ -18,7 +18,12 @@
     'nav.reports': 'Reports', 'nav.excel': 'Excel', 'nav.activity': 'Activity log', 'nav.settings': 'Settings', 'nav.help': 'Help & guide',
 
     'top.search': 'Search or jump to…', 'top.menu': 'Menu', 'top.collapse': 'Collapse the side menu', 'top.theme': 'Change theme',
-    'demo.badge': 'Demo mode', 'demo.hint': 'No sign-in. The trips, drivers and cars are examples to learn with.',
+    'train.btn': 'Training mode', 'train.title': 'Practise on sample data',
+    'train.body': 'A separate training copy opens with sample trips, cars and drivers. Try anything there without worry: it never touches your real work.',
+    'train.how': 'Inside the training copy, the yellow bar at the top has a button that brings you back to your real work.',
+    'train.go': 'Enter training mode', 'train.wait': 'Preparing the training copy...',
+    'train.reset': 'Start the training again', 'train.reset.d': 'Deletes what you did in training and brings the sample data back.',
+    'train.bar': 'Training mode: this is sample data. Nothing you do here touches your real work.', 'train.back': 'Back to real work',
     'top.lang': 'Switch language', 'top.help': 'Help', 'top.account': 'Account', 'top.shortcuts': 'Keyboard shortcuts',
 
     'auth.login.title': 'Sign in', 'auth.login.sub': 'Use your user name and password.',

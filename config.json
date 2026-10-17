@@ -14,7 +14,7 @@
   "lockout_minutes": 15,
   "min_password_length": 8,
   "device_name": "",
-  "demo_mode": true,
+  "sign_in": false,
   "sync_port": 8453,
   "sync_interval_seconds": 5,
   "peer_addresses": {}

@@ -5,8 +5,8 @@
   var THEMES = ['auto', 'daylight', 'night', 'asphalt', 'highway', 'contrast'];   // their sample colours live in css/tokens.css (.sw[data-sample])
   var FONTS = ['plex', 'cairo', 'tajawal', 'kufi', 'system'];                       // the font of each sample is set by [data-font-sample] in css/base.css
   var ALL_TABS = ['appearance', 'rules', 'gateway', 'access', 'data', 'privacy'];   // the organisation and money tabs are not built yet and are not shown (N1)
-  // demo mode has no sign-in, so there are no user accounts to manage
-  function tabs() { return ALL_TABS.filter(function (t) { return !(t === 'access' && TO.me && TO.me.demo); }); }
+  // without sign-in there are no user accounts to manage
+  function tabs() { return ALL_TABS.filter(function (t) { return !(t === 'access' && TO.me && !TO.me.signIn); }); }
 
   function sw(name) {
     return '<div class="sw" data-sample="' + name + '"><i></i><b><em></em><em></em></b></div>';

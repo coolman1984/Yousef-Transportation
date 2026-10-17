@@ -4,7 +4,7 @@
     (run the newer installer over the installed program)
     python tools/journey_exe.py after <home> "C:\\Program Files\\TripOrders\\TripOrders.exe"
 
-`first`: starts the program on an empty folder (demo mode: no sign-in, the sample data is loaded), adds the lists, creates a trip,
+`first`: starts the program on an empty folder (no sign-in; the real work starts empty), adds the lists, creates a trip,
 takes a backup, and kills the program without warning. `after`: starts it again on the same folder, checks that the trip and the
 backup are still there, that the trip is not doubled, and that the program can still create a trip. Exit code 0 = good.
 Also works on the source:  python tools/journey_exe.py first <home> python server/app.py
@@ -90,13 +90,13 @@ def first(home, cmd):
     proc, app = start(cmd, home, {})
     try:
         status = app.call('GET', '/api/auth/status')
-        assert status['me'] and status['me']['demo'], 'demo mode must open the program without signing in: ' + str(status)
-        assert app.call('GET', '/api/state')['trips'], 'a new folder must start with the sample trips'
+        assert status['me'] and not status['me']['signIn'], 'the program must open without signing in: ' + str(status)
+        assert app.call('GET', '/api/state')['trips'] == [], 'the real work must start empty (sample data lives only in training mode)'
         app.call('POST', '/api/commit', {'label': 'lists', 'ops': LISTS})
         trip = app.call('POST', '/api/trips/new', {**TRIP, 'destination': 'Journey Factory'})
         backup = app.call('POST', '/api/backups', {})['name']
         json.dump({'trip': trip['id'], 'no': trip['no'], 'backup': backup}, open(os.path.join(home, 'journey.json'), 'w'))
-        print(f"OK first: demo mode opened with sample data, trip {trip['no']} created, backup {backup}")
+        print(f"OK first: opened without signing in, empty real work, trip {trip['no']} created, backup {backup}")
     finally:
         proc.kill()                                   # no warning at all: the data must survive a killed program
         proc.wait()

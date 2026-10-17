@@ -4,7 +4,9 @@
   var TO = window.TO;
   var THEMES = ['auto', 'daylight', 'night', 'asphalt', 'highway', 'contrast'];   // their sample colours live in css/tokens.css (.sw[data-sample])
   var FONTS = ['plex', 'cairo', 'tajawal', 'kufi', 'system'];                       // the font of each sample is set by [data-font-sample] in css/base.css
-  var TABS = ['appearance', 'rules', 'gateway', 'access', 'data', 'privacy', 'licence'];   // the organisation and money tabs are not built yet and are not shown (N1)
+  var ALL_TABS = ['appearance', 'rules', 'gateway', 'access', 'data', 'privacy'];   // the organisation and money tabs are not built yet and are not shown (N1)
+  // without sign-in there are no user accounts to manage
+  function tabs() { return ALL_TABS.filter(function (t) { return !(t === 'access' && TO.me && !TO.me.signIn); }); }
 
   function sw(name) {
     return '<div class="sw" data-sample="' + name + '"><i></i><b><em></em><em></em></b></div>';
@@ -43,18 +45,17 @@
 
   TO.views.settings = {
     render: function (ctx) {
-      var tab = TABS.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : 'appearance';
-      var tabs = '<div class="seg seg-scroll" role="group" data-lab-scroll aria-label="' + TO.esc(TO.t('set.title')) + '">' + TABS.map(function (t) {
+      var TABS = tabs(), tab = TABS.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : 'appearance';
+      var bar = '<div class="seg seg-scroll" role="group" data-lab-scroll aria-label="' + TO.esc(TO.t('set.title')) + '">' + TABS.map(function (t) {
         return '<button type="button" data-tab="' + t + '" aria-pressed="' + (t === tab) + '">' + TO.esc(TO.t('set.tab.' + t)) + '</button>';
       }).join('') + '</div>';
       return '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('set.title')) + '</h1><p>' + TO.esc(TO.t('set.sub')) + '</p></div></div>' +
-        '<div class="toolbar">' + tabs + '</div>' +
+        '<div class="toolbar">' + bar + '</div>' +
         (tab === 'appearance' ? '<div class="grid two-col"><section class="card">' + appearance() + '</section>' + preview() + '</div>'
           : tab === 'access' ? TO.accessTab.render()
           : tab === 'data' ? TO.dataTab.render()
           : tab === 'gateway' ? TO.mailboxTab.render()
           : tab === 'privacy' ? TO.privacyTab.render()
-          : tab === 'licence' ? TO.licenceTab.render()
           : tab === 'rules' ? (TO.data.state ? '<h2 class="set-h2">' + TO.esc(TO.t('set.cats')) + '</h2>' + TO.listPage(TO.lists.tripCategories) : '<div class="skeleton skeleton-block"></div>')
           : '');
     },
@@ -62,8 +63,7 @@
       if (ctx.route.q.tab === 'data') TO.dataTab.mount(root);
       if (ctx.route.q.tab === 'gateway') TO.mailboxTab.mount(root);
       if (ctx.route.q.tab === 'privacy') TO.privacyTab.mount(root);
-      if (ctx.route.q.tab === 'licence') TO.licenceTab.mount(root);
-      if (ctx.route.q.tab === 'access') {
+      if (ctx.route.q.tab === 'access' && tabs().indexOf('access') >= 0) {
         (TO.data.state ? Promise.resolve() : TO.data.load()).then(function () { TO.accessTab.mount(root); });
       }
       if (ctx.route.q.tab === 'rules') { if (!TO.data.state) { TO.data.load().then(function () { TO.rerender(); }); return; } TO.mountList(root, TO.lists.tripCategories); }

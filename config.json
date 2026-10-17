@@ -14,7 +14,7 @@
   "lockout_minutes": 15,
   "min_password_length": 8,
   "device_name": "",
-  "licence_hub_url": "https://trip-orders-licence-hub.mflma2040.workers.dev",
+  "sign_in": false,
   "sync_port": 8453,
   "sync_interval_seconds": 5,
   "peer_addresses": {}

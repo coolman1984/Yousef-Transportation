@@ -18,7 +18,6 @@
     { id: 'reports', icon: 'chart', group: 'insight', perm: 'reports.view', key: 'e', phase: 1 },
     { id: 'excel', icon: 'sheet', group: 'insight', perm: ['excel.import', 'excel.export'], key: 'x', phase: 1 },
     { id: 'activity', icon: 'activity', group: 'control', perm: 'logs.view', key: 'a', phase: 2 },
-    { id: 'licence', icon: 'shield', group: 'control', perm: 'settings.view', key: '', phase: 1 },
     { id: 'settings', icon: 'settings', group: 'control', perm: null, key: 's', phase: 1 },
     { id: 'help', icon: 'help', group: 'control', perm: null, key: 'h', phase: 1 }
   ];
@@ -68,9 +67,12 @@
           '<button class="icon-btn mirror-ic" data-act="collapse" aria-label="' + TO.esc(TO.t('top.collapse')) + '" title="' + TO.esc(TO.t('top.collapse')) + ' ([)">' + TO.icon('collapse') + '</button></div>' +
       '</aside>' +
       '<div class="main">' +
+        (me.training ? '<div class="train-bar" role="status">' + TO.icon('info') + '<span class="grow">' + TO.esc(TO.t('train.bar')) + '</span>' +
+          '<button class="btn primary" data-act="real">' + TO.icon('route', 'sm') + TO.esc(TO.t('train.back')) + '</button></div>' : '') +
         '<header class="topbar">' +
           '<button class="icon-btn menu-btn" data-act="menu" aria-label="' + TO.esc(TO.t('top.menu')) + '">' + TO.icon('menu') + '</button>' +
           '<div class="crumbs" id="crumbs"></div>' +
+          (me.training ? '' : '<button class="btn sm train-btn desk-only" data-act="training" title="' + TO.esc(TO.t('train.title')) + '">' + TO.icon('play', 'sm') + TO.esc(TO.t('train.btn')) + '</button>') +
           '<span class="grow"></span>' +
           '<button class="search-trigger" data-act="palette" data-tour="search" aria-label="' + TO.esc(TO.t('top.search')) + '">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
           '<span class="grow" style="flex:0 0 0"></span>' +
@@ -82,7 +84,6 @@
           '<button class="icon-btn" data-act="keys" aria-label="' + TO.esc(TO.t('top.shortcuts')) + '" title="' + TO.esc(TO.t('top.shortcuts')) + ' (?)">' + TO.icon('keyboard') + '</button>' +
           '</span>' +
         '</header>' +
-        '<div id="lic-banner"></div>' +
         '<main class="content" id="view" tabindex="-1"></main>' +
       '</div>' +
       '<div id="panels" aria-live="polite"></div>' +
@@ -102,11 +103,6 @@
         renderRoute();
       });
       renderRoute();
-      TO.get('/api/licence').then(function (lic) {
-        if (TO.me) TO.me.licence = lic;
-        if (TO.licenceBanner) TO.licenceBanner();
-        if (TO.licenceBgPoll) TO.licenceBgPoll.kick();
-      }, function () { /* read-only users still get the shell */ });
       if (!TO.prefs.data.welcomed) setTimeout(function () { TO.slides.open(true); }, 500);
     },
     stop: function () { shellReady = false; }
@@ -126,14 +122,14 @@
         var host = TO.$('#view'), old = host.cloneNode(false);
         host.replaceWith(old);
         old.innerHTML = TO.pageHead ? TO.pageHead('err.pageNotFound', 'err.pageNotFound.d') : '<div class="card"><h2>' + TO.esc(TO.t('err.pageNotFound')) + '</h2></div>';
-        document.title = TO.t('err.pageNotFound') + ' · ' + TO.t('app.name');
+        document.title = trainTitle() + TO.t('err.pageNotFound') + ' · ' + TO.t('app.name');
         return;
       }
       TO.go('overview'); return;
     }
     TO.$$('#sidebar a[data-page]').forEach(function (a) { if (a.dataset.page === page.id) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current'); });
     TO.$('#crumbs').innerHTML = '<span class="mut">' + TO.esc(TO.t('app.name')) + '</span><span class="mut faint">/</span><b>' + TO.esc(TO.t('nav.' + page.id)) + '</b>';
-    document.title = TO.t('nav.' + page.id) + ' · ' + TO.t('app.name');
+    document.title = trainTitle() + TO.t('nav.' + page.id) + ' · ' + TO.t('app.name');
     var view = TO.views[page.id] || TO.views.soon;
     var old = TO.$('#view'), host = old.cloneNode(false);   // a fresh element: no listeners of the previous page stay behind, and the page-in animation replays
     old.replaceWith(host);
@@ -223,9 +219,11 @@
       { icon: 'help', label: TO.t('guide.open'), group: TO.t('pal.g.actions'), hint: 'F1', run: function () { TO.guide.open(); } },
       { icon: 'play', label: TO.t('act.tour'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.tour.start(); } },
       { icon: 'present', label: TO.t('act.slides'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.slides.open(); } },
-      { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } },
-      { icon: 'logout', label: TO.t('act.logout'), group: TO.t('pal.g.actions'), hint: '', run: function () { logout(); } }
+      { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } }
     );
+    if (TO.me.training) items.push({ icon: 'route', label: TO.t('train.back'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.training.back(); } });
+    else items.push({ icon: 'play', label: TO.t('train.btn'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.training.open(); } });
+    if (TO.me.signIn) items.push({ icon: 'logout', label: TO.t('act.logout'), group: TO.t('pal.g.actions'), hint: '', run: function () { logout(); } });
     return items;
   }
   function openPalette() {
@@ -292,10 +290,10 @@
       '<dl class="kv" style="margin-top:1rem"><dt>' + TO.esc(TO.t('panel.account.role')) + '</dt><dd>' + TO.esc(me.role || '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.node')) + '</dt><dd>' + TO.esc(me.node ? me.node.name : '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.perms')) + '</dt><dd><span class="num">' + (me.perms || []).length + '</span></dd></dl></div>',
-      footer: (me.viaLink ? '' : '<button class="btn" data-pw>' + TO.icon('lock', 'sm') + TO.esc(TO.t('pw.change')) + '</button>') +
+      footer: !me.signIn ? '' : (me.viaLink ? '' : '<button class="btn" data-pw>' + TO.icon('lock', 'sm') + TO.esc(TO.t('pw.change')) + '</button>') +
         '<button class="btn" data-logout>' + TO.icon('logout', 'sm') + TO.esc(TO.t('auth.logout')) + '</button>',
       mount: function (el) {
-        el.querySelector('[data-logout]').addEventListener('click', logout);
+        var out = el.querySelector('[data-logout]'); if (out) out.addEventListener('click', logout);
         var pw = el.querySelector('[data-pw]'); if (pw) pw.addEventListener('click', changePassword);
       } });
   }
@@ -305,7 +303,7 @@
       body: '<p class="muted">' + TO.esc(TO.t('pw.change.d')) + '</p>' +
         '<div class="field"><label for="pw-old">' + TO.esc(TO.t('pw.old')) + '</label><input class="input" id="pw-old" type="password" dir="ltr" autocomplete="current-password"></div>' +
         '<div class="field"><label for="pw-new">' + TO.esc(TO.t('pw.new')) + '</label><input class="input" id="pw-new" type="password" dir="ltr" autocomplete="new-password"><span class="help">' + TO.esc(TO.t('auth.pw.hint')) + '</span></div>' +
-        '<div class="tip err" hidden role="alert" style="background:var(--bad-soft);color:var(--bad)"></div>',
+        '<div class="tip bad err" hidden role="alert"></div>',
       footer: '<button class="btn ghost" data-close>' + TO.esc(TO.t('common.cancel')) + '</button><button class="btn primary" data-ok>' + TO.esc(TO.t('common.save')) + '</button>' });
     el.querySelector('[data-ok]').addEventListener('click', function () {
       var err = el.querySelector('.err'), btn = el.querySelector('[data-ok]');
@@ -315,6 +313,32 @@
       }, function (e) { btn.disabled = false; err.hidden = false; err.textContent = TO.ui.errorText(e); });
     });
   }
+
+  /* ---------- training mode (server/training.py): a separate copy with sample data, one button in and one button back ---------- */
+  function trainTitle() { return TO.me && TO.me.training ? TO.t('train.btn') + ' · ' : ''; }   // the training tab never looks like the real one
+  function portUrl(port) { return 'http://' + location.hostname + ':' + port + '/'; }   // both copies listen on plain http ports, also behind an https front
+  TO.training = {
+    open: function () {
+      var el = TO.dialog({ title: TO.t('train.title'),
+        body: '<p>' + TO.esc(TO.t('train.body')) + '</p><div class="tip">' + TO.icon('info') + '<span>' + TO.esc(TO.t('train.how')) + '</span></div>' +
+          '<div class="tip bad err" hidden role="alert"></div>',
+        footer: '<button class="btn ghost" data-train-reset title="' + TO.esc(TO.t('train.reset.d')) + '">' + TO.icon('refresh', 'sm') + TO.esc(TO.t('train.reset')) + '</button>' +
+          '<span class="grow"></span><button class="btn primary lg" data-train-go>' + TO.icon('play', 'sm') + TO.esc(TO.t('train.go')) + '</button>' });
+      function go(path) {
+        var btns = el.querySelectorAll('footer .btn'), err = el.querySelector('.err');
+        btns.forEach(function (b) { b.disabled = true; });
+        el.querySelector('[data-train-go]').textContent = TO.t('train.wait');
+        TO.post(path).then(function (r) { location.href = portUrl(r.port); }, function (e) {
+          btns.forEach(function (b) { b.disabled = false; });
+          el.querySelector('[data-train-go]').textContent = TO.t('train.go');
+          err.hidden = false; err.textContent = TO.ui.errorText(e);
+        });
+      }
+      el.querySelector('[data-train-go]').addEventListener('click', function () { go('/api/training/open'); });
+      el.querySelector('[data-train-reset]').addEventListener('click', function () { go('/api/training/reset'); });
+    },
+    back: function () { if (TO.me && TO.me.realPort) location.href = portUrl(TO.me.realPort); }
+  };
 
   function logout() {
     TO.post('/api/auth/logout').then(function () { TO.emit('logged-out'); }, function () { TO.emit('logged-out'); });
@@ -337,6 +361,8 @@
     else if (a === 'collapse') toggleCollapse();
     else if (a === 'account') openAccount();
     else if (a === 'report') TO.guide.report({});
+    else if (a === 'training') TO.training.open();
+    else if (a === 'real') TO.training.back();
     else if (a === 'menu') { var app = TO.$('#app-shell'); app.dataset.menu = app.dataset.menu === '1' ? 0 : 1; }
   });
   document.addEventListener('click', function (e) {   // on a phone the menu closes after choosing a page

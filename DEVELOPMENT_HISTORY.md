@@ -1,6 +1,27 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Training mode: one big button in, one button back (2026-10-17)
+
+**What/why:** Owner request (Fawzy, 17 Oct, same day): the sample data must be reached by a big clear button so a learner can practise without worry, and inside training there must be a button back to the real work. So the samples no longer go into the real data.
+- `"demo_mode"` became `"sign_in": false` (default: nobody signs in, everybody is the built-in administrator). The real work starts empty.
+- `server/training.py`: `POST /api/training/open` starts a second copy of the program (same exe or `python app.py`, `TO_HOME=<home>/training`, own `config.json` with `training: true`, port `training_port` or office port + 10) and waits until it answers; `POST /api/training/reset` stops it, deletes its data and backups and starts it again with fresh samples. Only the training copy loads `demo.seed`.
+- The training copy shows a sticky yellow bar "Training mode ... Back to real work" (`me.training`, `me.realPort`) and a tab title prefix; the real office shows a "Training mode" button in the top bar, a big card on the home page and a palette action.
+- The training copy stops by itself when the real program stops answering (`training.watch_real`), so it is never left running alone; the office stops it on exit too.
+**Review (Codex on PR 51):** an office that used sign-in before had an administrator not named `admin`, so it still got the sign-in screen; `demo.user` now falls back to the first administrator and `demo_user` ignores `must_change` (`test_demo.UpgradeFromSignInTest`). Training links always use `http://` (both copies are plain http ports, also behind an https front). Switching sign-in back on is documented with `tool reset-admin`. Sign-in off for the whole office LAN stays as the owner asked.
+**Mistake:** removing `tools/ci_signing_key.py` also removed the line that set `TO_BUILD_CHANNEL=ci-test`, so the Windows CI built a "commercial" installer in the wrong folder ("the installed program is missing"). The workflow now sets the channel itself; `test_release_files` guards it.
+**Lesson:** the harness uses `TO_CONFIG` with the repo as home, so the training test sets `TO_HOME` to a temp folder to keep the training copy out of the repository; `training/` is also in `.gitignore` for the portable folder.
+
+## Demo mode, no sign-in, no licence (2026-10-17)
+
+**What/why:** Owner request (Fawzy, 17 Oct): remove the sign-in and put a demo mode with sample data everywhere for learners; remove activation completely; keep the program simple and practical. Branch `feat/demo-mode-no-login`.
+- `"demo_mode": true` (default in `DEFAULT_CONFIG` and `config.json`): a request without a session works as the built-in administrator `admin` (`server/demo.py`, created once on a PC that is not a member); `/api/auth/status` and `/api/me` carry `demo: true`; the UI hides log-out, password change, the "People & access" tab and the account guides/situations, and shows a "Demo mode" badge.
+- `demo.seed`: on a brand-new folder (`STORE.claim_first_run`) loads fake lists in Arabic and about 40 trips of the last three weeks in every state through `tripsvc` (closed, reviewed, approved/declined, corrected, cancelled, started, drafts for today/tomorrow). History is stamped on the trip days (`_clock`), so reviewed trips show green.
+- Removed: `server/licence.py`, `licence_state.py`, `hub_time.py`, `afcodes.py`, `licence-hub/`, `js/views/licence.js`, the 402 licence lock, `/api/licence*`, `licence_hub_url`, the `lic.*` words, the licence guide problem, `tools/release_policy.py`, `ci_signing_key.py`, `customer_release_check.py`, `prepare_n1_for_legacy.py`, the customer-release workflow and the N-1 licence journey; `journey_exe.py` now proves demo start, trip, backup, kill, restart.
+- Sign-in code stays behind `"demo_mode": false` (tests use it: `harness.Server` sets it off; `test_demo` turns it on).
+**Lesson:** demo data written in the same second as its review looked "amended after review" (yellow): timestamps of sample history must be realistic.
+**Checks:** see the PR. **Next:** owner review; decide whether the remote-help consent card should also go.
+
 ## Grok review r2 (PR 116) — journey after() licence gate (2026-10-17)
 
 **What/why:** Address `review-116-grok-r2.md` P1: `journey_exe.py after()` only posts `/api/trips/new` when `lic['full']`; enforced unlicensed upgrade keeps saved trip and backup without a 402 write.

@@ -1,7 +1,5 @@
-# Tests every change and builds a NON-CUSTOMER Windows installer with throwaway verification keys.
-# Automated publication is disabled: a commercial release requires the owner's real
-# PUBLIC verification key, owner-side offline signing, and explicit acceptance.
-# See docs/BUILD_AND_RELEASE.md.
+# Tests every change and builds a NON-CUSTOMER Windows test installer.
+# Automated publication is disabled: the owner publishes a customer release. See docs/BUILD_AND_RELEASE.md.
 name: Test and build
 
 on:
@@ -10,18 +8,9 @@ on:
     tags: ['v*']
   pull_request:
   workflow_dispatch:
-    inputs:
-      trial_hub_public_key:
-        description: 'Optional PUBLIC trial-hub key (base64url) for this CI test build'
-        required: false
-        default: ''
-      paid_public_key:
-        description: 'Optional PUBLIC paid key (base64url, kid paid) for this CI test build'
-        required: false
-        default: ''
 
 permissions:
-  contents: read  # no automatic customer releases from ephemeral CI builds
+  contents: read  # no automatic customer releases from CI builds
 
 concurrency:
   # a newer push to the same PR cancels the older run; pushes to main and tags always finish
@@ -50,15 +39,11 @@ jobs:
       - name: Gateway tests (Worker + D1 stand-in)
         working-directory: gateway
         run: node --test --no-warnings test/gateway.test.js
-      - name: Licence hub tests
-        working-directory: licence-hub
-        run: npm test
       - name: Office tests (engine, trips, Excel, Word, gateway client, screens)
         working-directory: tests
-        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto test_release_policy test_commercial_licence test_licence_hub_signer test_hub_time test_qa_113 test_yt_115 test_n1_legacy_fixture
+        run: python -m unittest test_unit test_convergence test_design test_domain test_trips_api test_xlsx test_excel_io test_word_io test_formats test_gateway_client test_permissions test_pricing test_network test_backup test_time test_import_errors test_multinode test_access_gate test_errors test_guide test_guide_gate test_assist test_e2e_browser test_e2e_driver test_e2e_link_ui test_e2e_guide test_release_files test_crypto test_qa_113 test_yt_115 test_demo
       - name: Core journey on the source (killed without warning, then restarted)
         run: |
-          python -m pip install cryptography
           python tools/journey_exe.py first "$RUNNER_TEMP/journey" python server/app.py
           python tools/journey_exe.py after "$RUNNER_TEMP/journey" python server/app.py
 
@@ -81,33 +66,16 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install "nuitka>=2.4,<3" ordered-set zstandard cryptography
           choco upgrade innosetup -y --no-progress
-      - name: Generate a throwaway signing key for CI only
-        run: python tools/ci_signing_key.py
-      - name: Also trust owner PUBLIC hub keys (manual workflow_dispatch only)
-        if: ${{ github.event_name == 'workflow_dispatch' && (inputs.trial_hub_public_key != '' || inputs.paid_public_key != '') }}
-        shell: bash
-        env:
-          TRIAL_HUB_PUB: ${{ inputs.trial_hub_public_key }}
-          PAID_PUB: ${{ inputs.paid_public_key }}
-        run: |
-          extra=""
-          if [ -n "$TRIAL_HUB_PUB" ]; then
-            [[ "$TRIAL_HUB_PUB" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'invalid trial_hub_public_key'; exit 1; }
-            extra="${extra},trial-hub:${TRIAL_HUB_PUB}"
-          fi
-          if [ -n "$PAID_PUB" ]; then
-            [[ "$PAID_PUB" =~ ^[A-Za-z0-9_-]{43}$ ]] || { echo 'invalid paid_public_key'; exit 1; }
-            extra="${extra},paid:${PAID_PUB}"
-          fi
-          echo "TO_RELEASE_PUBLIC_KEYS=${TO_RELEASE_PUBLIC_KEYS}${extra}" >> "$GITHUB_ENV"
       - name: Build a NON-CUSTOMER test installer
+        env:
+          TO_BUILD_CHANNEL: ci-test   # own AppId and folder (TripOrders-CITest): it can never replace a customer install
         run: python tools/build_windows.py
       - name: Check that the built program folder starts and serves its pages
         shell: pwsh
         run: |
           $home_dir = Join-Path $env:RUNNER_TEMP 'to-home'
           New-Item -ItemType Directory -Force $home_dir | Out-Null
-          '{"port": 18080, "sync_port": 18443, "open_browser": false, "licence_hub_url": ""}' | Set-Content (Join-Path $home_dir 'config.json')
+          '{"port": 18080, "sync_port": 18443, "open_browser": false}' | Set-Content (Join-Path $home_dir 'config.json')
           $env:TO_HOME = $home_dir
           $p = Start-Process -FilePath build\to_main.dist\TripOrders.exe -ArgumentList '--background' -PassThru
           $ok = $false
@@ -130,7 +98,6 @@ jobs:
       - name: Install silently and check the folder protection and the firewall (office LAN by default, private/domain networks only)
         shell: pwsh
         run: |
-          pip install cryptography
           $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
           (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
@@ -144,7 +111,7 @@ jobs:
           if ($fw -notmatch 'Profiles:\s+(Domain,Private|Private,Domain)\s*(\r?\n|$)') { throw 'the firewall rule must be limited to the private and domain profiles' }
           if ($fw -match 'Public' -or $fw -match 'Profiles:\s+Any') { throw 'the firewall rule must never cover public networks' }
           exit 0  # keep the step green whatever netsh returned last
-      - name: Core journey on the installed program, then update over it (the trip, the backup and the licence must survive)
+      - name: Core journey on the installed program, then update over it (the trip and the backup must survive)
         shell: pwsh
         run: |
           $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
@@ -155,38 +122,6 @@ jobs:
           (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
           python tools/journey_exe.py after $h $exe
           if ($LASTEXITCODE -ne 0) { throw 'the office did not survive the update' }
-      - name: Update from the previous release (N-1) keeps the data
-        shell: pwsh
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          $dir = Join-Path ${env:RUNNER_TEMP} 'previous'
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          # Pinned N-1: the last contract-mode (non-enforced) release. Never the latest release: from v1.1.3 on,
-          # published installers are commercial/enforced and the legacy journey would get 402 no_code.
-          $n1 = 'v1.1.2'
-          gh release download $n1 --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-1.1.2.exe' --dir $dir
-          $old = Get-ChildItem $dir -Filter 'TripOrders-Setup-1.1.2.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $old) { throw "pinned N-1 installer $n1 could not be downloaded" }
-          $unins = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\unins000.exe'
-          (Start-Process -FilePath $unins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
-          Remove-Item -Recurse -Force (Join-Path ${env:ProgramData} 'TripOrders') -ErrorAction SilentlyContinue
-          (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
-          # the previous release is a customer build in Program Files\TripOrders; this CI-test build has its own
-          # AppId and folder (it can never replace a customer install), so it reads the same office data side by side
-          $oldExe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
-          $h = Join-Path ${env:RUNNER_TEMP} 'journey-n1'
-          python tools/journey_exe.py legacy $h $oldExe
-          if ($LASTEXITCODE -ne 0) { throw 'the previous release did not run the journey' }
-          $setup = Get-ChildItem dist/TripOrders-Setup-*.exe | Select-Object -First 1
-          (Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
-          if (-not (Test-Path $oldExe)) { throw 'the CI-test installer must not touch the customer install' }
-          $exe = Join-Path ${env:ProgramFiles} 'TripOrders-CITest\TripOrders.exe'
-          python tools/journey_exe.py after $h $exe
-          if ($LASTEXITCODE -ne 0) { throw 'the CI-test build could not read the office data of the previous release' }
-          $oldUnins = Join-Path ${env:ProgramFiles} 'TripOrders\unins000.exe'
-          (Start-Process -FilePath $oldUnins -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -PassThru).WaitForExit()
-          if ($LASTEXITCODE -ne 0) { throw 'the update from the previous release lost data' }
       - name: Release proof (source commit, version, installer checksum, this run)
         shell: pwsh
         run: |
@@ -196,7 +131,7 @@ jobs:
           $proof = @("product: Trip Orders", "version: $version", "source_commit: ${env:GITHUB_SHA}", "ref: ${env:GITHUB_REF}",
             "installer: $($setup.Name)", "installer_sha256: $hash",
             "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
-            "checks: built folder smoke, silent install, data-folder ACL, firewall rule private/domain only, installed core journey, update keeps data, N-1 update, uninstall keeps data, this-PC-only install has no firewall rule")
+            "checks: built folder smoke, silent install, data-folder ACL, firewall rule private/domain only, installed core journey, update keeps data, uninstall keeps data, this-PC-only install has no firewall rule")
           $proof | Set-Content -Encoding utf8 dist/RELEASE-PROOF.txt
           Get-Content dist/RELEASE-PROOF.txt
       - name: Uninstall keeps the office's data
@@ -231,6 +166,4 @@ jobs:
             dist/RELEASE-PROOF.txt
             dist/CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt
           retention-days: 30
-      # Deliberately NO 'gh release create': CI keys are ephemeral and must
-      # never create a real customer installer. Build the customer release
-      # under the owner's controlled commercial signing process instead.
+      # Deliberately NO 'gh release create': a customer installer is published by the owner.

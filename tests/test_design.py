@@ -120,7 +120,7 @@ class LanguageTest(unittest.TestCase):
 
 
 class InlineStyleTest(unittest.TestCase):
-    CLEAN = ['views/settings.js', 'views/privacy.js', 'views/licence.js', 'guide.js']   # presentation lives in css/ and the tokens; this list only grows
+    CLEAN = ['views/settings.js', 'views/privacy.js', 'guide.js']   # presentation lives in css/ and the tokens; this list only grows
 
     def test_clean_pages_carry_no_inline_style_or_colour(self):
         for f in self.CLEAN:

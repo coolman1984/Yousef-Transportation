@@ -1,4 +1,4 @@
-"""The guide, the consent card, the problem report and the licence/privacy tabs in a real browser (Playwright + Chromium); skipped without them."""
+"""The guide, the consent card, the problem report and the privacy tab in a real browser (Playwright + Chromium); skipped without them."""
 import json
 import os
 import unittest
@@ -129,15 +129,13 @@ class GuideTest(Base):
         self.assertEqual(self.ac.get('/api/telemetry/queue')['reports'], 1)
         self.assertEqual(self.errors, [])
 
-    def test_d_privacy_and_licence_tabs_open_and_the_unbuilt_tabs_are_gone(self):
+    def test_d_privacy_tab_opens_and_the_unbuilt_and_licence_tabs_are_gone(self):
         pg = self.login('en')
         pg.goto(self.S.base + '/#/settings?tab=privacy')
         pg.wait_for_selector('[data-install-card]')
         self.assertIn('Remote help', pg.inner_text('[data-install-card]'))
-        pg.goto(self.S.base + '/#/settings?tab=licence')
-        pg.wait_for_selector('[data-lic-state]')
-        self.assertIn('contract', pg.inner_text('[data-lic-state]').lower())
         tabs = pg.eval_on_selector_all('[data-tab]', 'els => els.map(e => e.dataset.tab)')
+        self.assertNotIn('licence', tabs)
         self.assertNotIn('organisation', tabs)
         self.assertNotIn('money', tabs)
         self.assertEqual(self.errors, [])

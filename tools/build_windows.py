@@ -19,7 +19,6 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BUILD = os.path.join(ROOT, 'build')
 sys.path.insert(0, os.path.join(ROOT, 'server'))
 from version import COPYRIGHT, DEVELOPER, PRODUCT, VERSION  # noqa: E402
-from release_policy import create_release_policy  # noqa: E402
 
 
 def run(cmd):
@@ -39,7 +38,7 @@ def compile_program(v4):
          '--python-flag=no_docstrings', '--lto=auto',
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
-         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets', '--include-module=_release_policy',
+         f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets',
          '--include-data-files=' + os.path.join('server', 'aftelemetry_events.json') + '=aftelemetry_events.json',
          '--include-data-files=' + os.path.join('server', 'afguide_ar_lexicon.json') + '=afguide_ar_lexicon.json',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'to_main.py')])
@@ -48,23 +47,16 @@ def compile_program(v4):
 def main():
     os.makedirs(BUILD, exist_ok=True)
     assets = os.path.join(ROOT, 'server', '_assets.py')
-    policy = os.path.join(ROOT, 'server', '_release_policy.py')
-    # Fail before building if the vendor has not supplied a real Ed25519 PUBLIC
-    # signing key. Never use a developer/demo key for a customer release.
     channel = os.environ.get('TO_BUILD_CHANNEL', 'commercial')
-    key_count = create_release_policy(policy, os.environ.get('TO_RELEASE_PUBLIC_KEYS', ''), channel=channel)
-    print(f'{channel} licence enforcement: {key_count} pinned PUBLIC key(s)')
     try:
         run([sys.executable, 'tools/make_assets.py', assets])
         run([sys.executable, 'tools/make_icon.py', os.path.join(BUILD, 'triporders.ico')])
         v4 = '.'.join((VERSION.split('.') + ['0', '0', '0'])[:4])
         compile_program(v4)
     finally:
-        # Generated sources contain UI assets and the release trust anchor; they
-        # belong in the compiled binary, never in the source checkout.
-        for path in (assets, policy):
-            if os.path.exists(path):
-                os.remove(path)
+        # The generated source contains the UI assets; it belongs in the compiled binary, never in the source checkout.
+        if os.path.exists(assets):
+            os.remove(assets)
     dist = os.path.join(BUILD, 'to_main.dist')
     assert os.path.exists(os.path.join(dist, 'TripOrders.exe')), 'TripOrders.exe was not built'
     forbidden = {'.py', '.pyc', '.pyo', '.pdb', '.map', '.c', '.h'}
@@ -83,7 +75,7 @@ def main():
     run([iscc(), f'/DAppChannel={channel}', f'/DAppVersion={VERSION}', f'/DAppPublisher={DEVELOPER}', f'/DAppCopyright={COPYRIGHT}', os.path.join('installer', 'trip-orders.iss')])
     if channel == 'ci-test':
         with open(os.path.join(ROOT, 'dist', 'CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt'), 'w', encoding='utf-8') as f:
-            f.write('TEST ONLY. Ephemeral signing keys. Never sell or publish this installer.\n')
+            f.write('TEST ONLY. Built by CI. Never sell or publish this installer.\n')
     print('Done:', glob.glob(os.path.join(ROOT, 'dist', f'TripOrders-Setup-{VERSION}*.exe')))
 
 

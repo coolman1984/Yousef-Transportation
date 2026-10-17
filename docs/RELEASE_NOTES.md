@@ -3,6 +3,10 @@
 
 # Next (not released yet)
 
+- **Demo mode:** the program opens straight away, without a sign-in screen. A new office starts with sample trips, cars, drivers, people, places and reports, so a new person can learn with examples. A small "Demo mode" badge sits in the top bar.
+- **No licence or activation:** the Licence page, the activation codes and the licence hub are gone. Every feature works from the first start.
+- To ask for sign-in again, set `"demo_mode": false` in `config.json`.
+
 # Trip Orders 1.1.6
 
 - **Password reset codes:** a code that is used up or burned by wrong guesses stays dead on every office PC, even if saving fails half-way; refusing, suspending or re-refusing a sign-up also clears any outstanding reset code on all PCs.

@@ -18,7 +18,6 @@
     { id: 'reports', icon: 'chart', group: 'insight', perm: 'reports.view', key: 'e', phase: 1 },
     { id: 'excel', icon: 'sheet', group: 'insight', perm: ['excel.import', 'excel.export'], key: 'x', phase: 1 },
     { id: 'activity', icon: 'activity', group: 'control', perm: 'logs.view', key: 'a', phase: 2 },
-    { id: 'licence', icon: 'shield', group: 'control', perm: 'settings.view', key: '', phase: 1 },
     { id: 'settings', icon: 'settings', group: 'control', perm: null, key: 's', phase: 1 },
     { id: 'help', icon: 'help', group: 'control', perm: null, key: 'h', phase: 1 }
   ];
@@ -71,6 +70,7 @@
         '<header class="topbar">' +
           '<button class="icon-btn menu-btn" data-act="menu" aria-label="' + TO.esc(TO.t('top.menu')) + '">' + TO.icon('menu') + '</button>' +
           '<div class="crumbs" id="crumbs"></div>' +
+          (me.demo ? '<span class="badge signal" title="' + TO.esc(TO.t('demo.hint')) + '">' + TO.esc(TO.t('demo.badge')) + '</span>' : '') +
           '<span class="grow"></span>' +
           '<button class="search-trigger" data-act="palette" data-tour="search" aria-label="' + TO.esc(TO.t('top.search')) + '">' + TO.icon('search', 'sm') + '<span>' + TO.esc(TO.t('top.search')) + '</span><i class="kbd">Ctrl K</i></button>' +
           '<span class="grow" style="flex:0 0 0"></span>' +
@@ -82,7 +82,6 @@
           '<button class="icon-btn" data-act="keys" aria-label="' + TO.esc(TO.t('top.shortcuts')) + '" title="' + TO.esc(TO.t('top.shortcuts')) + ' (?)">' + TO.icon('keyboard') + '</button>' +
           '</span>' +
         '</header>' +
-        '<div id="lic-banner"></div>' +
         '<main class="content" id="view" tabindex="-1"></main>' +
       '</div>' +
       '<div id="panels" aria-live="polite"></div>' +
@@ -102,11 +101,6 @@
         renderRoute();
       });
       renderRoute();
-      TO.get('/api/licence').then(function (lic) {
-        if (TO.me) TO.me.licence = lic;
-        if (TO.licenceBanner) TO.licenceBanner();
-        if (TO.licenceBgPoll) TO.licenceBgPoll.kick();
-      }, function () { /* read-only users still get the shell */ });
       if (!TO.prefs.data.welcomed) setTimeout(function () { TO.slides.open(true); }, 500);
     },
     stop: function () { shellReady = false; }
@@ -223,9 +217,9 @@
       { icon: 'help', label: TO.t('guide.open'), group: TO.t('pal.g.actions'), hint: 'F1', run: function () { TO.guide.open(); } },
       { icon: 'play', label: TO.t('act.tour'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.tour.start(); } },
       { icon: 'present', label: TO.t('act.slides'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.slides.open(); } },
-      { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } },
-      { icon: 'logout', label: TO.t('act.logout'), group: TO.t('pal.g.actions'), hint: '', run: function () { logout(); } }
+      { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } }
     );
+    if (!TO.me.demo) items.push({ icon: 'logout', label: TO.t('act.logout'), group: TO.t('pal.g.actions'), hint: '', run: function () { logout(); } });
     return items;
   }
   function openPalette() {
@@ -292,10 +286,10 @@
       '<dl class="kv" style="margin-top:1rem"><dt>' + TO.esc(TO.t('panel.account.role')) + '</dt><dd>' + TO.esc(me.role || '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.node')) + '</dt><dd>' + TO.esc(me.node ? me.node.name : '') + '</dd>' +
       '<dt>' + TO.esc(TO.t('panel.account.perms')) + '</dt><dd><span class="num">' + (me.perms || []).length + '</span></dd></dl></div>',
-      footer: (me.viaLink ? '' : '<button class="btn" data-pw>' + TO.icon('lock', 'sm') + TO.esc(TO.t('pw.change')) + '</button>') +
+      footer: me.demo ? '' : (me.viaLink ? '' : '<button class="btn" data-pw>' + TO.icon('lock', 'sm') + TO.esc(TO.t('pw.change')) + '</button>') +
         '<button class="btn" data-logout>' + TO.icon('logout', 'sm') + TO.esc(TO.t('auth.logout')) + '</button>',
       mount: function (el) {
-        el.querySelector('[data-logout]').addEventListener('click', logout);
+        var out = el.querySelector('[data-logout]'); if (out) out.addEventListener('click', logout);
         var pw = el.querySelector('[data-pw]'); if (pw) pw.addEventListener('click', changePassword);
       } });
   }

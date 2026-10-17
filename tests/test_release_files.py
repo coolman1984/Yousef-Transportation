@@ -17,7 +17,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertIn('test_access_gate', listed)
 
     def test_the_installed_product_is_exercised_on_windows(self):
-        for needle in ('/VERYSILENT', 'journey_exe.py first', 'journey_exe.py after', 'journey_exe.py legacy', 'icacls', 'firewall show rule',
+        for needle in ('/VERYSILENT', 'journey_exe.py first', 'journey_exe.py after', 'icacls', 'firewall show rule',
                        'unins000.exe', 'RELEASE-PROOF', 'installer_sha256', 'source_commit', '/TASKS=thispconly'):
             self.assertIn(needle, WORKFLOW, needle)
         self.assertIn("'No rules match') { throw 'the default install must add", WORKFLOW)  # the default install must HAVE the rule
@@ -26,17 +26,9 @@ class WorkflowTest(unittest.TestCase):
 
     def test_the_journey_tool_covers_the_core_steps(self):
         src = open(os.path.join(ROOT, 'tools', 'journey_exe.py'), encoding='utf-8').read()
-        for needle in ('/api/auth/setup', 'expect=402', '/api/licence/activate', '/api/trips/new', '/api/backups', 'proc.kill()', 'exactly once'):
+        for needle in ("['demo']", '/api/trips/new', '/api/backups', 'proc.kill()', 'exactly once'):
             self.assertIn(needle, src, needle)
-        self.assertIn("'licence_hub_url': ''", src)
-        self.assertIn("Silent-install CI may read the public hub's /licence/time", src)
-        self.assertIn('an online trial request is sent only after a button press', src)
-        self.assertIn("'FACTORY_LICENCE_HUB_URL': hub", open(os.path.join(ROOT, 'tools', 'customer_release_check.py'), encoding='utf-8').read())
-
-    def test_windows_smoke_uses_a_blank_hub_without_disabling_the_test_job(self):
-        self.assertNotRegex(WORKFLOW, r"(?m)^env:\n  FACTORY_LICENCE_HUB_URL: 'off'$")
-        smoke = next(line for line in WORKFLOW.splitlines() if '"port": 18080' in line)
-        self.assertIn('"licence_hub_url": ""', smoke)
+        self.assertNotIn('/api/licence', src)
 
     def test_build_ships_the_guide_and_the_taxonomy(self):
         self.assertIn("'guide'", open(os.path.join(ROOT, 'tools', 'make_assets.py'), encoding='utf-8').read())
@@ -58,7 +50,7 @@ class WorkflowTest(unittest.TestCase):
         self.assertNotIn('operator-only-gateway', installer)
 
     def test_vendored_factory_parts_carry_their_header(self):
-        for name in ('afguide.py', 'afconsent.py', 'aftelemetry.py', 'afcodes.py'):
+        for name in ('afguide.py', 'afconsent.py', 'aftelemetry.py'):
             head = open(os.path.join(ROOT, 'server', name), encoding='utf-8').read(400)
             self.assertRegex(head, r'Vendored from Apps-Factory packages/af-', name)
         for name in ('af-guide.js', 'af-consent.js', 'af-telemetry.js'):

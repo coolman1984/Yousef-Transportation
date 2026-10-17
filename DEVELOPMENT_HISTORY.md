@@ -1,6 +1,16 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Demo mode, no sign-in, no licence (2026-10-17)
+
+**What/why:** Owner request (Fawzy, 17 Oct): remove the sign-in and put a demo mode with sample data everywhere for learners; remove activation completely; keep the program simple and practical. Branch `feat/demo-mode-no-login`.
+- `"demo_mode": true` (default in `DEFAULT_CONFIG` and `config.json`): a request without a session works as the built-in administrator `admin` (`server/demo.py`, created once on a PC that is not a member); `/api/auth/status` and `/api/me` carry `demo: true`; the UI hides log-out, password change, the "People & access" tab and the account guides/situations, and shows a "Demo mode" badge.
+- `demo.seed`: on a brand-new folder (`STORE.claim_first_run`) loads fake lists in Arabic and about 40 trips of the last three weeks in every state through `tripsvc` (closed, reviewed, approved/declined, corrected, cancelled, started, drafts for today/tomorrow). History is stamped on the trip days (`_clock`), so reviewed trips show green.
+- Removed: `server/licence.py`, `licence_state.py`, `hub_time.py`, `afcodes.py`, `licence-hub/`, `js/views/licence.js`, the 402 licence lock, `/api/licence*`, `licence_hub_url`, the `lic.*` words, the licence guide problem, `tools/release_policy.py`, `ci_signing_key.py`, `customer_release_check.py`, `prepare_n1_for_legacy.py`, the customer-release workflow and the N-1 licence journey; `journey_exe.py` now proves demo start, trip, backup, kill, restart.
+- Sign-in code stays behind `"demo_mode": false` (tests use it: `harness.Server` sets it off; `test_demo` turns it on).
+**Lesson:** demo data written in the same second as its review looked "amended after review" (yellow): timestamps of sample history must be realistic.
+**Checks:** see the PR. **Next:** owner review; decide whether the remote-help consent card should also go.
+
 ## Grok review r2 (PR 116) — journey after() licence gate (2026-10-17)
 
 **What/why:** Address `review-116-grok-r2.md` P1: `journey_exe.py after()` only posts `/api/trips/new` when `lic['full']`; enforced unlicensed upgrade keeps saved trip and backup without a 402 write.

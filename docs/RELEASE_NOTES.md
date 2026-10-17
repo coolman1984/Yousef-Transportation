@@ -3,6 +3,12 @@
 
 # Next (not released yet)
 
+# Trip Orders 1.1.6
+
+- **Password reset codes:** a code that is used up or burned by wrong guesses stays dead on every office PC, even if saving fails half-way; refusing, suspending or re-refusing a sign-up also clears any outstanding reset code on all PCs.
+- **Upgrade check:** the customer build is now proven by installing the real published previous installer and upgrading it, including an office that has no licence yet (its saved trips and backups are kept; editing stays locked until a licence is added). No signing key is used in that check.
+- **Tests:** new regression tests for reset-code replication and the previous-version upgrade check.
+
 # Trip Orders 1.1.5
 
 - **Sign-in:** self-service sign-up (pending until an administrator approves), administrator-issued one-time reset codes, and clearer messages for refused or suspended accounts.

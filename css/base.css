@@ -141,6 +141,15 @@ button { cursor: pointer; }
 .btn.danger { background: var(--bad-soft); color: var(--bad); border-color: transparent; }
 .btn.sm { min-height: 2.1rem; padding: .25rem .7rem; font-size: .9rem; }
 .btn[disabled] { opacity: .5; pointer-events: none; }
+.btn.lg { min-height: 3.1rem; padding: .6rem 1.4rem; font-size: 1.05rem; font-weight: 650; }
+/* training mode (js/shell.js TO.training): the way in on the real office, and the always-visible way back inside the training copy */
+.train-btn { background: var(--signal-soft); border-color: var(--signal-line); color: var(--ink); font-weight: 650; }
+.train-card { display: flex; align-items: center; gap: 1rem; margin-block-end: var(--gap); border-color: var(--signal-line); flex-wrap: wrap; }
+.train-card .tile-ic { width: 3rem; height: 3rem; border-radius: .9rem; display: grid; place-items: center; background: var(--signal-soft); color: var(--ink); }
+.train-card .grow { min-width: 14rem; }
+.train-bar { position: sticky; top: 0; z-index: 21; display: flex; align-items: center; gap: .8rem; flex-wrap: wrap; padding: .7rem var(--pad);
+  background: var(--warn-soft); color: var(--warn); font-weight: 650; border-block-end: 1px solid var(--line-2); }
+.train-bar .grow { min-width: 12rem; }
 
 .kbd { display: inline-flex; align-items: center; justify-content: center; min-width: 1.5rem; height: 1.5rem; padding-inline: .4rem; border-radius: .4rem; font: 600 .74rem var(--font-mono); background: var(--surface); color: var(--ink-2); border: 1px solid var(--line); box-shadow: 0 1px 0 var(--line); direction: ltr; }
 
@@ -435,24 +444,9 @@ html[dir="rtl"] #slides .track section { direction: rtl; }
 .tbl.matrix td.c, .tbl.matrix th.c { text-align: center; }
 .tbl.matrix .group-row th { background: var(--surface-2); font-weight: 700; }
 
-/* guide, privacy and licence pieces */
+/* guide and privacy pieces */
 .skeleton-block { min-height: 10rem; }
 .plain { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
-.lic-banner { margin: .6rem var(--gap) 0; align-items: center; }
-.lic-trial-banner { background: var(--warn-soft); color: var(--warn); }
-.lic-state { display: flex; align-items: center; gap: .8rem; margin-block-end: 1rem; }
-.lic-trial-count { font-weight: 600; margin-block-start: .35rem; color: var(--accent); }
-.lic-trial-expired { font-weight: 600; margin-block-start: .35rem; color: var(--warn); }
-.lic-simple { display: flex; flex-direction: column; gap: 1rem; margin-block-end: 1rem; }
-.lic-simple-cta { width: 100%; padding-block: .85rem; font-size: 1.05rem; }
-.lic-device-block { margin-block-start: .25rem; }
-.lic-device-big { font-size: 1.35rem; letter-spacing: .06em; padding: .5rem .75rem; }
-.lic-details-toggle { margin-block-end: 1rem; }
-.lic-details { margin-block-end: 1rem; padding-block-start: .5rem; border-block-start: 1px solid var(--line); }
-.lic-line { display: flex; align-items: center; gap: .5rem; padding: .6rem .8rem; border-radius: var(--r-2); background: var(--surface-2); margin-block-end: .6rem; }
-.lic-line.good { background: var(--ok-soft); color: var(--ok); }
-.lic-line.warn { background: var(--warn-soft); color: var(--warn); }
-.lic-line.bad { background: var(--bad-soft); color: var(--bad); }
 .code-box { min-height: 6rem; font-family: ui-monospace, Consolas, monospace; }
 .report-preview { white-space: pre-wrap; overflow-wrap: anywhere; background: var(--surface-2); padding: .8rem; border-radius: var(--r-2); }
 /* the guide button sits under the side panels and dialogs (so it never covers their Save button); the coach and the help panel sit above the panels */

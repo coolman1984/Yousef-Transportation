@@ -3,18 +3,16 @@ import concurrent.futures
 import json
 import os
 import re
-import shutil
 import socket
 import sqlite3
 import sys
-import tempfile
 import threading
 import time
 import unittest
 import warnings
 from unittest import mock
 
-from harness import ADMIN, ApiError, Server, make_authority, wait_until
+from harness import ADMIN, ApiError, Server, make_authority
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(ROOT, 'server'))
@@ -453,10 +451,6 @@ class YT115(unittest.TestCase):
             self.S.client().login('suspendme', 'Office-pass12')
         self.assertIn('suspended', str(e.exception.msg).lower())
 
-    def test_YT04_licence_activation_ui_flag(self):
-        lic = self.ac.get('/api/licence')
-        self.assertTrue(lic.get('activation_ui'))
-
     def test_YT05_board_limits_cards(self):
         src = open(os.path.join(ROOT, 'js', 'views', 'board.js'), encoding='utf-8').read()
         m = re.search(r'BOARD_LIMIT\s*=\s*(\d+)', src)
@@ -567,15 +561,11 @@ class YT115(unittest.TestCase):
         self.assertIn('1.1.5', notes)
         self.assertRegex(notes, r'consent|remote help|الموافقة', re.I)
 
-    def test_YT16_licence_page_in_unguided_catalogue(self):
+    def test_YT16_no_licence_page_in_the_catalogue(self):
         cat = json.load(open(os.path.join(ROOT, 'guide', 'catalogue.json'), encoding='utf-8'))
-        self.assertIn('licence', cat.get('unguided', []))
-        self.assertIn('licence', cat.get('pages', []))
-        lic_problem = next(p for p in cat['problems'] if p['id'] == 'licence-locked')
-        self.assertEqual(lic_problem['page'], 'licence')
-        for g in cat.get('guides', []):
-            for step in g.get('steps', []):
-                self.assertNotEqual(step.get('page'), 'licence')
+        self.assertNotIn('licence', cat.get('unguided', []))
+        self.assertNotIn('licence', cat.get('pages', []))
+        self.assertFalse([p for p in cat['problems'] if p['id'] == 'licence-locked'])
         for lang in ('en', 'ar'):
             data = open(os.path.join(ROOT, 'js', 'i18n', lang + '.js'), encoding='utf-8').read()
             self.assertEqual(len(re.findall(r"'err\.notFound':", data)), 1)
@@ -594,61 +584,6 @@ class YT115(unittest.TestCase):
     def test_YT18_audit_retention_doc(self):
         path = os.path.join(ROOT, 'docs', 'AUDIT_RETENTION.md')
         self.assertTrue(os.path.isfile(path))
-
-
-class YT115LicenceBackground(unittest.TestCase):
-    """Hub approval is picked up by the server licence thread without the licence screen open."""
-
-    @classmethod
-    def setUpClass(cls):
-        from test_assist import FakeHub
-        try:
-            from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
-        except ImportError:
-            Ed25519PrivateKey = None
-        cls._lic_poll = os.environ.get('TO_LICENCE_POLL_SEC')
-        os.environ['TO_LICENCE_POLL_SEC'] = '3'
-        cls._profile_dir = tempfile.mkdtemp(prefix='triporders-yt115lic-')
-        cls._prev_device = os.environ.get('TO_DEVICE_ID')
-        cls._prev_dpapi = os.environ.get('TRIPORDERS_DPAPI_DIR')
-        cls._prev_xdg = os.environ.get('XDG_CONFIG_HOME')
-        os.environ['TO_DEVICE_ID'] = 'test-pc-yt115lic'
-        os.environ['TRIPORDERS_DPAPI_DIR'] = cls._profile_dir
-        os.environ['XDG_CONFIG_HOME'] = cls._profile_dir
-        import atrest
-        atrest._MASTER = None
-        cls.hub = FakeHub(Ed25519PrivateKey.generate() if Ed25519PrivateKey else None)
-        pub = cls.hub.public()
-        cls.S = Server('yt115lic', extra_cfg={'licence_hub_url': cls.hub.url, 'licence_keys': [pub, f'paid:{pub}']}).start()
-        cls.ac = make_authority(cls.S, consent=None)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.S.cleanup()
-        cls.hub.stop()
-        if cls._lic_poll is None:
-            os.environ.pop('TO_LICENCE_POLL_SEC', None)
-        else:
-            os.environ['TO_LICENCE_POLL_SEC'] = cls._lic_poll
-        shutil.rmtree(cls._profile_dir, ignore_errors=True)
-        for key, val in (('TO_DEVICE_ID', cls._prev_device), ('TRIPORDERS_DPAPI_DIR', cls._prev_dpapi), ('XDG_CONFIG_HOME', cls._prev_xdg)):
-            if val is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = val
-        import atrest
-        atrest._MASTER = None
-
-    def test_background_poll_activates_after_owner_issues(self):
-        self.ac.post('/api/licence/request/clear', {})
-        self.hub.mode = 'wait'
-        self.ac.post('/api/licence/request', {'kind': 'trial'})
-        self.assertEqual(self.ac.get('/api/licence/request')['status'], 'waiting')
-        self.hub.mode = 'issue'
-        def activated():
-            lic = self.ac.get('/api/licence')
-            return lic.get('full') and (lic.get('request') or {}).get('status') == 'activated'
-        self.assertTrue(wait_until(activated, timeout=30, step=0.5, what='licence background activation'))
 
 
 class YT01Lockout(unittest.TestCase):

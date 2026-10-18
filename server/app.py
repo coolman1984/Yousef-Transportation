@@ -37,9 +37,10 @@ import gateway_client as gwc  # noqa: E402
 import afconsent  # noqa: E402,F401
 import aftelemetry  # noqa: E402
 import assist as assist_mod  # noqa: E402
+import demo  # noqa: E402
 import errkeys  # noqa: E402
-import licence as licence_mod  # noqa: E402
 import netpolicy  # noqa: E402
+import training as training_mod  # noqa: E402
 import word_io  # noqa: E402
 import reports  # noqa: E402
 import tripsvc  # noqa: E402
@@ -80,6 +81,9 @@ DEFAULT_CONFIG = {
     'sync_interval_seconds': 5,
     'peer_addresses': {},
     'secure_cookie': False,         # true only behind HTTPS (a TLS front); on plain http the browser would drop the cookie
+    'sign_in': False,               # False: nobody signs in, everybody works as the built-in administrator (server/demo.py)
+    'training': False,              # True only in the training copy (server/training.py): sample data on a new folder and the "back to real work" bar
+    'training_port': 0,             # port of the training copy; 0 = this port + 10
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/', '/guide/')
@@ -186,7 +190,7 @@ if INSTANCE:
     SECRETS = gwc.Secrets(os.path.join(DATA_DIR, 'gateway.json'))
 else:
     SYSTEM = STORE = AUTH = BACKUPS = JOURNAL = NODE = SYNC = SECRETS = None
-GATE = ASSIST = LIC = None
+GATE = ASSIST = None
 formats.OFFICE_TMP = os.path.join(DATA_DIR, 'tmp')
 OFFICE_STATE = formats.office_state()      # is Microsoft Excel / Word on this PC? (decided once at start)
 
@@ -244,27 +248,21 @@ def guide_facts():
 
 
 def diagnostics_extra():
-    """Allowlisted numbers for a problem report: how old the last backup is, how many PCs, the licence state."""
+    """Allowlisted numbers for a problem report: how old the last backup is and how many PCs."""
     out = {}
     try:
         newest = BACKUPS.list()[:1]
         if newest:
             out['last_backup_age_h'] = max(0, int((datetime.now() - datetime.fromisoformat(newest[0]['time'])).total_seconds() // 3600))
         out['pcs'] = max(1, len(SYNC.overview().get('nodes', [])) or 1)
-        out['licence_state'] = LIC.status()['state']
     except Exception:  # noqa: BLE001 - diagnostics must never fail a report
         pass
     return out
 
 
-def site_shop_name():
-    return site_names().get('systemName', '')
-
-
 if INSTANCE:
     GATE = gwc.GatewaySync(STORE, JOURNAL, NODE.id, SECRETS, store_bytes, log_fn=say)
     ASSIST = assist_mod.Assist(DATA_DIR, CFG, ROOT, ASSETS, extra_diagnostics=diagnostics_extra)
-    LIC = licence_mod.Licence(ASSIST, ROOT, HOME, CFG, shop_name=site_shop_name)
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'
                b'<text x="160" y="118" font-family="Segoe UI,Arial" font-size="12" text-anchor="middle" fill="#8a95a3">from another PC\xe2\x80\xa6</text></svg>')
@@ -284,9 +282,6 @@ OP_WORD = {'insert': 'add', 'update': 'change', 'delete': 'delete'}
 SHARED_LISTS = ('settings', 'vehicles', 'drivers', 'departments', 'people', 'places', 'routes')  # not limited to a category
 GA_FIELDS = {'gaApproved', 'gaBy', 'gaAt'}
 LINK_FIELDS = {'linkHash', 'linkNonce', 'linkExpiry', 'oldLinks', 'status', 'boundDevice'}
-# writes that stay possible while the licence does not give full access: signing in, keeping the data safe, asking for a code, privacy
-OPEN_PREFIXES = ('/api/auth/', '/api/licence/', '/api/consent/', '/api/guide/', '/api/telemetry/', '/api/join', '/api/node/')
-OPEN_WRITES = ('/api/log', '/api/backups', '/api/backups/folder', '/api/devices/export-key', '/api/xlsx')
 SYSTEM_ONLY = ('data.import',)  # driver submissions and amendments are written by the server itself, never by hand
 
 
@@ -451,8 +446,37 @@ class NotLoggedIn(Exception):
     pass
 
 
-class LicenceLocked(Exception):
-    pass
+def demo_user():
+    """Without sign-in (the default): a request without a session works as the built-in administrator."""
+    if CFG.get('sign_in'):
+        return None
+    u = demo.user(AUTH)
+    return {**u, 'must_change': False} if u else None   # nobody types a password without sign-in, so nobody is asked to change one
+
+
+def start_demo():
+    """Without sign-in: make the built-in administrator. In the training copy, a brand-new folder also gets the sample data once."""
+    if CFG.get('sign_in'):
+        return
+    try:
+        demo.ensure_user(AUTH, NODE)
+        who = demo.user(AUTH)
+        if who and CFG.get('training') and STORE.claim_first_run():
+            say(f'Training copy: {demo.seed(STORE, JOURNAL, NODE.id, who)} sample trips loaded')
+        if who and CFG.get('training') and ASSIST:   # practice data is never sent anywhere, and the remote-help card must not cover the first look
+            ask = ASSIST.prompt_for(who, 'ar')
+            if ask['ask']:
+                ASSIST.decide(who, {'decision': 'decline', 'text_id': ask['text_id'], 'lang': ask['lang'], 'scope': ask['scope']})
+    except Exception:  # noqa: BLE001 - the program must still start; the log says what went wrong
+        log.error('Built-in administrator / sample data setup failed\n%s', traceback.format_exc())
+
+
+def self_command():
+    """How to start this program again (the training copy): the compiled TripOrders.exe, or Python with this file."""
+    return [sys.executable] if '__compiled__' in globals() else [sys.executable, os.path.abspath(__file__)]
+
+
+TRAINING = None if CFG.get('training') else training_mod.Training(HOME, CFG, self_command(), log=say)
 
 
 def is_admin(u):
@@ -514,7 +538,7 @@ class Handler(BaseHTTPRequestHandler):
         return ''
 
     def login_required(self, touch=True):
-        self.u = AUTH.session(self.token, self.ip, touch)
+        self.u = AUTH.session(self.token, self.ip, touch) or demo_user()
         if not self.u:
             raise NotLoggedIn()
         return self.u
@@ -645,9 +669,6 @@ class Handler(BaseHTTPRequestHandler):
             fn()
         except NotLoggedIn:
             self.send(401, {'error': 'Please log in.', 'key': 'err.signIn', 'login': True}, headers=self.clear_session())
-        except LicenceLocked:
-            self.send(402, {'error': 'The licence does not allow changes now. Everything can still be read, printed, exported and backed up.',
-                            'key': 'err.licence', 'licence': LIC.status()})
         except Forbidden as e:
             log.info('DENIED %s %s %s', self.user, self.log_path, e)
             self.denied(str(e))
@@ -660,7 +681,7 @@ class Handler(BaseHTTPRequestHandler):
         except BadRequest as e:
             log.info('BAD REQUEST %s %s %s', self.user, self.log_path, e)
             code = str(getattr(e, 'code', ''))
-            key, vars = (code, {}) if code.startswith(('lic.', 'err.')) else errkeys.key_for(str(e))
+            key, vars = (code, {}) if code.startswith('err.') else errkeys.key_for(str(e))
             self.send(400, {'error': str(e), **({'code': e.code} if getattr(e, 'code', '') else {}), **({'key': key, 'vars': vars} if key else {})})
         except (ValueError, TypeError, AttributeError, KeyError, IndexError, OverflowError):
             # a value the request carried in a form no handler expected (junk type, a number that is not a number ...): a calm 400,
@@ -701,7 +722,8 @@ class Handler(BaseHTTPRequestHandler):
         u = self.u
         return {**AUTH.public(u), 'display': u['display'], 'permissions': PERMISSIONS, 'adminPerms': sorted(ADMIN_PERMS),
                 'sessionIdleMinutes': CFG['session_idle_minutes'], 'minPasswordLength': AUTH.min_len, 'admin': is_admin(u), 'viaLink': bool(u.get('via_link')),
-                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority}, 'licence': LIC.status()}
+                'node': {'id': NODE.id, 'name': NODE.name, 'role': NODE.role, 'authority': NODE.is_authority},
+                'signIn': bool(CFG.get('sign_in')), 'training': bool(CFG.get('training')), 'realPort': CFG.get('real_port') if CFG.get('training') else None}
 
     def need_all_scopes(self):
         if self.u['scopes'] is not None:
@@ -726,7 +748,7 @@ class Handler(BaseHTTPRequestHandler):
         if p.startswith('/k/'):
             return self.link_page(p[3:])
         if p == '/api/auth/status':
-            u = AUTH.session(self.token, self.ip, touch=False)
+            u = AUTH.session(self.token, self.ip, touch=False) or demo_user()
             self.u = u
             return self.send(200, {'hasUsers': AUTH.has_users(), 'local': self.ip in LOCAL_IPS, 'me': self.me() if u else None,
                                    'node': self.node_status(), 'about': {**ABOUT, **site_names()}})
@@ -760,15 +782,6 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/telemetry/receiver':
             self.need('settings.edit')
             return self.send(200, ASSIST.receiver_public())
-        if p == '/api/licence':
-            pub = LIC.public()
-            if pub.get('status') in ('sending', 'waiting', 'issued'):
-                pub = LIC.step()
-            return self.send(200, {**LIC.status(), 'request': pub})
-        if p == '/api/licence/request':
-            return self.send(200, LIC.public())
-        if p == '/api/licence/preview':
-            return self.send(200, LIC.preview(qs.get('kind', 'trial') if qs.get('kind') in licence_mod.KINDS else 'trial', qs.get('ref', '')))
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -842,7 +855,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, tripsvc.insights(STORE.state(self.u['scopes'])))
         if p == '/api/version':
             return self.send(200, {'version': STORE.version(), 'me': self.u['ver'], 'mustChange': bool(self.u['must_change']),
-                                   'sync': SYNC.summary(), 'gateway': SECRETS.configured, 'licence': {k: LIC.status()[k] for k in ('state', 'full')}})
+                                   'sync': SYNC.summary(), 'gateway': SECRETS.configured})
         if p == '/api/info':
             urls = lan_urls(CFG['port'])
             if not self.can('settings.view'):
@@ -1035,10 +1048,15 @@ class Handler(BaseHTTPRequestHandler):
             raise Forbidden('Please change your temporary password first.')
         if NODE.moved:
             raise Forbidden('This PC needs a decision first: its data folder seems to come from another PC. Open the system on this PC itself.')
-        if p.startswith('/api/guide/') or p.startswith('/api/consent/') or p.startswith('/api/telemetry/') or p.startswith('/api/licence/'):
+        if p.startswith('/api/guide/') or p.startswith('/api/consent/') or p.startswith('/api/telemetry/'):
             return self.assist_post(p)
-        if not (p in OPEN_WRITES or p.startswith(OPEN_PREFIXES)) and not LIC.status()['full']:
-            raise LicenceLocked()          # read, print, export and back up keep working; changing business data waits for a licence code
+        if p in ('/api/training/open', '/api/training/reset'):
+            if not TRAINING:
+                raise BadRequest('This is already the training copy.')
+            try:
+                return self.send(200, {'port': TRAINING.reset() if p.endswith('/reset') else TRAINING.open()})
+            except training_mod.TrainingError as e:
+                raise BadRequest(str(e))
         if p == '/api/commit':
             d = self.json_body()
             label = str(d.get('label') or 'Change')[:200]
@@ -1299,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
             return self.send(200, {'ok': True})
         self.send(404, {'error': 'Not found'})
 
-    # ------------------------------------------------------------ guide, privacy, problem reports, licence
+    # ------------------------------------------------------------ guide, privacy, problem reports
     def assist_post(self, p):
         d = self.json_body()
         try:
@@ -1329,29 +1347,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200, ASSIST.queue_state())
         except aftelemetry.PrivacyError as e:
             raise BadRequest(f'This report cannot be sent: {e}')
-        if p == '/api/licence/activate':
-            self.need('settings.edit', 'users.manage')
-            try:
-                st = LIC.activate(d.get('code', ''))
-            except ValueError as e:
-                raise BadRequest(f'This code cannot be used ({e}).', 'lic.' + str(e))
-            AUTH.log(self.u['display'], self.ip, 'licence', st.get('serial') or '-', f'Licence code activated: {st["state"]}')
-            return self.send(200, {**st, 'request': LIC.public()})
-        if p in ('/api/licence/request', '/api/licence/request/retry', '/api/licence/request/clear'):
-            self.need('settings.edit', 'users.manage')
-            if p.endswith('/clear'):
-                return self.send(200, LIC.clear())
-            if p.endswith('/retry'):
-                return self.send(200, LIC.step(force=True))
-            try:
-                LIC.begin(d.get('kind'), str(d.get('ref') or ''), self.u['id'],
-                          shop=d.get('shop') if d.get('shop') is not None else None)
-            except LookupError as e:
-                if str(e) == 'have_licence':
-                    raise BadRequest('This PC already has a working licence.', 'lic.have_licence')
-                raise BadRequest('This copy cannot ask the company by itself. Send the device code and paste the code you get.', 'lic.' + str(e))
-            AUTH.log(self.u['display'], self.ip, 'licence', d.get('kind'), 'Licence requested from the company')
-            return self.send(200, LIC.step())
         return self.send(404, {'error': 'Not found'})
 
     # ------------------------------------------------------------ conflicts
@@ -1509,6 +1504,7 @@ def main(background=False):
         print('Close the other program or set a different port in config.json (port). Do not open the browser to the wrong version.')
         return
 
+    start_demo()
     try:
         if STORE.counts().get('Trips'):
             BACKUPS.create('startup')
@@ -1520,7 +1516,6 @@ def main(background=False):
     SYNC.start()
     GATE.start()
     ASSIST.start()
-    LIC.start()
 
     print('=' * 64)
     print(' Trip Orders is running')
@@ -1539,13 +1534,16 @@ def main(background=False):
     say('Server started')
     if CFG.get('open_browser', True) and not background:
         threading.Timer(0.8, lambda: webbrowser.open(f'http://localhost:{port}/')).start()
+    if CFG.get('training') and CFG.get('real_port'):
+        training_mod.watch_real(int(CFG['real_port']), httpd.shutdown)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         GATE.stop()
-        LIC.stop = True
+        if TRAINING:
+            TRAINING.stop()
         ASSIST.close()
         SYNC.shutdown()
         JOURNAL.flush_activity()

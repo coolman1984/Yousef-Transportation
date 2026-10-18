@@ -975,7 +975,7 @@ class T34_InstalledMode(unittest.TestCase):
                               stdout=subprocess.DEVNULL)
         port = free_port()
         with open(os.path.join(home, 'config.json'), 'w') as f:
-            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1', 'licence_hub_url': ''}, f)
+            json.dump({'port': port, 'sync_port': free_port(), 'open_browser': True, 'host': '127.0.0.1', 'sign_in': True}, f)
         env = {**os.environ, 'TO_HOME': home, 'PYTHONPATH': packed, 'TO_MACHINE_ID': 'installed-test'}
         main = os.path.join(root, 'server', 'to_main.py')
         proc = subprocess.Popen([sys.executable, main, '--background'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -993,7 +993,6 @@ class T34_InstalledMode(unittest.TestCase):
                     c.get(bad)
                 self.assertEqual(e.exception.code, 404, bad)
             make_authority(type('S', (), {'client': lambda self: c})())
-            self.assertFalse(c.get('/api/licence')['request']['available'], 'installed test config must not call the real licence hub')
             self.assertTrue(os.path.exists(os.path.join(home, 'data', 'auth.db')))
             self.assertTrue(os.path.exists(os.path.join(home, 'data', 'trips.db')))
             self.assertFalse(os.path.exists(os.path.join(root, 'server', 'data')))

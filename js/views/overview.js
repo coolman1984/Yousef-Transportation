@@ -46,6 +46,8 @@
       return '<div class="page-head"><div class="titles"><h1>' + TO.esc(greet()) + '</h1><p>' + TO.esc(TO.t('ov.sub')) + ' <span class="faint">' + TO.esc(TO.fmt.longDate()) + '</span></p></div>' +
         '<button class="btn" data-a="tour">' + TO.icon('play', 'sm') + TO.esc(TO.t('ov.tour.btn')) + '</button>' +
         '<button class="btn" data-a="slides">' + TO.icon('present', 'sm') + TO.esc(TO.t('ov.slides.btn')) + '</button></div>' +
+        (TO.me && !TO.me.training ? '<section class="card lift train-card"><span class="tile-ic">' + TO.icon('play') + '</span><div class="grow"><h3>' + TO.esc(TO.t('train.title')) + '</h3>' +
+          '<p class="muted">' + TO.esc(TO.t('train.body')) + '</p></div><button class="btn primary lg" data-act="training">' + TO.icon('play', 'sm') + TO.esc(TO.t('train.go')) + '</button></section>' : '') +
         '<div class="grid cols-4" data-tour="kpis">' + kpi(0, 'route', 'today') + kpi(1, 'gauge', 'road', true) + kpi(2, 'shield', 'review') + kpi(3, 'car', 'fleet') + '</div>' +
         '<section class="card lift path-card" data-pathcard style="margin-top:var(--gap)"></section>' +
         '<div class="grid split" style="margin-top:var(--gap)"><div class="stack">' +

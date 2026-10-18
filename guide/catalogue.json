@@ -23,12 +23,10 @@
   "excel",
   "activity",
   "settings",
-  "licence",
   "help"
  ],
  "unguided": [
-  "help",
-  "licence"
+  "help"
  ],
  "states": [
   "signed.in",
@@ -875,32 +873,6 @@
    ],
    "errors": [
     "err.moved"
-   ]
-  },
-  {
-   "id": "licence-locked",
-   "cat": "licence",
-   "page": "licence",
-   "roles": [
-    "administrator"
-   ],
-   "errors": [
-    "err.licence",
-    "lic.no_code",
-    "lic.other_device",
-    "lic.expired",
-    "lic.bad_signature",
-    "lic.wrong_length",
-    "lic.bad_character",
-    "lic.unknown_key",
-    "lic.wrong_product",
-    "lic.unknown_version",
-    "lic.invalid",
-    "lic.no_keys",
-    "lic.trial_off",
-    "lic.have_licence",
-    "lic.unbound_perpetual",
-    "lic.unknown_edition"
    ]
   },
   {

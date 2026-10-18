@@ -19,8 +19,6 @@ import errkeys  # noqa: E402
 from test_access_gate import catalogue as access_catalogue, words  # noqa: E402
 
 GUIDE = os.path.join(ROOT, 'guide')
-LICENCE_CODES = ['lic.' + r for r in ('no_code', 'other_device', 'expired', 'bad_signature', 'wrong_length', 'bad_character', 'unknown_key', 'wrong_product',
-                                      'unknown_version', 'invalid', 'no_keys', 'trial_off', 'have_licence', 'unbound_perpetual', 'unknown_edition')]
 PAIR = re.compile(r"""'([\w.\-]+)':\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)")""")
 CHROMIUM = os.environ.get('TO_CHROMIUM', '/opt/pw-browsers/chromium')
 try:
@@ -30,8 +28,8 @@ except ImportError:  # pragma: no cover
 
 
 def server_error_codes():
-    """Every code the server can put on an error answer: the keys of errkeys.py plus the licence reasons."""
-    return set(errkeys.KEYS) | set(LICENCE_CODES)
+    """Every code the server can put on an error answer: the keys of errkeys.py."""
+    return set(errkeys.KEYS)
 
 
 def ui(lang):

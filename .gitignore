@@ -2,6 +2,8 @@
 samples/private/
 # runtime data
 data/
+# training copy (server/training.py) in the portable folder
+training/
 backups/
 *.db
 *.db-wal

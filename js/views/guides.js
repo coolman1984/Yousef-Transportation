@@ -23,7 +23,7 @@
 
   var GUIDES = [
     /* ---------- the first day: sign in, the screen, setting the office up ---------- */
-    { id: 'first', cat: 'start', icon: 'flag', steps: [
+    { id: 'first', cat: 'start', icon: 'flag', account: true, steps: [
       S('tip', 'overview'), S('click', null, '[data-act="account"]'), S('check', null, DR + ' .kv'), S('click', null, DR + ' [data-pw]'),
       S('type', null, '#pw-old'), S('type', null, '#pw-new'), S('click', null, OV + ' [data-ok]'), S('check')] },
     { id: 'tour', cat: 'start', icon: 'compass', steps: [
@@ -48,11 +48,11 @@
     { id: 'places', cat: 'start', icon: 'pin', perm: 'places.manage', steps: [
       S('go', 'places'), S('click', 'places', '[data-add]'), S('type', null, DR + ' [name="name"]'), S('type', null, DR + ' [name="nameAr"]'),
       S('type', null, DR + ' [name="aliases"]'), S('click', null, DR + ' [data-save]'), S('check', 'places', '.tbl'), S('tip')] },
-    { id: 'staff', cat: 'admin', icon: 'user', perm: 'users.manage', steps: [
+    { id: 'staff', cat: 'admin', icon: 'user', perm: 'users.manage', account: true, steps: [
       S('go', 'settings?tab=access'), S('click', 'settings?tab=access', '[data-adduser]'), S('type', null, DR + ' [name="full_name"]'), S('choose', null, DR + ' [data-mode]'),
       S('type', null, DR + ' [name="username"]'), S('type', null, DR + ' [name="password"]'), S('choose', null, DR + ' [name="role"]'), S('choose', null, DR + ' [data-scope]'),
       S('warn'), S('click', null, DR + ' [data-save]'), S('check', 'settings?tab=access', '.tbl')] },
-    { id: 'profiles', cat: 'admin', icon: 'shield', perm: 'users.manage', steps: [
+    { id: 'profiles', cat: 'admin', icon: 'shield', perm: 'users.manage', account: true, steps: [
       S('go', 'settings?tab=access'), S('click', 'settings?tab=access', '[data-profiles]'), S('check', null, OV + ' .dialog .card'), S('click', null, OV + ' [data-newprofile]'),
       S('type', null, '#pf-name'), S('check', null, OV + ' .perm-group'), S('choose', null, '#pf-apply'), S('click', null, OV + ' [data-ok]'), S('tip')] },
     { id: 'mailbox', cat: 'admin', icon: 'cloud', perm: 'gateway.manage', steps: [
@@ -229,7 +229,8 @@
     learner().pathHidden = true; TO.prefs.save(); var c = e.target.closest('[data-pathcard]'); if (c) c.innerHTML = '';
   });
 
-  function allowed(g) { return !g.perm || TO.can(g.perm); }
+  function demo() { return !!(TO.me && !TO.me.signIn); }   // no sign-in: no passwords or user accounts to learn about
+  function allowed(g) { return !(g.account && demo()) && (!g.perm || TO.can(g.perm)); }
   function guideFor(sid) { var id = SIT_GUIDE[sid]; return GUIDES.filter(function (g) { return g.id === id && allowed(g); })[0]; }
   function label(key) { return TO.has(key) ? TO.t(key) : key; }
   // a step's text: escaped, with [[dictionary.key]] shown as «that label» in bold
@@ -381,7 +382,7 @@
     situationsHTML: function () {
       return '<div class="guide-intro card"><div class="row wrap"><span class="tile-ic">' + TO.icon('life') + '</span><div class="grow"><h2>' + TO.esc(TO.t('sit.title')) + '</h2><p class="muted">' + TO.esc(TO.t('sit.sub')) + '</p></div></div></div>' +
         CATS.filter(function (c) { return c !== 'start'; }).map(function (c) {
-          var xs = SITUATIONS.filter(function (x) { return x[2] === c; });
+          var xs = SITUATIONS.filter(function (x) { return x[2] === c && !(demo() && x[1] === 'settings?tab=access'); });
           return xs.length ? '<section class="guide-cat"><h3>' + TO.esc(TO.t('sit.cat.' + c)) + '</h3>' + xs.map(situationHTML).join('') + '</section>' : '';
         }).join('');
     }

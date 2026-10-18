@@ -1,15 +1,11 @@
 """QA findings fixed for 1.1.3 (report of 15 Oct 2026, B1-B12) and 1.1.4 (16 Oct deep QA N1)."""
-import ast
 import json
 import os
 import subprocess
 import sys
-import tempfile
 import unittest
-from unittest.mock import patch
 
 from harness import ApiError, Server, make_authority
-from assist import Assist
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -121,21 +117,10 @@ class B5_B9_B10_Strings(unittest.TestCase):
         self.assertIn("err.offline", open(os.path.join(ROOT, 'js', 'core.js'), encoding='utf-8').read())
         sys.path.insert(0, os.path.join(ROOT, 'server'))
         import errkeys
-        self.assertEqual(errkeys.key_for('This PC already has a working licence.')[0], 'lic.have_licence')
         self.assertEqual(errkeys.key_for('Type the full folder, for example E:\\TO-Backups.')[0], 'err.fullFolder')
 
 
 class ReviewFixes(unittest.TestCase):
-    def test_licence_view_formats_dates_with_ui_dt(self):
-        src = open(os.path.join(ROOT, 'js', 'views', 'licence.js'), encoding='utf-8').read()
-        self.assertIn('TO.ui.dt(iso)', src)
-        self.assertIn("safeWhenMessage('lic.req.offline', q.next_try)", src)
-        self.assertIn("return TO.esc(iso)", src)
-        self.assertIn("'<bdi dir=\"ltr\">' + whenText(iso)", src)
-        self.assertIn("'<bdi dir=\"ltr\">'", src)
-        self.assertNotIn("{ when: q.next_try || '' }", src)
-        self.assertNotIn('TO.fmt.dt', src)
-
     def test_activity_maps_real_audit_label_prefixes(self):
         src = open(os.path.join(ROOT, 'js', 'views', 'activity.js'), encoding='utf-8').read()
         for needle in ('GA approved trip', 'GA declined trip', 'Restore backup of', 'Word import', 'act.entity.'):
@@ -153,125 +138,14 @@ class ReviewFixes(unittest.TestCase):
 
     def test_reviewed_arabic_wording_is_consistent(self):
         ar = open(os.path.join(ROOT, 'js', 'i18n', 'ar.js'), encoding='utf-8').read()
-        for needle in ('ساعة الجهاز اترجعت لورا', 'إيه اللي بيتبعت؟', 'مفيش مشاوير ولا أشخاص ولا مبالغ',
+        for needle in (
                        "'act.label.driverLinkReplaced'", "'act.label.releasedPhone'", 'موافقة الشؤون العامة', 'رفض الشؤون العامة',
-                       "'act.label.driverEvents'", "'act.label.driverPhoto'", 'النسخة دي مترخّصة', 'ابعت الرقم ده للشركة',
-                       'فترة التجربة خلصت — اضغط تفعيل', 'الترخيص اتفعّل',
+                       "'act.label.driverEvents'", "'act.label.driverPhoto'",
                        'المشوار ده ماينفعش يتمسح. الغيه واكتب السبب.'):
             self.assertIn(needle, ar)
         for leftover in ('ات رجعت', 'ما الذي يُرسل؟', 'إدارة عامة', 'هذه النسخة مرخّصة', 'أرسل هذا الرقم',
                          'انتهت الفترة التجريبية', 'تم تفعيل الترخيص', 'لغيه بسبب مكتوب'):
             self.assertNotIn(leftover, ar)
-
-
-class N1_LicenceHubPrecedence(unittest.TestCase):
-    DEFAULT_URL = 'https://trip-orders-licence-hub.mflma2040.workers.dev'
-
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        self.env = patch.dict(os.environ, {'FACTORY_LICENCE_HUB_URL': ''})
-        self.env.start()
-        self.addCleanup(self.env.stop)
-
-    def loaded_config(self, saved=None):
-        """Run the real loader without importing app.py (which starts the application)."""
-        path = os.path.join(self.tmp.name, 'config.json')
-        if saved is not None:
-            with open(path, 'w', encoding='utf-8') as f:
-                json.dump(saved, f)
-        with open(os.path.join(ROOT, 'server', 'app.py'), encoding='utf-8') as f:
-            tree = ast.parse(f.read())
-        nodes = [n for n in tree.body if
-                 (isinstance(n, ast.Assign) and getattr(n.targets[0], 'id', '') == 'DEFAULT_CONFIG') or
-                 (isinstance(n, ast.FunctionDef) and n.name == 'load_config')]
-        namespace = {'os': os, 'json': json, 'CONFIG_PATH': path}
-        exec(compile(ast.Module(body=nodes, type_ignores=[]), 'app.py', 'exec'), namespace)
-        return namespace['load_config']()
-
-    def assist(self, cfg):
-        a = Assist(self.tmp.name, cfg, ROOT)
-        self.addCleanup(a.close)
-        return a
-
-    def test_fresh_install_gets_default_without_persisting_an_override(self):
-        cfg = self.loaded_config()
-        self.assertEqual(self.assist(cfg).licence_hub_url(), self.DEFAULT_URL)
-        with open(os.path.join(self.tmp.name, 'config.json'), encoding='utf-8') as f:
-            self.assertNotIn('licence_hub_url', json.load(f))
-
-    def test_saved_database_url_preserved_on_upgrade(self):
-        a = self.assist({})
-        a.kv('licence_hub_url', 'https://saved-hub.test/')
-        a.close()
-        a = self.assist(self.loaded_config({}))
-        self.assertEqual(a.licence_hub_url(), 'https://saved-hub.test')
-        self.assertEqual(a.kv('licence_hub_url'), 'https://saved-hub.test/')
-
-    def test_saved_database_url_preserved_when_config_is_recreated(self):
-        a = self.assist({})
-        a.kv('licence_hub_url', 'https://saved-hub.test')
-        a.close()
-        self.assertEqual(self.assist(self.loaded_config()).licence_hub_url(), 'https://saved-hub.test')
-
-    def test_legacy_config_without_saved_url_gets_default(self):
-        self.assertEqual(self.assist(self.loaded_config({})).licence_hub_url(), self.DEFAULT_URL)
-
-    def test_explicit_config_overrides_database_and_default(self):
-        for url in ('https://configured-hub.test/', '', 'off'):
-            with self.subTest(url=url):
-                a = self.assist(self.loaded_config({'licence_hub_url': url}))
-                a.kv('licence_hub_url', 'https://saved-hub.test')
-                self.assertEqual(a.licence_hub_url(), url.rstrip('/') if url.startswith('https://') else '')
-                a.close()
-
-    def test_environment_overrides_config_database_and_default(self):
-        a = self.assist(self.loaded_config({'licence_hub_url': 'https://configured-hub.test'}))
-        a.kv('licence_hub_url', 'https://saved-hub.test')
-        for url in ('https://environment-hub.test/', ' OfF '):
-            with self.subTest(url=url), patch.dict(os.environ, {'FACTORY_LICENCE_HUB_URL': url}):
-                self.assertEqual(a.licence_hub_url(), url.rstrip('/') if url.startswith('https://') else '')
-
-    def test_saved_database_disable_is_preserved(self):
-        for url in ('', 'off'):
-            with self.subTest(url=url):
-                a = self.assist(self.loaded_config({}))
-                a.kv('licence_hub_url', url)
-                self.assertEqual(a.licence_hub_url(), '')
-                a.close()
-
-
-class N1_LicenceHubDefault(unittest.TestCase):
-    def test_empty_licence_hub_url_disables_online_request(self):
-        s = Server('lic-off', extra_cfg={'licence_hub_url': ''}).start()
-        try:
-            ac = make_authority(s)
-            self.assertFalse(ac.get('/api/licence')['request']['available'])
-        finally:
-            s.cleanup()
-
-    def test_explicit_licence_hub_url_enables_request_without_using_telemetry_hub(self):
-        s = Server('lic-on', extra_cfg={'licence_hub_url': 'https://hub.test', 'hub_url': 'https://telemetry.test'}).start()
-        try:
-            ac = make_authority(s)
-            self.assertTrue(ac.get('/api/licence')['request']['available'])
-        finally:
-            s.cleanup()
-
-    def test_off_environment_disables_configured_licence_hub_case_insensitively(self):
-        old = os.environ.get('FACTORY_LICENCE_HUB_URL')
-        os.environ['FACTORY_LICENCE_HUB_URL'] = ' OfF '
-        s = None
-        try:
-            s = Server('lic-env-off', extra_cfg={'licence_hub_url': 'https://hub.test'}).start()
-            self.assertFalse(make_authority(s).get('/api/licence')['request']['available'])
-        finally:
-            if s:
-                s.cleanup()
-            if old is None:
-                os.environ.pop('FACTORY_LICENCE_HUB_URL', None)
-            else:
-                os.environ['FACTORY_LICENCE_HUB_URL'] = old
 
 
 class ActivityAuditColumnsHttpTest(unittest.TestCase):

@@ -15,6 +15,7 @@ export function makeEnv(extra = {}) {
   return {
     DB: new D1(process.env.GATEWAY_DB || ':memory:'),
     OFFICE_SECRET: process.env.OFFICE_SECRET || '',
+    MASTER_KEY: process.env.MASTER_KEY || '',
     RETENTION_DAYS: '30',
     ASSETS: {
       async fetch(req) {

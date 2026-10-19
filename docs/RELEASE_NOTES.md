@@ -1,6 +1,13 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+# Trip Orders 1.1.7
+
+- **Mailbox connects by itself.** A new install reaches the internet mailbox the first time it runs. Nothing to type. Each install gets its own mailbox, so one office cannot read another office's driver messages or photos.
+- **Other office PCs** of the same company receive that mailbox over the office network after the PCs are paired. If a PC does not, the setup code on the Mailbox page still works.
+- **An office that already set up the mailbox** keeps its address and its secrets. Links already sent to drivers keep working.
+- **Training mode** does not connect and does not send the sample trips.
+
 # Next (not released yet)
 
 - **No sign-in:** the program opens straight away, without a sign-in screen. Your real work starts empty.

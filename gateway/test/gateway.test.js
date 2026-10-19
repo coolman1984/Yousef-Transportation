@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
-import worker, { sha256Hex } from '../src/worker.js';
-import { newEnv, call, office, putCard, postEvent, ev, jpeg, putPhoto, TOKEN } from './helpers.js';
+import worker, { hmacHex, sha256Hex } from '../src/worker.js';
+import { newEnv, call, office, putCard, postEvent, ev, jpeg, putPhoto, TOKEN, register, MASTER } from './helpers.js';
 
 test('a card is served to the driver by token, and only by the right token', async () => {
   const env = newEnv();
@@ -346,4 +346,117 @@ test('the single-file bundle serves the driver page without any asset binding', 
   assert.equal((await get('/app/app.js')).status, 200);
   assert.match((await get('/app/style.css')).headers.get('content-type'), /css/);
   assert.equal((await get('/sw.js')).headers.get('service-worker-allowed'), '/');
+});
+
+test('register gives each install its own derived secret and stores nothing secret', async () => {
+  const env = newEnv();
+  const a = await register(env, '198.51.100.1');
+  const b = await register(env, '198.51.100.2');
+  assert.match(a.tenantId, /^[0-9a-f]{32}$/);
+  assert.notEqual(a.tenantId, b.tenantId);
+  assert.equal(a.officeSecret, await hmacHex(MASTER, 'TO-TENANT1|' + a.tenantId));
+  assert.notEqual(a.officeSecret, b.officeSecret);
+  assert.equal(a.officeSecret.length, 64);
+  const dump = JSON.stringify((await env.DB.prepare('SELECT * FROM tenants').all()).results);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tenants').first()).n, 2);
+  assert.ok(!dump.includes(a.officeSecret) && !dump.includes(b.officeSecret) && !dump.includes(MASTER));
+  const noKey = newEnv();
+  noKey.MASTER_KEY = '';
+  assert.equal((await call(noKey, 'POST', '/office/register', { body: '{}' })).status, 503);
+  const big = await call(env, 'POST', '/office/register', { body: 'x'.repeat(3000), headers: { 'CF-Connecting-IP': '198.51.100.9' } });
+  assert.equal(big.status, 413);
+});
+
+test('register is limited to 5 an hour and 50 a day for one address', async () => {
+  const env = newEnv();
+  const ip = '198.51.100.20';
+  for (let i = 0; i < 5; i++) assert.equal((await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': ip } })).status, 200);
+  const blocked = await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': ip } });
+  assert.equal(blocked.status, 429);
+  assert.ok(blocked.headers.get('Retry-After'));
+  assert.equal((await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': '198.51.100.21' } })).status, 200, 'another address is its own limit');
+  await env.DB.prepare('UPDATE rate SET count = 50 WHERE key = ?').bind('reg:d:' + ip).run();
+  await env.DB.prepare('UPDATE rate SET window = window - ? WHERE key = ?').bind(3600, 'reg:h:' + ip).run();
+  assert.equal((await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': ip } })).status, 429, '50 a day');
+});
+
+test('a tenant cannot read or acknowledge another tenant, and a bad tenant is refused', async () => {
+  const env = newEnv();
+  const a = await register(env, '198.51.100.30');
+  const b = await register(env, '198.51.100.31');
+  const token = 'Tk_tenantAtenantAtenantA';
+  const tokenHash = await sha256Hex(token);
+  const as = (who) => ({ tenant: who.tenantId, secret: who.officeSecret });
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash, tripId: 'tr-a', body: { no: 'A-1' }, expiresAt: Math.floor(Date.now() / 1000) + 86400 }] }, as(a))).status, 200);
+  const e = ev({ tripId: 'tr-a' });
+  assert.equal((await postEvent(env, e, token)).status, 200);
+  const id = randomUUID();
+  assert.equal((await putPhoto(env, id, jpeg(), {}, token)).status, 200);
+  const mine = await (await office(env, 'GET', '/office/inbox', undefined, as(a))).json();
+  assert.equal(mine.events.length, 1);
+  assert.equal(mine.photos.length, 1);
+  const other = await (await office(env, 'GET', '/office/inbox', undefined, as(b))).json();
+  assert.deepEqual(other, { events: [], photos: [] });
+  assert.equal((await office(env, 'GET', '/office/photo/' + id, undefined, as(b))).status, 404);
+  assert.equal((await office(env, 'GET', '/office/photo/' + id, undefined, as(a))).status, 200);
+  const stB = await (await office(env, 'GET', '/office/status', undefined, as(b))).json();
+  assert.deepEqual([stB.events, stB.photos, stB.cards], [0, 0, 0]);
+  assert.equal((await office(env, 'POST', '/office/ack', { events: [e.uuid], photos: [id] }, as(b))).status, 200);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 1, 'B cannot acknowledge A');
+  assert.equal((await env.DB.prepare("SELECT COUNT(*) n FROM receipts").first()).n, 0);
+  const legacy = await (await office(env, 'GET', '/office/inbox')).json();
+  assert.equal(legacy.events.length, 0, 'the old shared mailbox does not see a new install');
+  assert.equal((await office(env, 'GET', '/office/status', undefined, { tenant: 'not-a-tenant', secret: a.officeSecret })).status, 401);
+  assert.equal((await office(env, 'GET', '/office/status', undefined, { tenant: 'ab'.repeat(16), secret: 'nope' })).status, 401);
+  // a signature for A does not become B by swapping the header
+  const swapped = await office(env, 'GET', '/office/status', undefined, { tenant: b.tenantId, secret: a.officeSecret });
+  assert.equal(swapped.status, 401);
+  await office(env, 'POST', '/office/ack', { events: [e.uuid], photos: [id] }, as(a));
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 0);
+});
+
+test('the legacy office secret still sees only the legacy mailbox', async () => {
+  const env = newEnv();
+  await putCard(env);
+  await postEvent(env, ev());
+  const inbox = await (await office(env, 'GET', '/office/inbox')).json();
+  assert.equal(inbox.events.length, 1);
+  assert.equal(inbox.events[0].body.data.startKm, 1000);
+  const fresh = await register(env, '198.51.100.40');
+  const hidden = await (await office(env, 'GET', '/office/inbox', undefined, { tenant: fresh.tenantId, secret: fresh.officeSecret })).json();
+  assert.equal(hidden.events.length, 0);
+  assert.equal((await office(env, 'GET', '/office/status')).status, 200);
+});
+
+test('each mailbox has a card cap and a daily photo cap, and an unused mailbox is deleted after 90 days', async () => {
+  const env = newEnv();
+  env.MAX_CARDS = '1';
+  env.MAX_PHOTO_BYTES_PER_DAY = '3000';
+  const a = await register(env, '198.51.100.50');
+  const as = { tenant: a.tenantId, secret: a.officeSecret };
+  const card = (hash, trip) => office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: hash, tripId: trip, body: {}, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, as);
+  assert.equal((await card(await sha256Hex('Tk_capAAAAAAAAAAAAAAA1'), 't1')).status, 200);
+  assert.equal((await card(await sha256Hex('Tk_capBBBBBBBBBBBBBBB2'), 't2')).status, 429);
+  const token = 'Tk_capAAAAAAAAAAAAAAA1';
+  assert.equal((await putPhoto(env, randomUUID(), jpeg(2000), {}, token)).status, 200);
+  assert.equal((await putPhoto(env, randomUUID(), jpeg(2000), {}, token)).status, 429);
+  await env.DB.prepare('UPDATE tenants SET last_seen = ? WHERE id = ?').bind(Math.floor(Date.now() / 1000) - 91 * 86400, a.tenantId).run();
+  await worker.scheduled({}, env);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tenants').first()).n, 0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM cards').first()).n, 0);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM photos').first()).n, 0);
+});
+
+test('an old mailbox without a tenant column is migrated and stays on the legacy secret', async () => {
+  const env = newEnv();
+  for (const index of ['events_tenant', 'photos_tenant', 'cards_tenant']) await env.DB.prepare('DROP INDEX IF EXISTS ' + index).run();
+  for (const table of ['cards', 'events', 'photos', 'revoked']) {
+    await env.DB.prepare('ALTER TABLE ' + table + ' DROP COLUMN tenant').run();
+  }
+  await putCard(env);
+  await postEvent(env, ev());
+  const inbox = await (await office(env, 'GET', '/office/inbox')).json();
+  assert.equal(inbox.events[0].type, 'start');
+  assert.equal((await env.DB.prepare("SELECT tenant FROM cards").first()).tenant, 'legacy');
+  assert.equal((await env.DB.prepare("SELECT tenant FROM events").first()).tenant, 'legacy');
 });

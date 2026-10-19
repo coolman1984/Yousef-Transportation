@@ -482,6 +482,7 @@ class SyncService:
                 st['agree'] = None
             rep['files'] = self.fetch_files(c, peer)
             self._collect_backup_key(c, peer)
+            self._exchange_mailbox(c, rep)
             if pull_problem:
                 raise SyncError(pull_problem)  # everything else was still exchanged
             st.update(state='online', last_seen=now(), last_ok=now(), fails=0, last_error='', error_kind='')
@@ -550,6 +551,27 @@ class SyncService:
                                    self.node.id, key='revoked|self')
             if (not me or me.get('status') != 'active' or me.get('role') != 'backup') and self.node.drop_backup_key():
                 self.auth.log('This PC', '', 'backup-ended', self.node.name, 'No longer a backup administrator PC: the administrator key was deleted here')
+
+    def _exchange_mailbox(self, c, rep):
+        """A joined PC with no mailbox yet receives this office's mailbox. A PC that already has one is never overwritten.
+        The blob is not written to the sync log."""
+        secrets = getattr(self, 'secrets', None)
+        if not secrets or not secrets.blank():
+            return
+        try:
+            blob = c.request('GET', '/sync/mailbox')
+        except (Offline, SyncError):
+            return
+        if not isinstance(blob, dict) or not blob.get('o'):
+            return
+        try:
+            if secrets.apply_remote(blob):
+                rep['mailbox'] = 'in'
+                hook = getattr(self, 'on_mailbox', None)
+                if hook:
+                    hook()
+        except Exception:
+            return   # the message is not logged: it could carry the secret
 
     def _collect_backup_key(self, c, peer):
         """This PC was made a backup administrator PC: fetch the key from a PC that has it."""
@@ -737,6 +759,14 @@ class SyncService:
             self.auth.log('PC ' + (n.get('name') or peer), '', 'backup-key-sent', n.get('name') or peer,
                           'The administrator key was handed to the backup administrator PC')
             return 200, {'seed': self.node.authority_seed.hex()}, 'application/json', {}
+        if p == '/sync/mailbox' and method == 'GET':
+            # Named `box`, not `secrets`: this function also calls the secrets module, and a local
+            # assignment would hide that module for the whole function (the pairing challenge then fails).
+            box = getattr(self, 'secrets', None)
+            blob = box.export_blob() if box else None
+            if not blob:
+                return 404, {'error': 'This PC has no mailbox yet.'}, 'application/json', {}
+            return 200, blob, 'application/json', {}
         if p == '/sync/file' and method == 'GET':
             src = parse_qs(url.query).get('path', [''])[0]
             if not src.startswith('/files/'):

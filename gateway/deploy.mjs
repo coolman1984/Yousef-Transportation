@@ -64,9 +64,21 @@ r = wr(['deploy']);
 if (!r.ok) fail('Deploy failed', r.out);
 const url = (r.out.match(/https:\/\/[^\s]+\.workers\.dev/) || [''])[0];
 
-step('5/5 Office secret (stored encrypted at Cloudflare, never in a file)');
+step('5/6 Office secret (stored encrypted at Cloudflare, never in a file)');
 r = wr(['secret', 'put', 'OFFICE_SECRET'], secret + '\n');
-if (!r.ok) fail('Could not set OFFICE_SECRET', r.out);
+if (!r.ok) fail('Could not set OFFICE_SECRET');   // do not print wrangler's output: it might echo the secret
+
+step('6/6 Master key for new installs (only when MASTER_KEY is already in the environment)');
+// Never generate a key here: a second run would replace it and every office that connected by itself would be locked out.
+// Never print the value. Create it once with: npx wrangler secret put MASTER_KEY
+if (process.env.MASTER_KEY) {
+  r = wr(['secret', 'put', 'MASTER_KEY'], process.env.MASTER_KEY + '\n');
+  if (!r.ok) fail('Could not set MASTER_KEY');   // do not print wrangler's output: it might echo the secret
+  console.log('MASTER_KEY updated from the environment (the value was not printed).');
+} else {
+  console.log('MASTER_KEY was not in the environment, so the existing Cloudflare secret was left as it is.');
+  console.log('First auto-connect deploy only: npx wrangler secret put MASTER_KEY   (once, a long random value, never again).');
+}
 
 console.log('\nDONE. Gateway address: ' + (url || '(see the line "https://...workers.dev" above)'));
-console.log('Next: program > Settings > Mailbox > paste the address > Save > Test the connection.');
+console.log('A new office program connects by itself. An office that already has a mailbox keeps it.');

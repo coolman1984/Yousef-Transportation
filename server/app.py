@@ -85,6 +85,7 @@ DEFAULT_CONFIG = {
     'sign_in': False,               # False: nobody signs in, everybody works as the built-in administrator (server/demo.py)
     'training': False,              # True only in the training copy (server/training.py): sample data on a new folder and the "back to real work" bar
     'training_port': 0,             # port of the training copy; 0 = this port + 10
+    'gateway_url': 'https://trip-orders-gateway.mflma2040.workers.dev',  # public address of the mailbox; not a secret
 }
 STATIC = {'/': 'index.html', '/index.html': 'index.html'}
 STATIC_DIRS = ('/css/', '/js/', '/lib/', '/fonts/', '/guide/')
@@ -262,7 +263,10 @@ def diagnostics_extra():
 
 
 if INSTANCE:
-    GATE = gwc.GatewaySync(STORE, JOURNAL, NODE.id, SECRETS, store_bytes, log_fn=say)
+    GATE = gwc.GatewaySync(STORE, JOURNAL, NODE.id, SECRETS, store_bytes, log_fn=say, cfg=CFG, node=NODE,
+                           joining=lambda: bool(JOURNAL.meta('join')) and NODE.role != 'member')
+    SYNC.secrets = SECRETS
+    SYNC.on_mailbox = GATE.kick
     ASSIST = assist_mod.Assist(DATA_DIR, CFG, ROOT, ASSETS, extra_diagnostics=diagnostics_extra)
 PLACEHOLDER = (b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 200"><rect width="320" height="200" fill="#eef1f5"/>'
                b'<text x="160" y="96" font-family="Segoe UI,Arial" font-size="15" text-anchor="middle" fill="#6b7785">Photo is being copied</text>'

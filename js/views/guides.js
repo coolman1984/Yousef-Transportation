@@ -56,8 +56,8 @@
       S('go', 'settings?tab=access'), S('click', 'settings?tab=access', '[data-profiles]'), S('check', null, OV + ' .dialog .card'), S('click', null, OV + ' [data-newprofile]'),
       S('type', null, '#pf-name'), S('check', null, OV + ' .perm-group'), S('choose', null, '#pf-apply'), S('click', null, OV + ' [data-ok]'), S('tip')] },
     { id: 'mailbox', cat: 'admin', icon: 'cloud', perm: 'gateway.manage', steps: [
-      S('tip'), S('go', 'settings?tab=gateway'), S('type', 'settings?tab=gateway', '#gw-url'), S('click', 'settings?tab=gateway', '[data-gw="generate"], [data-gw="show"]'),
-      S('check', 'settings?tab=gateway', '[data-select]'), S('tip'), S('click', 'settings?tab=gateway', '[data-gw="test"]'), S('check'), S('warn')] },
+      S('tip'), S('go', 'settings?tab=gateway'), S('check', 'settings?tab=gateway', '#gw-url'), S('check', 'settings?tab=gateway', '[data-gw-auto]'),
+      S('tip'), S('click', 'settings?tab=gateway', '[data-gw="test"]'), S('check'), S('tip'), S('warn')] },
 
     /* ---------- every day: trip orders, driver links, the board ---------- */
     { id: 'newTrip', cat: 'daily', icon: 'plus', perm: 'trips.create', steps: [

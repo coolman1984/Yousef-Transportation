@@ -41,7 +41,8 @@ class Training:
         return {**{k: self.cfg[k] for k in keep if k in self.cfg},
                 'port': self.port, 'sync_port': self.port + 1, 'data_dir': os.path.join(self.dir, 'data'),
                 'backup_dir': os.path.join(self.dir, 'backups'), 'extra_backup_dirs': [], 'backup_interval_hours': 24, 'keep_auto_backups': 5,
-                'open_browser': False, 'peer_addresses': {}, 'sign_in': False, 'training': True, 'real_port': int(self.cfg['port'])}
+                'open_browser': False, 'peer_addresses': {}, 'sign_in': False, 'training': True, 'gateway_url': '',
+                'real_port': int(self.cfg['port'])}
 
     def _start(self):
         os.makedirs(self.dir, exist_ok=True)

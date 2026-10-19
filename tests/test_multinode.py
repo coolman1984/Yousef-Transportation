@@ -1479,6 +1479,100 @@ class TPhotoIntegrity(unittest.TestCase):
         self.assertNotIn(b'EXTRA', body)
         self.assertNotEqual(body, img + b'EXTRA')
 
+    def test_upload_address_cannot_escape_the_folder(self):
+        """A photo address is only cas/<64 hex><extension>. Anything else is refused before a file is opened."""
+        import http.client
+        s = Server('solo').start()
+        self.addCleanup(s.cleanup)
+        c = make_authority(s)
+        img = b'\xff\xd8\xff\xe0' + b'odometer-ok'
+        up = c.call('POST', '/api/upload?name=odo.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
+        self.assertRegex(up['src'], r'^/files/cas/[0-9a-f]{64}\.jpg$')
+        self.assertEqual(c.call('GET', up['src']), img)
+
+        marker = b'OUTSIDE-UPLOADS-MARKER'
+        for folder in (s.root, s.data_dir, os.path.join(s.data_dir, 'uploads')):
+            with open(os.path.join(folder, 'secret.txt'), 'wb') as f:
+                f.write(marker)
+        secret = os.path.join(s.root, 'secret.txt')
+        cookie = '; '.join(f'{ck.name}={ck.value}' for ck in c.jar)
+        sha = 'ab' * 32
+
+        def raw(path):
+            conn = http.client.HTTPConnection('127.0.0.1', s.port, timeout=20)
+            try:
+                conn.putrequest('GET', path)
+                conn.putheader('Cookie', cookie)
+                conn.endheaders()
+                response = conn.getresponse()
+                return response.status, response.read()
+            finally:
+                conn.close()
+
+        self.assertEqual(raw(up['src']), (200, img))
+        missing, missing_body = raw(f'/files/cas/{sha}.jpg')
+        self.assertEqual(missing, 404)
+        self.assertNotIn(marker, missing_body)
+
+        attacks = [
+            '/files/../secret.txt',
+            '/files/../../secret.txt',
+            '/files/..%2fsecret.txt',
+            '/files/%2e%2e/secret.txt',
+            '/files/%2e%2e%2fsecret.txt',
+            '/files/%2e%2e%5csecret.txt',
+            '/files/cas/../secret.txt',
+            '/files/cas/../../secret.txt',
+            '/files/cas/%2e%2e/%2e%2e/secret.txt',
+            '/files/cas/%2e%2e%2f%2e%2e%2fsecret.txt',
+            '/files/cas/%2e%2e%2fsecret.txt',
+            '/files/' + secret,
+            f'/files/cas/{sha}.jpg/../../secret.txt',
+            f'/files/cas/{sha}.jpg%00.png',
+            f'/files/cas/{sha}.jpg%2f..%2fsecret.txt',
+            f'/files/cas/{sha}%2f..%2fsecret.txt',
+            '/files/%252e%252e%252fsecret.txt',
+            '/files/cas/' + ('A' * 64) + '.jpg',
+            '/files/cas/not-a-hash.jpg',
+            f'/files/cas/{sha}.exe',
+            f'/files/cas/{sha}.jpg%5c..%5csecret.txt',
+            '/files/\\..\\secret.txt',
+            '/files/cas/..\\..\\secret.txt',
+            '/files/cas/' + ('g' * 64) + '.jpg',
+            '/files//etc/passwd',
+            f'/files/cas/{sha}.JPG',
+            up['src'] + '/../../secret.txt',
+            up['src'].replace('/files/cas/', '/files/cas/%2e%2e/'),
+        ]
+        for path in attacks:
+            code, body = raw(path)
+            self.assertEqual(code, 400, path)
+            self.assertNotIn(marker, body, path)
+            self.assertNotIn(img, body, path)
+
+    def test_checksum_name_cannot_escape_the_folder(self):
+        """The temporary copy is named with the checksum. A checksum that is not 64 hex digits is not a path."""
+        root = tempfile.mkdtemp(prefix='photo-sha-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        bad = '../' + ('ab' * 30) + 'a'  # 64 characters, but it leaves the folder if used as a name
+        self.assertEqual(len(bad), 64)
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            sink.write(data)
+            sink.flush()
+            return SimpleNamespace(status=200), len(data)
+
+        with self.assertRaises(sync.SyncError):
+            svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, bad, len(data))
+        written = [os.path.join(dirpath, name) for dirpath, _, names in os.walk(root) for name in names]
+        self.assertEqual(written, [])
+        # a real checksum still copies
+        self.assertTrue(svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, sha, len(data)))
+        with open(svc.file_path(src), 'rb') as f:
+            self.assertEqual(f.read(), data)
+
 
 if __name__ == '__main__':
     unittest.main()

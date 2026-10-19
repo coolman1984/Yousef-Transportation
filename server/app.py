@@ -235,6 +235,26 @@ def store_bytes(data, ext, user='gateway', ip='', user_id=''):
     return src, sha
 
 
+# One content-addressed file: the folder, 64 lowercase hex digits, and an extension we store.
+_CAS_FILE = re.compile(r'^cas/([0-9a-f]{64})(\.[a-z0-9]+)$')
+
+
+def cas_parts(rel):
+    """Return ``(hash, extension)`` for an upload address, or None.
+
+    ``rel`` is the text after ``/files/``. Only ``cas/<64 lowercase hex><extension>`` is a file.
+    A slash, a backslash, ``..``, a null, or a percent-encoded separator is not, so a path is
+    never built from the raw address.
+    """
+    text = unquote(rel or '')
+    if not text or text[0] in '/\\' or '\\' in text or '%' in text or '\x00' in text:
+        return None
+    match = _CAS_FILE.fullmatch(text)
+    if match is None or match.group(2) not in UPLOAD_EXT:
+        return None
+    return match.group(1), match.group(2)
+
+
 
 
 def guide_facts():
@@ -952,14 +972,18 @@ class Handler(BaseHTTPRequestHandler):
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Full Excel export', 'target': 'All data'}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': f'attachment; filename="TO_Full_Export_{datetime.now():%Y-%m-%d_%H%M}.xlsx"'})
         if p.startswith('/files/'):
-            cats = STORE.photo_categories(unquote(p))
+            parts = cas_parts(p[len('/files/'):])
+            if parts is None:  # not a content-addressed name: do not treat it as a public image either
+                return self.send(400, {'error': 'File not found'})
+            public = f'/files/cas/{parts[0]}{parts[1]}'
+            cats = STORE.photo_categories(public)
             if cats:  # a trip photo follows its trip: download permission and the user's categories
                 self.need('files.download')
                 if self.u['scopes'] is not None and not set(cats) & set(self.u['scopes']):
                     return self.send(404, {'error': 'File not found'})  # same answer as for a file that does not exist
-            elif os.path.splitext(p)[1].lower() not in IMAGE_EXT:
+            elif parts[1] not in IMAGE_EXT:
                 self.need('files.download')
-            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True, src=p, private=bool(cats))
+            return self.serve_file(UPLOADS, p[len('/files/'):], upload=True, src=public, private=bool(cats))
         self.send(404, {'error': 'Not found'})
 
     def _post(self):
@@ -1508,30 +1532,47 @@ class Handler(BaseHTTPRequestHandler):
         return self.send(200, data, ctype, headers)
 
     def serve_file(self, base, rel, upload=False, src=None, private=False):
-        base = os.path.realpath(base)
-        path = os.path.realpath(os.path.join(base, unquote(rel)))
-        ext = os.path.splitext(path)[1].lower()
-        inside = path.startswith(base + os.sep) and os.path.isfile(path)
-        info = STORE.file_info(unquote(src)) if upload and src else None
+        """Send one uploaded file.
+
+        The address must be ``cas/<64 hex><extension>``. The path is built from those two pieces,
+        resolved, and opened only when that resolved path is still inside ``base``.
+        """
+        parts = cas_parts(rel) if upload else None
+        if parts is None:
+            return self.send(400, {'error': 'File not found'})
+        stem, ext = parts
+        root = os.path.realpath(base)
+        path = os.path.realpath(os.path.join(root, 'cas', stem + ext))
+        public = f'/files/cas/{stem}{ext}'
+        if src not in (None, public):
+            return self.send(400, {'error': 'File not found'})
+        # This check stays on ``path`` in this function. It has to run before the file is opened.
+        if not path.startswith(root + os.sep):
+            return self.send(400, {'error': 'File not found'})
+        try:
+            if os.path.commonpath([root, path]) != root:
+                return self.send(400, {'error': 'File not found'})
+        except ValueError:
+            return self.send(400, {'error': 'File not found'})
+        info = STORE.file_info(public)
         data = b''
-        if inside:
+        present = os.path.isfile(path)
+        if present:
             with open(path, 'rb') as f:
                 data = f.read()
         # A copy that is not the recorded length is not the photo (extra bytes were appended). Do not show it.
         damaged = bool(info and info.get('size') is not None and len(data) != info['size'])
-        if not inside or damaged:
-            if upload and info and ext in IMAGE_EXT:
+        if not present or damaged:
+            if info and ext in IMAGE_EXT:
                 # known picture that is missing or damaged - never cached, never the damaged bytes
                 return self.send(200, PLACEHOLDER, 'image/svg+xml', {'Cache-Control': 'no-store'})
-            if upload and info:
+            if info:
                 return self.send(404, {'error': 'This file is still being copied from another PC. Try again in a minute.'})
-            return self.send(404, {'error': 'File not found'})
-        if upload and ext not in UPLOAD_EXT:
             return self.send(404, {'error': 'File not found'})
         ctype = TYPES.get(ext) or mimetypes.guess_type(path)[0] or 'application/octet-stream'
         # trip photos are re-checked on every request, so another account on a shared browser cannot reuse a cached copy
-        headers = {'Cache-Control': 'private, no-cache'} if private else {'Cache-Control': 'public, max-age=31536000, immutable'} if upload else {'Cache-Control': 'no-cache'}
-        if upload and ext not in INLINE_EXT:
+        headers = {'Cache-Control': 'private, no-cache'} if private else {'Cache-Control': 'public, max-age=31536000, immutable'}
+        if ext not in INLINE_EXT:
             headers['Content-Disposition'] = 'attachment'
         self.send(200, data, ctype, headers)
 

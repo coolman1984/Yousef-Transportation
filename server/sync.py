@@ -117,6 +117,13 @@ def _hash_file(path):
     return h.hexdigest(), n
 
 
+def _photo_sha(sha):
+    """A checksum used as a file name: 64 lowercase hex digits, nothing else (no slash, no ..)."""
+    if isinstance(sha, str) and len(sha) == 64 and all(c in '0123456789abcdef' for c in sha):
+        return sha
+    raise SyncError('A photo checksum was not a valid name, so it was not saved.')
+
+
 def _file_ok(path, sha, size):
     """True when the file is exactly the photo we expect (name's checksum, and the recorded length when we have one)."""
     if not sha or not os.path.isfile(path):
@@ -707,6 +714,7 @@ class SyncService:
         This PC now copies a photo on one connection at a time, into its own temporary file, and
         only renames it into place after the checksum matches and every write to it is finished.
         """
+        sha = _photo_sha(sha)  # the temporary file name is this checksum; refuse anything that is not 64 hex digits
         final = self.file_path(src)
         with self._fetch_lock(sha):
             if _file_ok(final, sha, size):

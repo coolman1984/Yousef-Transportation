@@ -104,6 +104,11 @@ test('activity labels search and render the displayed Arabic safely', () => {
   assert.match(TO.auditLabel('Driver link 26-A-00001: route, note', false), /خط السير، ملاحظة/);
   assert.match(TO.auditLabel('Driver photo start_odo for 26-A-00001', false), /عداد البداية/);
   assert.match(TO.auditLabel('Excel import sheet.xlsx (3 trips)', false), /3 مشاوير/);
+  assert.match(TO.auditLabel('Vehicle Excel import cars (final).xlsx (2 new, 1 updated)', false), /cars \(final\)\.xlsx/);
+  assert.match(TO.auditLabel('Vehicle Excel import cars (final).xlsx (2 new, 1 updated)', false), /2/);
+  const fleetHtml = TO.auditLabel('Vehicle Excel import a<b>.xlsx (1 new, 0 updated)', true);
+  assert.match(fleetHtml, /a&lt;b&gt;\.xlsx/);
+  assert.ok(!fleetHtml.includes('<b>'));
   assert.equal(TO.auditLabel("New trip O'Brien & Q", false), "مشوار جديد O'Brien & Q");
   assert.equal(TO.activityMatches({ ...row, label: "New trip O'Brien & Q" }, "O'Brien & Q"), true);
   const html = TO.auditLabel('New trip 26-A-00001<img src=x>', true);

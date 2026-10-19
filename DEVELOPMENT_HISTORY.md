@@ -1,6 +1,16 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Import the whole fleet from one Excel sheet (2026-10-19)
+
+**What/why:** The office asked to upload one Excel file with every vehicle instead of typing them one by one. Vehicles and drivers were manual only; the Excel screen imported trips, not the lists.
+- `server/fleet_import.py` reads `.xlsx` and `.csv` with the built-in readers (no new package, so the Windows program stays offline). Arabic or English headers, any column order, Arabic-Indic digits. Vehicles match on the normalised plate, drivers on the normalised name. Empty cells do not wipe a saved value.
+- Preview first (`/api/fleet/preview`), then one save (`/api/fleet/commit`). Bad rows are skipped and listed with the sheet row number. The confirmed rows are one journal commit; a failure saves none of them. The preview is forgotten when confirm starts, so a second click cannot insert them again.
+- Buttons on Vehicles and Drivers: «استيراد من إكسيل» and «نزّل نموذج الإكسيل». Needs `vehicles.manage` or `drivers.manage`, and the save is written in the activity log. Training is a separate program with its own folder, so an import there stays in training.
+- The Windows build names `fleet_import` explicitly so the packaged program includes it.
+**Mistakes:** a second confirm of the same preview could insert the cars twice, because the plate is not a database unique key and the check ran before the save. The preview is now single-use, and a "new" plate that appeared after the preview cancels the whole file.
+**Checks:** Gateway 24/24. Python suite 477 OK, skipped 42 (browser tests; Playwright Chromium is not on this machine). `test_fleet_import` 20, including 1,000 rows in one save. The Vehicles screen was opened in the browser: preview, confirm, the new car on the list, the same buttons on Drivers, and the night theme. **Next:** owner review; do not merge.
+
 ## Second review of the self-connecting mailbox (2026-10-19)
 
 **What/why:** An independent review of the same branch, before any deploy. One office must not be able to affect another's links, a lost registration answer must not open a second mailbox, and applying `schema.sql` to the database that is already online must not fail or drop rows.

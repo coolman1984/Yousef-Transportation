@@ -39,6 +39,7 @@ def compile_program(v4):
          f'--output-dir={BUILD}', '--output-filename=TripOrders.exe', f'--windows-icon-from-ico={os.path.join(BUILD, "triporders.ico")}',
          f'--company-name={DEVELOPER}', f'--product-name={PRODUCT}', f'--file-description={PRODUCT}', f'--file-version={v4}',
          f'--product-version={v4}', f'--copyright={COPYRIGHT}', '--include-module=nodectl', '--include-module=_assets',
+         '--include-module=fleet_import',
          '--include-data-files=' + os.path.join('server', 'aftelemetry_events.json') + '=aftelemetry_events.json',
          '--include-data-files=' + os.path.join('server', 'afguide_ar_lexicon.json') + '=afguide_ar_lexicon.json',
          '--nofollow-import-to=tkinter,unittest,pydoc,test', os.path.join('server', 'to_main.py')])

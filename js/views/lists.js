@@ -10,7 +10,7 @@
   // each list: entity, title key, manage permission, columns, form fields, searchable text, new-record defaults, sort
   var LISTS = {
     vehicles: {
-      entity: 'vehicles', perm: 'vehicles.manage', icon: 'car', add: 'list.add.vehicle',
+      entity: 'vehicles', perm: 'vehicles.manage', icon: 'car', add: 'list.add.vehicle', import: true,
       cols: [
         { h: 'f.plate', cell: function (r) { return TO.ui.plate(r.plate); } },
         { h: 'f.type', cell: function (r) { return TO.esc(r.type || ''); } },
@@ -34,7 +34,7 @@
       title: function (r) { return r.plate; }
     },
     drivers: {
-      entity: 'drivers', perm: 'drivers.manage', icon: 'wheel', add: 'list.add.driver',
+      entity: 'drivers', perm: 'drivers.manage', icon: 'wheel', add: 'list.add.driver', import: true,
       cols: [
         { h: 'f.name', cell: function (r) { return '<b>' + TO.esc(r.name) + '</b>'; } },
         { h: 'f.mobile', cell: function (r) { return r.mobile ? '<span class="num">' + TO.esc(r.mobile) + '</span>' : '<span class="faint">–</span>'; } },
@@ -184,6 +184,161 @@
   }
   TO.openListForm = openForm;
 
+  /* ---------- Excel import for vehicles and drivers (one sheet, preview, then one save) ---------- */
+  var fleet = null;
+  var FILE_CODE = { empty: 'imp.e.empty', unknown: 'imp.e.unknown', damaged: 'imp.e.damaged', big: 'imp.e.big', encrypted: 'imp.e.locked',
+    xlsb: 'imp.e.xlsb', old: 'imp.e.oldoffice', pdf: 'imp.e.pdf', image: 'imp.e.picture', drm: 'imp.e.drm', wordGiven: 'imp.e.wordgiven' };
+  var FIELD_KEY = { plate: 'f.plate', type: 'f.type', category: 'f.category', vendor: 'f.vendor', notes: 'f.notes', name: 'f.name',
+    licenseNo: 'f.licenseNo', mobile: 'f.mobile', ownership: 'f.ownership', active: 'f.active', startKm: 'f.baselineKm' };
+
+  function fleetButtons(cfg) {
+    if (!cfg.import || !TO.can(cfg.perm)) return '';
+    return '<button type="button" class="btn ghost" data-template>' + TO.icon('download', 'sm') + TO.esc(TO.t('flt.template')) + '</button>' +
+      '<button type="button" class="btn" data-import>' + TO.icon('upload', 'sm') + TO.esc(TO.t('flt.import')) + '</button>';
+  }
+  function downloadTemplate(kind, btn) {
+    if (btn) btn.disabled = true;
+    fetch('/api/fleet/template?kind=' + encodeURIComponent(kind), { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { var er = new Error((j && j.error) || ('HTTP ' + r.status)); er.data = j; throw er; }, function () { throw new Error('HTTP ' + r.status); });
+      var cd = r.headers.get('Content-Disposition') || '', m = /filename="([^"]+)"/.exec(cd);
+      return r.blob().then(function (b) { return { b: b, name: m ? m[1] : (kind === 'drivers' ? 'Drivers_template.xlsx' : 'Vehicles_template.xlsx') }; });
+    }).then(function (f) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(f.b); a.download = f.name; document.body.appendChild(a); a.click();
+      setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+      TO.toast(TO.t('imp.downloaded'));
+    }).catch(function (e) { TO.toast(fileErr(e), 'bad', 6000); }).then(function () { if (btn) btn.disabled = false; });
+  }
+  function fileErr(e) {
+    var data = (e && e.data) || {}, mapped = FILE_CODE[data.code];
+    if (mapped && TO.has(mapped)) return TO.t(mapped);
+    if (data.key && TO.has(data.key)) return TO.t(data.key, data.vars || {});
+    return (e && e.message) || TO.t('common.error');
+  }
+  function reasonText(m) {
+    var key = 'flt.m.' + (m && m.code), vars = {};
+    if (!TO.has(key)) return TO.esc((m && m.code) || '');
+    Object.keys((m && m.vars) || {}).forEach(function (name) { vars[name] = m.vars[name]; });
+    if (vars.field && FIELD_KEY[vars.field]) vars.field = TO.t(FIELD_KEY[vars.field]);
+    return TO.t(key, vars);
+  }
+  function startFleet(cfg) {
+    fleet = { entity: cfg.entity, phase: 'pick', err: '', pv: null, done: null, spent: false, token: {} };
+    TO.rerender();
+  }
+  function kpi(icon, label, value, hint) {
+    return '<div class="card kpi"><span class="label">' + TO.esc(label) + '<span class="tile-ic">' + TO.icon(icon) + '</span></span><span class="value num">' +
+      TO.fmt.num(value) + '</span>' + (hint ? '<span class="hint">' + TO.esc(hint) + '</span>' : '') + '</div>';
+  }
+  function fleetHTML(cfg) {
+    var title = TO.t('flt.title.' + cfg.entity);
+    var back = '<button type="button" class="btn ghost" data-back>' + TO.esc(TO.t('flt.back')) + '</button>';
+    if (fleet.phase === 'busy' || fleet.phase === 'saving') {
+      return '<section class="card"><header><h3>' + TO.esc(title) + '</h3></header><p>' + TO.esc(TO.t(fleet.phase === 'saving' ? 'flt.saving' : 'flt.busy')) +
+        '</p><div class="skeleton" style="height:8rem"></div></section>';
+    }
+    if (fleet.phase === 'done' && fleet.done) {
+      var d = fleet.done, lines = [TO.t('flt.done.new', { n: d.new }), TO.t('flt.done.update', { n: d.updated })];
+      if (d.skipped) lines.push(TO.t('flt.done.skip', { n: d.skipped }));
+      if (d.same) lines.push(TO.t('flt.done.same', { n: d.same }));
+      if (d.blank) lines.push(TO.t('flt.done.blank', { n: d.blank }));
+      return '<section class="card"><div class="empty"><div class="art ok">' + TO.icon('check', 'lg') + '</div><h3>' + TO.esc(TO.t('flt.done.t')) + '</h3><p>' +
+        lines.map(function (line) { return '<span class="badge">' + line + '</span>'; }).join(' ') + '</p><p>' + TO.esc(TO.t('flt.done.b')) + '</p>' +
+        '<div class="row" style="justify-content:center">' + back + '</div></div></section>';
+    }
+    if (fleet.phase === 'preview' && fleet.pv) return previewHTML(cfg);
+    return '<div class="grid split"><section class="card"><header><h3>' + TO.icon('upload') + ' ' + TO.esc(TO.t('flt.pick')) + '</h3>' + back + '</header>' +
+      '<p class="muted">' + TO.esc(TO.t('flt.pick.sub')) + '</p>' +
+      '<label class="dropzone" id="flt-dz" for="flt-file" tabindex="0"><span class="art">' + TO.icon('sheet', 'lg') + '</span><b>' + TO.esc(TO.t('flt.drop')) +
+      '</b><span class="muted">' + TO.esc(TO.t('flt.types')) + '</span></label><input type="file" id="flt-file" accept=".xlsx,.xlsm,.xls,.csv,.txt,.ods" hidden>' +
+      (fleet.err ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<span>' + TO.esc(fleet.err) + '</span></div>' : '') +
+      '<div class="row"><button type="button" class="btn ghost" data-template>' + TO.icon('download', 'sm') + TO.esc(TO.t('flt.template')) + '</button></div></section>' +
+      '<section class="card"><header><h3>' + TO.icon('info') + ' ' + TO.esc(title) + '</h3></header><ol class="steps">' +
+      [1, 2, 3].map(function (i) { return '<li>' + TO.esc(TO.t('flt.how.' + i)) + '</li>'; }).join('') + '</ol></section></div>';
+  }
+  function previewHTML(cfg) {
+    var p = fleet.pv, st = p.stats, many = (p.sheets || []).length > 1;
+    var extra = [];
+    if (st.same) extra.push(TO.t('flt.sameLine', { n: st.same }));
+    if (st.blank) extra.push(TO.t('flt.blankLine', { n: st.blank }));
+    var shown = (p.errors || []).slice(0, 80);
+    var samples = p.samples || [];
+    var cols = [{ h: 'flt.c.row', cell: function (r) { return '<span class="num">' + TO.fmt.num(r.row) + '</span>'; } }];
+    if (many) cols.push({ h: 'flt.c.sheet', cell: function (r) { return TO.esc(r.sheet || ''); } });
+    cols.push({ h: 'flt.c.item', cell: function (r) {
+      if (!r.label) return '<span class="faint">–</span>';
+      return cfg.entity === 'vehicles' ? U.plate(r.label) : TO.esc(r.label);
+    } });
+    cols.push({ h: 'flt.c.reason', cell: function (r) { return (r.messages || []).map(reasonText).join('<br>'); } });
+    return '<div class="stack"><div class="toolbar"><h2>' + TO.esc(TO.t('flt.title.' + cfg.entity)) + '</h2><span class="grow"></span>' +
+      '<button type="button" class="btn ghost" data-back>' + TO.esc(TO.t('flt.back')) + '</button></div>' +
+      (p.filename ? '<p class="muted"><bdi dir="ltr">' + TO.esc(p.filename) + '</bdi></p>' : '') +
+      '<div class="grid cols-3">' + kpi('plus', TO.t('flt.k.new'), st.new, TO.t('flt.k.new.h')) + kpi('pen', TO.t('flt.k.update'), st.update, TO.t('flt.k.update.h')) +
+      kpi('alert', TO.t('flt.k.error'), st.error, TO.t('flt.k.error.h')) + '</div>' +
+      (extra.length ? '<p class="muted">' + extra.join(' · ') + '</p>' : '') +
+      (samples.length ? '<section class="card"><header><h3>' + TO.esc(TO.t('flt.will')) + '</h3></header>' + U.table([
+        { h: 'flt.c.row', cell: function (r) { return '<span class="num">' + TO.fmt.num(r.row) + '</span>'; } },
+        { h: 'flt.will', cell: function (r) { return cfg.entity === 'vehicles' ? U.plate(r.label) : TO.esc(r.label || ''); } },
+        { h: 'f.status', cell: function (r) { return '<span class="badge ' + (r.status === 'new' ? 'ok' : 'info') + '">' + TO.esc(TO.t('flt.st.' + r.status)) + '</span>'; } }
+      ], samples) + ((st.new + st.update) > samples.length ? '<p class="muted">' + TO.esc(TO.t('flt.more', { n: st.new + st.update - samples.length })) + '</p>' : '') + '</section>' : '') +
+      (st.error ? '<section class="card"><header><h3>' + TO.esc(TO.t('flt.err.title')) + '</h3></header>' + U.table(cols, shown) +
+        (p.errors.length > shown.length ? '<p class="muted">' + TO.esc(TO.t('flt.more', { n: p.errors.length - shown.length })) + '</p>' : '') + '</section>' : '') +
+      (fleet.err ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<span>' + TO.esc(fleet.err) + '</span></div>' : '') +
+      '<div class="actionbar"><button type="button" class="btn ghost" data-again>' + TO.esc(TO.t('flt.again')) + '</button>' +
+      '<button type="button" class="btn primary" data-commit' + (p.ready > 0 && !fleet.spent ? '' : ' disabled') + '>' + TO.icon('check', 'sm') + TO.esc(TO.t('flt.commit', { n: p.ready })) + '</button></div>' +
+      (fleet.err ? '' : '<p class="muted">' + TO.esc(TO.t(p.ready > 0 ? 'flt.note' : 'flt.none')) + '</p>') + '</div>';
+  }
+  function sendFile(cfg, file) {
+    if (!file) return;
+    var token = {};
+    fleet = { entity: cfg.entity, phase: 'busy', err: '', pv: null, done: null, spent: false, token: token };
+    TO.rerender();
+    var name = file.name || 'file';
+    TO.api('POST', '/api/fleet/preview?kind=' + encodeURIComponent(cfg.entity) + '&name=' + encodeURIComponent(name), file, { raw: true }).then(function (pv) {
+      if (!fleet || fleet.token !== token) return;
+      fleet.phase = 'preview'; fleet.pv = pv; fleet.err = '';
+      TO.rerender();
+    }, function (e) {
+      if (!fleet || fleet.token !== token) return;
+      fleet.phase = 'pick'; fleet.err = fileErr(e);
+      TO.rerender();
+    });
+  }
+  function commitFleet(cfg) {
+    if (!fleet || fleet.phase === 'saving' || fleet.spent || !fleet.pv || !fleet.pv.ready) return;
+    var token = fleet.token, id = fleet.pv.id;
+    fleet.phase = 'saving';
+    TO.rerender();
+    TO.post('/api/fleet/commit', { id: id }).then(function (r) {
+      if (!fleet || fleet.token !== token) return;
+      return TO.data.load().then(function () {
+        if (!fleet || fleet.token !== token) return;
+        fleet.phase = 'done';
+        fleet.done = { new: r.new, updated: r.updated, skipped: r.skipped, same: r.same, blank: r.blank };
+        TO.rerender();
+      });
+    }, function (e) {
+      if (!fleet || fleet.token !== token) return;
+      fleet.phase = 'preview'; fleet.spent = true; fleet.err = fileErr(e);
+      TO.toast(fleet.err, 'bad', 6000);
+      TO.rerender();
+    });
+  }
+  function mountFleet(root, cfg) {
+    root.addEventListener('click', function (e) {
+      if (e.target.closest('[data-back]')) { fleet = null; TO.rerender(); return; }
+      if (e.target.closest('[data-again]')) { startFleet(cfg); return; }
+      if (e.target.closest('[data-template]')) { downloadTemplate(cfg.entity, e.target.closest('[data-template]')); return; }
+      if (e.target.closest('[data-commit]')) { commitFleet(cfg); }
+    });
+    var input = root.querySelector('#flt-file'), zone = root.querySelector('#flt-dz');
+    if (input) input.addEventListener('change', function () { if (input.files && input.files[0]) sendFile(cfg, input.files[0]); });
+    if (zone) {
+      zone.addEventListener('dragover', function (e) { e.preventDefault(); zone.classList.add('over'); });
+      zone.addEventListener('dragleave', function () { zone.classList.remove('over'); });
+      zone.addEventListener('drop', function (e) { e.preventDefault(); zone.classList.remove('over'); var f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0]; if (f) sendFile(cfg, f); });
+    }
+  }
+
   /* ---------- the page ---------- */
   function tableHTML(cfg, q) {
     var rows = TO.data.list(cfg.entity).slice();
@@ -191,18 +346,21 @@
     if (n) rows = rows.filter(function (r) { return U.key(cfg.text(r)).indexOf(n) >= 0; });
     rows.sort(function (a, b) { return String(cfg.title(a)).localeCompare(String(cfg.title(b)), TO.lang); });
     if (!rows.length) return U.empty(cfg.icon, TO.t(q ? 'list.none.search' : 'list.none.title'), TO.t(q ? 'list.none.search.b' : 'list.none.body'),
-      !q && TO.can(cfg.perm) ? '<button class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '');
+      !q && TO.can(cfg.perm) ? '<button type="button" class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '');
     return U.table(cfg.cols, rows, { click: true, rowAttr: function (r) { return 'data-id="' + TO.esc(r.id) + '"'; } });
   }
   function listPage(cfg) {
     return '<div class="toolbar"><input class="input" data-q type="search" placeholder="' + TO.esc(TO.t('list.search')) + '" style="max-width:22rem" aria-label="' + TO.esc(TO.t('list.search')) + '">' +
       '<span class="grow"></span><span class="muted"><span class="num" data-count>' + TO.data.list(cfg.entity).length + '</span></span>' +
-      (TO.can(cfg.perm) ? '<button class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '') + '</div><div data-body>' + tableHTML(cfg, '') + '</div>';
+      fleetButtons(cfg) +
+      (TO.can(cfg.perm) ? '<button type="button" class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '') + '</div><div data-body>' + tableHTML(cfg, '') + '</div>';
   }
   function mountList(root, cfg) {
     var body = root.querySelector('[data-body]'), q = root.querySelector('[data-q]');
     function open(id) { var r = TO.data.get(cfg.entity, id); if (r) openForm(cfg, r); }
     root.addEventListener('click', function (e) {
+      if (e.target.closest('[data-template]')) { downloadTemplate(cfg.entity, e.target.closest('[data-template]')); return; }
+      if (e.target.closest('[data-import]')) { if (TO.can(cfg.perm)) startFleet(cfg); return; }
       if (e.target.closest('[data-add]')) { if (TO.can(cfg.perm)) openForm(cfg); return; }
       var tr = e.target.closest('tr[data-id]'); if (tr) open(tr.dataset.id);
     });
@@ -239,13 +397,16 @@
     return withData({
       render: function (ctx) {
         var tab = ids.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : ids[0];
-        return head('nav.' + pageId, descFor(tab)) + (ids.length > 1 ? tabs(tab, ids) : '') + listPage(LISTS[tab]);
+        if (fleet && fleet.entity !== tab) fleet = null;
+        return head('nav.' + pageId, descFor(tab)) + (ids.length > 1 ? tabs(tab, ids) : '') +
+          (fleet && fleet.entity === tab ? fleetHTML(LISTS[tab]) : listPage(LISTS[tab]));
       },
       mount: function (root, ctx) {
         var tab = ids.indexOf(ctx.route.q.tab) >= 0 ? ctx.route.q.tab : ids[0];
         var tl = root.querySelector('[data-tablist]');
-        if (tl) tl.addEventListener('click', function (e) { var b = e.target.closest('[data-tab]'); if (b) TO.go(pageId + '?tab=' + b.dataset.tab); });
-        mountList(root, LISTS[tab]);
+        if (tl) tl.addEventListener('click', function (e) { var b = e.target.closest('[data-tab]'); if (b) { fleet = null; TO.go(pageId + '?tab=' + b.dataset.tab); } });
+        if (fleet && fleet.entity === tab) mountFleet(root, LISTS[tab]);
+        else mountList(root, LISTS[tab]);
       }
     });
   }

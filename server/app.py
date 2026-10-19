@@ -32,6 +32,7 @@ import backup as backup_mod  # noqa: E402
 import xlsx  # noqa: E402
 from auth import ADMIN_PERMS, ALL, PERMISSIONS, AuthError, Forbidden  # noqa: E402
 import excel_io  # noqa: E402
+import fleet_import  # noqa: E402
 import formats  # noqa: E402
 import gateway_client as gwc  # noqa: E402
 import afconsent  # noqa: E402,F401
@@ -786,6 +787,18 @@ class Handler(BaseHTTPRequestHandler):
         if p == '/api/telemetry/receiver':
             self.need('settings.edit')
             return self.send(200, ASSIST.receiver_public())
+        if p == '/api/fleet/template':
+            kind = qs.get('kind', '')
+            try:
+                kind = fleet_import.kind_or_raise(kind)
+            except fleet_import.FleetError as e:
+                raise BadRequest(str(e), e.code)
+            self.need(fleet_import.PERM[kind])
+            # Training is another process and another data folder; this file is only a blank sheet.
+            data = fleet_import.template(kind)
+            name = 'Vehicles_template.xlsx' if kind == 'vehicles' else 'Drivers_template.xlsx'
+            STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Fleet template', 'target': name}])
+            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': content_disposition(name)})
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()
@@ -1074,6 +1087,41 @@ class Handler(BaseHTTPRequestHandler):
             res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, d.get('ops'), trusted=force), force, guard=commit_guard(self.u), user_id=self.u['id'])
             log.info('COMMIT %s (%s) "%s" %s changes', self.user, self.ip, label, res['changes'])
             return self.send(200, res)
+        if p == '/api/fleet/preview':
+            kind = qs.get('kind', '')
+            try:
+                kind = fleet_import.kind_or_raise(kind)
+                self.need(fleet_import.PERM[kind])
+                plan = fleet_import.parse_bytes(self.body(30 * 1048576), qs.get('name', '')[:120], kind, STORE.state())
+                pid = fleet_import.store_preview(self.user, plan)
+                return self.send(200, {'id': pid, **fleet_import.public_plan(plan)})
+            except fleet_import.FleetError as e:
+                raise BadRequest(str(e), e.code)
+        if p == '/api/fleet/commit':
+            d = self.json_body()
+            try:
+                # Forgotten as soon as it is read, so a double click cannot insert the same rows twice.
+                plan = fleet_import.take_preview(str(d.get('id') or ''), self.user)
+                self.need(fleet_import.PERM[plan['kind']])
+                ops, new, updated = fleet_import.build_ops(plan, STORE.state())
+                label = fleet_import.commit_label(plan['kind'], plan.get('filename') or '', new, updated)
+                try:
+                    # guard checks the same permission again, on every row, inside the save.
+                    res = STORE.commit(self.user, self.ip, label, tripsvc.normalize_ops(STORE, ops),
+                                       guard=commit_guard(self.u), user_id=self.u['id'])
+                except Conflict:
+                    raise fleet_import.FleetError('The lists changed while the file was being reviewed. Nothing was saved.', 'err.flt.changed')
+                except BadRequest as e:
+                    # A plate or name that appeared after the preview, or a value the save refused: the transaction
+                    # rolled back. Say so in the screen's language and keep the old lists.
+                    code = 'err.flt.changed' if 'already has this' in str(e) else 'err.flt.failed'
+                    raise fleet_import.FleetError('The import was not saved.', code) from e
+            except fleet_import.FleetError as e:
+                raise BadRequest(str(e), e.code)
+            STORE.log_activity(self.user, self.ip, [{'type': 'import', 'action': label, 'target': plan.get('filename') or '',
+                                                     'detail': f'{new} new, {updated} updated'}])
+            return self.send(200, {'new': new, 'updated': updated, 'changes': res['changes'], 'kind': plan['kind'],
+                                   'skipped': plan['stats']['error'], 'same': plan['stats']['same'], 'blank': plan['stats']['blank']})
         if p == '/api/import/preview':
             self.need('excel.import')
             self.need_all_scopes()

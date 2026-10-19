@@ -71,7 +71,8 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P3.7 Round-trip test (`test_excel_io`): import → export equals the original cells
 - [x] P3.8 Word: `docx_write.py`, `docx_read.py`, `word_io.py` (trip order form EN/AR blank or filled, read filled forms incl. the original paper form, monthly report), `/api/word/*`, `test_word_io`
 - [x] P3.9 Review step, alerts, plain error messages, month summary, Guide (12 Q&A + error list) in the Excel page; browser test `ExcelPageTest`
-- Test map: `test_xlsx` (reader/writer), `test_excel_io` (plan, alerts, API flow), `test_word_io` (times/dates/forms/API), `test_e2e_browser.ExcelPageTest`
+- [x] P3.10 Fleet lists from one sheet (`server/fleet_import.py`, `/api/fleet/template|preview|commit`, buttons on Vehicles and Drivers). Match by plate or driver name, preview, one save. Bad rows skipped. Test map: `test_fleet_import`
+- Test map: `test_xlsx` (reader/writer), `test_excel_io` (plan, alerts, API flow), `test_word_io` (times/dates/forms/API), `test_e2e_browser.ExcelPageTest`, `test_fleet_import` (vehicles and drivers)
 
 ## Phase 4 – Gateway + driver page
 - [x] P4.1 Worker routes + D1 schema + daily cleanup (`gateway/src/worker.js`, `schema.sql`); photos stored as one BLOB (<= 600 KB, D1 row limit is 2 MB)

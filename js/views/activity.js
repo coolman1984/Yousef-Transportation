@@ -57,6 +57,9 @@
     }, ['no'], rich);
     m = label.match(/^Driver photo (.+) for (.+)$/); if (m) return safeMessage('act.label.driverPhoto', { kind: translatedType(m[1]), no: m[2] }, ['no'], rich);
     m = label.match(/^Released the phone of trip (.+)$/); if (m) return safeMessage('act.label.releasedPhone', { no: m[1] }, ['no'], rich);
+    m = label.match(/^(Vehicle|Driver) Excel import (.+) \((\d+) new, (\d+) updated\)$/);
+    if (m) return safeMessage(m[1] === 'Vehicle' ? 'act.label.vehicleExcelImport' : 'act.label.driverExcelImport',
+      { file: m[2], n: m[3], u: m[4] }, ['file', 'n', 'u'], rich);
     m = label.match(/^(Word|Excel) import(.*) \((\d+) trips\)$/);
     if (m) return safeMessage(m[1] === 'Word' ? 'act.label.wordImportWithCount' : 'act.label.excelImportWithCount',
       { detail: m[2], n: m[3] }, ['n'], rich);

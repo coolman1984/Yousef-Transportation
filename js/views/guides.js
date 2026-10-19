@@ -117,7 +117,7 @@
     ['driverNoShow', 'trips', 'daily'], ['carBroke', 'trips', 'daily'], ['wrongDate', 'trips', 'daily'], ['duplicate', 'trips', 'daily'],
     ['approvedByMistake', 'trips', 'daily'], ['cancelledByMistake', 'trips', 'daily'], ['linkNotOpening', 'trips', 'daily'], ['newPhone', 'trips', 'daily'],
     ['noSignal', 'board', 'daily'], ['whatsappNotOpening', 'trips', 'daily'], ['noCategories', 'settings?tab=rules', 'daily'], ['unknownPassenger', 'people', 'daily'],
-    ['newDriver', 'drivers', 'daily'], ['rentedCar', 'vehicles', 'daily'], ['licenceExpired', 'drivers', 'daily'],
+    ['newDriver', 'drivers', 'daily'], ['rentedCar', 'vehicles', 'daily'], ['importVehicles', 'vehicles', 'daily'], ['licenceExpired', 'drivers', 'daily'],
     ['redTrip', 'review', 'review'], ['wrongKm', 'trips', 'review'], ['kmBackwards', 'review', 'review'], ['tripStillOpen', 'board', 'review'], ['photoUnclear', 'review', 'review'],
     ['monthToExcel', 'excel', 'office'], ['excelRefused', 'excel', 'office'], ['monthReport', 'reports', 'office'], ['paperForm', 'trips', 'office'],
     ['forgotPassword', 'settings?tab=access', 'admin'], ['personLeft', 'settings?tab=access', 'admin'], ['newEmployee', 'settings?tab=access', 'admin'],
@@ -128,7 +128,7 @@
   // every problem offers "Guide me" through the guide that fixes it (situation id -> guide id)
   var SIT_GUIDE = { driverNoShow: 'cancel', carBroke: 'newTrip', wrongDate: 'amend', duplicate: 'cancel', approvedByMistake: 'amend', cancelledByMistake: 'amend',
     linkNotOpening: 'sendLink', newPhone: 'sendLink', noSignal: 'board', whatsappNotOpening: 'sendLink', noCategories: 'categories', unknownPassenger: 'people',
-    newDriver: 'drivers', rentedCar: 'vehicles', licenceExpired: 'drivers', redTrip: 'review', wrongKm: 'amend', kmBackwards: 'review', tripStillOpen: 'close',
+    newDriver: 'drivers', rentedCar: 'vehicles', importVehicles: 'vehicles', licenceExpired: 'drivers', redTrip: 'review', wrongKm: 'amend', kmBackwards: 'review', tripStillOpen: 'close',
     photoUnclear: 'review', monthToExcel: 'excelExport', excelRefused: 'import', monthReport: 'reports', paperForm: 'print', forgotPassword: 'staff',
     personLeft: 'staff', newEmployee: 'staff', tooManyRights: 'profiles', deletedByMistake: 'bin', pcBroken: 'backup', powerCut: 'pcs', networkDown: 'pcs',
     mailboxRed: 'mailbox', whoChanged: 'activity', wrongLanguage: 'appearance' };

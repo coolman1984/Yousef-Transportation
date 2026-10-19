@@ -3,6 +3,7 @@
 
 # Next (not released yet)
 
+- **Vehicles and drivers from Excel:** on Vehicles, **استيراد من إكسيل** uploads one sheet for the whole fleet. **نزّل نموذج الإكسيل** downloads a blank file with Arabic headers and one example row. You see how many are new, how many update a plate that already exists, and which rows have an error, before anything is saved. Confirming saves the good rows together. The same buttons are on Drivers. A row with a bad plate, name, or mobile is skipped and listed with its row number.
 - **No sign-in:** the program opens straight away, without a sign-in screen. Your real work starts empty.
 - **Training mode:** a big "Enter training mode" button (home page and top bar) opens a separate training copy full of sample trips, cars, drivers, people, places and reports. Practise anything there: it never touches your real work. A yellow bar inside it has the "Back to real work" button, and "Start the training again" brings the samples back.
 - **No licence or activation:** the Licence page, the activation codes and the licence hub are gone. Every feature works from the first start.

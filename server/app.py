@@ -1510,14 +1510,22 @@ class Handler(BaseHTTPRequestHandler):
     def serve_file(self, base, rel, upload=False, src=None, private=False):
         base = os.path.realpath(base)
         path = os.path.realpath(os.path.join(base, unquote(rel)))
-        if not path.startswith(base + os.sep) or not os.path.isfile(path):
-            if upload and src and STORE.file_info(unquote(src)) and os.path.splitext(path)[1].lower() in IMAGE_EXT:
-                # known file that has not been copied from another PC yet - never cached
+        ext = os.path.splitext(path)[1].lower()
+        inside = path.startswith(base + os.sep) and os.path.isfile(path)
+        info = STORE.file_info(unquote(src)) if upload and src else None
+        data = b''
+        if inside:
+            with open(path, 'rb') as f:
+                data = f.read()
+        # A copy that is not the recorded length is not the photo (extra bytes were appended). Do not show it.
+        damaged = bool(info and info.get('size') is not None and len(data) != info['size'])
+        if not inside or damaged:
+            if upload and info and ext in IMAGE_EXT:
+                # known picture that is missing or damaged - never cached, never the damaged bytes
                 return self.send(200, PLACEHOLDER, 'image/svg+xml', {'Cache-Control': 'no-store'})
-            if upload and src and STORE.file_info(unquote(src)):
+            if upload and info:
                 return self.send(404, {'error': 'This file is still being copied from another PC. Try again in a minute.'})
             return self.send(404, {'error': 'File not found'})
-        ext = os.path.splitext(path)[1].lower()
         if upload and ext not in UPLOAD_EXT:
             return self.send(404, {'error': 'File not found'})
         ctype = TYPES.get(ext) or mimetypes.guess_type(path)[0] or 'application/octet-stream'
@@ -1525,8 +1533,7 @@ class Handler(BaseHTTPRequestHandler):
         headers = {'Cache-Control': 'private, no-cache'} if private else {'Cache-Control': 'public, max-age=31536000, immutable'} if upload else {'Cache-Control': 'no-cache'}
         if upload and ext not in INLINE_EXT:
             headers['Content-Disposition'] = 'attachment'
-        with open(path, 'rb') as f:
-            self.send(200, f.read(), ctype, headers)
+        self.send(200, data, ctype, headers)
 
 
 class Server(ThreadingHTTPServer):

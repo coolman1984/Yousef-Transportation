@@ -3,7 +3,8 @@ import { makeEnv } from '../dev/server.js';
 import { randomUUID, randomBytes } from 'node:crypto';
 
 export const SECRET = 'test-secret-0123456789abcdef';
-export const newEnv = () => makeEnv({ OFFICE_SECRET: SECRET });
+export const MASTER = 'master-key-for-tests-0123456789abcdef';
+export const newEnv = () => makeEnv({ OFFICE_SECRET: SECRET, MASTER_KEY: MASTER });
 export const call = (env, method, path, { body, headers } = {}) =>
   worker.fetch(new Request('http://gw.test' + path, { method, headers: { 'CF-Connecting-IP': '9.9.9.9', ...(headers || {}) }, body }), env);
 
@@ -11,8 +12,21 @@ export async function office(env, method, path, obj, over = {}) {
   const body = obj === undefined ? undefined : (obj instanceof Uint8Array ? obj : JSON.stringify(obj));
   const t = String(over.time ?? Math.floor(Date.now() / 1000)), nonce = over.nonce ?? randomBytes(16).toString('hex');
   const bytes = body === undefined ? new Uint8Array(0) : (typeof body === 'string' ? new TextEncoder().encode(body) : body);
-  const sig = over.sig ?? await hmacHex(over.secret ?? SECRET, [method, path, t, nonce, await sha256Hex(bytes)].join('\n'));
-  return call(env, method, path, { body, headers: { 'X-TO-Time': t, 'X-TO-Nonce': nonce, 'X-TO-Sig': sig } });
+  const tenant = over.tenant || '';
+  const secret = over.secret ?? (tenant ? await hmacHex(over.master ?? env.MASTER_KEY ?? MASTER, 'TO-TENANT1|' + tenant) : SECRET);
+  const parts = [method, path, t, nonce, await sha256Hex(bytes)];
+  if (tenant) parts.push(tenant);
+  const sig = over.sig ?? await hmacHex(secret, parts.join('\n'));
+  const headers = { 'X-TO-Time': t, 'X-TO-Nonce': nonce, 'X-TO-Sig': sig };
+  if (tenant) headers['X-TO-Tenant'] = tenant;
+  return call(env, method, path, { body, headers });
+}
+
+export async function register(env, ip = '203.0.113.10') {
+  const r = await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': ip, 'Content-Type': 'application/json' } });
+  const j = await r.json();
+  if (r.status !== 200) throw new Error('register ' + r.status + ' ' + JSON.stringify(j));
+  return j;
 }
 
 export const TOKEN = 'Tk_abcdefghijklmnopqrstuv';

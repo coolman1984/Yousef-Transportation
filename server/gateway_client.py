@@ -24,6 +24,7 @@ import uuid
 from datetime import timedelta
 
 import domain
+import errkeys
 from store import Conflict
 
 log = logging.getLogger('to.gateway')
@@ -31,7 +32,11 @@ RANK = {s: i for i, s in enumerate(['draft', 'sent', 'started', 'finished', 'clo
 
 
 class GatewayError(Exception):
-    """A problem with a message for the person at the office."""
+    """A problem with a message for the person at the office. `reason` is a short code, never a secret."""
+
+    def __init__(self, message, reason=''):
+        super().__init__(message)
+        self.reason = reason
 
 
 def b64url(b):
@@ -47,38 +52,53 @@ def token_hash(token):
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-def sign_headers(secret, method, path, body=b'', t=None, nonce=None):
+def sign_headers(secret, method, path, body=b'', t=None, nonce=None, tenant=None):
+    """The tenant id, when this PC has its own mailbox, is part of the signed message and of the headers."""
     t = str(int(t if t is not None else time.time()))
     nonce = nonce or pysecrets.token_hex(16)
-    msg = '\n'.join([method, path, t, nonce, hashlib.sha256(body).hexdigest()])
-    return {'X-TO-Time': t, 'X-TO-Nonce': nonce, 'X-TO-Sig': hmac.new(secret.encode(), msg.encode(), hashlib.sha256).hexdigest()}
+    parts = [method, path, t, nonce, hashlib.sha256(body).hexdigest()]
+    tenant = str(tenant or '').strip().lower()
+    if tenant:
+        parts.append(tenant)
+    headers = {'X-TO-Time': t, 'X-TO-Nonce': nonce, 'X-TO-Sig': hmac.new(secret.encode(), '\n'.join(parts).encode(), hashlib.sha256).hexdigest()}
+    if tenant:
+        headers['X-TO-Tenant'] = tenant
+    return headers
+
+
+_URL_RE = (r'https://[A-Za-z0-9.-]+(:\d+)?', r'http://(127\.0\.0\.1|localhost)(:\d+)?')
+_TENANT_RE = re.compile(r'^[0-9a-f]{32}$')
 
 
 # --------------------------------------------------------------------------- secrets of this PC
 class Secrets:
-    """gateway.json: {url, officeSecret, linkSecret, pollSeconds}. The setup code moves them to the other office PCs."""
+    """gateway.json: {url, officeSecret, linkSecret, tenantId, pollSeconds}. The setup code moves them to the other office PCs.
+    An automatic mailbox also keeps tenantId. The file is mode 0600 and is never put in the shared database."""
 
     def __init__(self, path):
         self.path = path
         self.data = {}
+        self._lock = threading.RLock()   # save() may run while auto_register already holds the lock
         self.load()
 
     def load(self):
-        try:
-            with open(self.path, encoding='utf-8') as f:
-                self.data = json.load(f)
-        except (OSError, ValueError):
-            self.data = {}
+        with self._lock:
+            try:
+                with open(self.path, encoding='utf-8') as f:
+                    self.data = json.load(f)
+            except (OSError, ValueError):
+                self.data = {}
 
     def save(self):
-        tmp = self.path + '.tmp'
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(self.data, f)
-        try:
-            os.chmod(tmp, 0o600)
-        except OSError:
-            pass
-        os.replace(tmp, self.path)
+        with self._lock:
+            tmp = self.path + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                json.dump(self.data, f)
+            try:
+                os.chmod(tmp, 0o600)
+            except OSError:
+                pass
+            os.replace(tmp, self.path)
 
     @property
     def url(self):
@@ -93,44 +113,197 @@ class Secrets:
         """The secrets exist on this PC, even before the gateway address is saved (the address comes after the deploy)."""
         return bool(self.data.get('officeSecret') and self.data.get('linkSecret'))
 
+    def blank(self):
+        """Nothing was saved yet. A file that already has an address or a secret is never treated as blank."""
+        d = self.data
+        return not any(str(d.get(k) or '').strip() for k in ('url', 'officeSecret', 'linkSecret', 'tenantId'))
+
     def set_url(self, url):
+        url = self._check_url(url)
+        with self._lock:
+            self.data['url'] = url
+            self.save()
+
+    @staticmethod
+    def _check_url(url):
         url = str(url or '').strip().rstrip('/')
-        if url and not re.fullmatch(r'https://[A-Za-z0-9.-]+(:\d+)?', url) and not re.fullmatch(r'http://(127\.0\.0\.1|localhost)(:\d+)?', url):
+        if url and not any(re.fullmatch(p, url) for p in _URL_RE):
             raise GatewayError('The address must start with https:// (for example https://trip-orders.yourname.workers.dev).')
-        self.data['url'] = url
-        self.save()
+        return url
 
     def generate(self):
-        self.data['officeSecret'] = pysecrets.token_urlsafe(32)
-        self.data['linkSecret'] = pysecrets.token_urlsafe(32)
-        self.save()
+        """A hand-made secret for a gateway the office runs itself. This leaves the automatic mailbox."""
+        with self._lock:
+            self.data.pop('tenantId', None)
+            self.data.pop('auto', None)
+            self.data.pop('installId', None)
+            self.data['officeSecret'] = pysecrets.token_urlsafe(32)
+            self.data['linkSecret'] = pysecrets.token_urlsafe(32)
+            self.save()
+
+    def _payload(self):
+        body = {'v': 2 if self.data.get('tenantId') else 1, 'u': self.url, 'o': self.data['officeSecret'], 'l': self.data['linkSecret']}
+        if self.data.get('tenantId'):
+            body['t'] = self.data['tenantId']
+        return body
 
     def setup_code(self):
         if not self.has_secrets:
             raise GatewayError('The mailbox is not set up yet.')
-        return b64url(json.dumps({'v': 1, 'u': self.url, 'o': self.data['officeSecret'], 'l': self.data['linkSecret']}).encode())
+        return b64url(json.dumps(self._payload()).encode())
 
-    def from_code(self, code):
+    def export_blob(self):
+        """What an already-paired office PC may receive over the local network. None when this PC has no mailbox."""
+        if not self.has_secrets:
+            return None
+        return self._payload()
+
+    def _checked(self, d):
+        try:
+            assert isinstance(d, dict) and d.get('v') in (1, 2) and d.get('o') and d.get('l')
+            if d['v'] == 2:
+                assert _TENANT_RE.fullmatch(str(d.get('t') or ''))
+        except Exception:
+            raise GatewayError('This setup code is not valid. Copy it again from the first office PC.')
+        return d
+
+    def _decode(self, code):
         try:
             raw = re.sub(r'\s+', '', str(code))
             d = json.loads(base64.urlsafe_b64decode(raw + '=' * (-len(raw) % 4)))
-            assert d['v'] == 1 and d['o'] and d['l']
         except Exception:
             raise GatewayError('This setup code is not valid. Copy it again from the first office PC.')
-        self.set_url(d['u'])
+        return self._checked(d)
+
+    def _apply(self, d):
+        """One write. The address is checked before anything is changed."""
+        url = self._check_url(d.get('u') or '')
+        self.data['url'] = url
         self.data['officeSecret'], self.data['linkSecret'] = d['o'], d['l']
+        if d.get('v') == 2:
+            self.data['tenantId'] = d['t']
+            self.data['auto'] = True
+        else:
+            self.data.pop('tenantId', None)
+            self.data.pop('auto', None)
+        # A mailbox that arrived from another PC must not retry this PC's own registration later.
+        self.data.pop('installId', None)
         self.save()
+
+    def from_code(self, code):
+        """An administrator pasted a setup code. This is the explicit fallback, so it may replace what is here."""
+        d = self._decode(code)
+        with self._lock:
+            self._apply(d)
+
+    def apply_remote(self, blob):
+        """A mailbox received from another PC of this office. Never replaces an address or a secret already saved here."""
+        if not isinstance(blob, dict):
+            return False
+        with self._lock:
+            self.load()
+            if not self.blank():
+                return False
+            self._apply(self._checked(blob))
+            return True
+
+    def _ensure_install_id(self):
+        """Saved before the request, so a lost answer is retried as the same mailbox. Never logged."""
+        cur = str(self.data.get('installId') or '').strip().lower()
+        if _TENANT_RE.fullmatch(cur):
+            return cur
+        cur = pysecrets.token_hex(16)
+        self.data['installId'] = cur
+        self.save()
+        return cur
+
+    def _claim(self, url, install_id):
+        """Ask for this PC's mailbox. The answer is not logged: it contains the office secret."""
+        body = json.dumps({'installId': install_id}).encode()
+        req = urllib.request.Request(url + '/office/register', data=body, method='POST',
+                                     headers={'Content-Type': 'application/json', 'User-Agent': 'TripOrders-Office'})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = r.read(8192)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                raise GatewayError('The mailbox is busy. This PC will try again shortly.', 'busy')
+            if e.code == 503:
+                raise GatewayError('The mailbox is not ready for a new office yet.', 'notready')
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise GatewayError('Cannot reach the mailbox. This PC will try again when the internet is back.', 'offline') from e
+        try:
+            data = json.loads(raw or b'{}')
+        except ValueError:
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        if not isinstance(data, dict):
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        tid, sec = str(data.get('tenantId') or ''), str(data.get('officeSecret') or '')
+        if not _TENANT_RE.fullmatch(tid) or len(sec) < 32:
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        return tid, sec
+
+    def auto_register(self, url):
+        """Claim a private mailbox. Does nothing when this PC already has an address or a secret. Returns True when it saved one."""
+        url = self._check_url(url)
+        if not url:
+            return False
+        with self._lock:
+            self.load()
+            if not self.blank():
+                return False
+            install_id = self._ensure_install_id()
+            link = pysecrets.token_urlsafe(32)
+            tid, sec = self._claim(url, install_id)
+            self.load()
+            if not self.blank():
+                return False   # another attempt saved one while we were waiting; the spare mailbox is unused and expires
+            self.data['url'] = url
+            self.data['tenantId'] = tid
+            self.data['officeSecret'] = sec
+            self.data['linkSecret'] = link
+            self.data['installId'] = install_id
+            self.data['auto'] = True
+            self.save()
+            return True
+
+    def reopen_auto(self, url):
+        """The mailbox row was deleted after a long silence. Same install id and same driver-link secret, new office secret.
+        A PC that received the mailbox from another PC has no install id and is left unchanged."""
+        url = self._check_url(url or self.url)
+        if not url:
+            return False
+        with self._lock:
+            self.load()
+            install_id = str(self.data.get('installId') or '').strip().lower()
+            if not _TENANT_RE.fullmatch(install_id):
+                return False
+            link = self.data.get('linkSecret') or pysecrets.token_urlsafe(32)
+            tid, sec = self._claim(url, install_id)
+            self.load()
+            if str(self.data.get('installId') or '').strip().lower() != install_id:
+                return False
+            self.data['url'] = url
+            self.data['tenantId'] = tid
+            self.data['officeSecret'] = sec
+            self.data['linkSecret'] = link
+            self.data['installId'] = install_id
+            self.data['auto'] = True
+            self.save()
+            return True
 
 
 # --------------------------------------------------------------------------- talking to the gateway
 class Client:
-    def __init__(self, url, secret, timeout=25):
+    def __init__(self, url, secret, timeout=25, tenant=None):
         self.url, self.secret, self.timeout = url.rstrip('/'), secret, timeout
+        self.tenant = str(tenant or '').strip().lower() or None
 
     def call(self, method, path, obj=None, raw=False):
         body = b'' if obj is None else json.dumps(obj).encode()
         req = urllib.request.Request(self.url + path, data=body if method != 'GET' else None, method=method,
-                                     headers={**sign_headers(self.secret, method, path, body if method != 'GET' else b''), 'Content-Type': 'application/json',
+                                     headers={**sign_headers(self.secret, method, path, body if method != 'GET' else b'', tenant=self.tenant), 'Content-Type': 'application/json',
                                               'User-Agent': 'TripOrders-Office'})
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -144,15 +317,17 @@ class Client:
                     info = {}
                 if info.get('reason') == 'clock':   # the gateway says it is the clock, not the secret
                     mins = max(1, round(abs(float(info.get('skewSeconds') or 0)) / 60))
-                    raise GatewayError(f'The clock of this PC is off by {mins} minutes compared with the mailbox. Correct the date and time of this PC, then try again.')
+                    raise GatewayError(f'The clock of this PC is off by {mins} minutes compared with the mailbox. Correct the date and time of this PC, then try again.', 'clock')
                 if info.get('reason') == 'replay':
-                    raise GatewayError('The mailbox saw this request twice. Try again.')
-                raise GatewayError('The mailbox refused this PC. The secret does not match the one set on the gateway.')
+                    raise GatewayError('The mailbox saw this request twice. Try again.', 'replay')
+                if info.get('reason') == 'expired':
+                    raise GatewayError('This mailbox was removed after a long time with no use. The first PC connects again by itself. Another PC needs the new setup code from the first one.', 'expired')
+                raise GatewayError('The mailbox refused this PC. The secret does not match the one set on the gateway.', 'secret')
             if e.code == 503:
-                raise GatewayError('The mailbox is running but has no secret yet. Set OFFICE_SECRET on it (see the setup guide).')
-            raise GatewayError(f'The mailbox answered with an error ({e.code}).')
+                raise GatewayError('The mailbox is running but has no secret yet. Set OFFICE_SECRET on it (see the setup guide).', 'notready')
+            raise GatewayError(f'The mailbox answered with an error ({e.code}).', 'status')
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise GatewayError('Cannot reach the mailbox. Check the internet on this PC and the address.') from e
+            raise GatewayError('Cannot reach the mailbox. Check the internet on this PC and the address.', 'offline') from e
 
     def status(self):
         return self.call('GET', '/office/status')
@@ -267,15 +442,18 @@ def _int(v):
 
 # --------------------------------------------------------------------------- the background service
 class GatewaySync:
-    def __init__(self, store, journal, node_id, secrets, save_file, log_fn=None):
+    def __init__(self, store, journal, node_id, secrets, save_file, log_fn=None, cfg=None, node=None, joining=None):
         self.store, self.journal, self.node_id, self.secrets, self.save_file = store, journal, node_id, secrets, save_file
+        self.cfg = cfg or {}
+        self.node = node
+        self.joining = joining or (lambda: False)
         self.say = log_fn or (lambda *a: None)
         self.lock = threading.Lock()
         self.wake = threading.Event()
         self.pushed = {}            # token hash -> signature of the card the gateway has
         self.release = set()        # token hashes whose bound phone the office released
         self.removed = set()        # replaced link hashes the gateway has already been told to remove (the trips keep the list, so a restart repeats it harmlessly)
-        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
+        self.stat = {'lastOk': None, 'lastError': None, 'lastErrorKey': '', 'lastErrorVars': {}, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
         self._stop = False
         self._thread = None
 
@@ -296,40 +474,108 @@ class GatewaySync:
     def client(self):
         if not self.secrets.configured:
             raise GatewayError('The mailbox is not set up yet.')
-        return Client(self.secrets.url, self.secrets.data['officeSecret'])
+        return Client(self.secrets.url, self.secrets.data['officeSecret'], tenant=self.secrets.data.get('tenantId') or None)
+
+    def _training(self):
+        return bool(self.cfg.get('training'))
+
+    def _may_register(self):
+        """Only a real office that has no mailbox yet, and only the main PC. A joined PC waits for the mailbox over the local network.
+        Training never registers, and a file that already has an address or a secret is left exactly as it is."""
+        if self._training() or not self.secrets.blank():
+            return False
+        if not str(self.cfg.get('gateway_url') or '').strip():
+            return False
+        if self.joining():
+            return False
+        role = getattr(self.node, 'role', None) if self.node is not None else None
+        return role == 'authority'
 
     def _loop(self):
-        delay = 5
+        delay = 0
+        reg_delay = 2
         while not self._stop:
-            self.wake.wait(delay if delay > 0 else 1)
+            if delay:
+                self.wake.wait(delay)
             self.wake.clear()
             if self._stop:
                 break
+            if self._training():
+                delay = 60          # practice data is never registered and never pushed
+                continue
             if not self.secrets.configured:
-                delay = 30
+                if self._may_register():
+                    try:
+                        if self.secrets.auto_register(self.cfg.get('gateway_url')):
+                            self.say('Mailbox connected automatically')
+                            reg_delay = 2
+                            delay = 0
+                            continue
+                    except GatewayError as e:
+                        self._note(e)
+                        reg_delay = min(max(reg_delay * 2, 2), 600)
+                    except Exception:
+                        log.exception('mailbox register failed')
+                        self._note(GatewayError('Cannot reach the mailbox. This PC will try again when the internet is back.', 'offline'))
+                        reg_delay = min(max(reg_delay * 2, 2), 600)
+                    delay = reg_delay
+                else:
+                    delay = 5
                 continue
             try:
                 self.cycle()
                 delay = int(self.secrets.data.get('pollSeconds') or 60)
             except GatewayError as e:
-                self.stat['lastError'] = str(e)
+                self._note(e)
                 delay = min(max(delay * 2, 10), 600)
             except Exception as e:      # never let the thread die; the next round tries again
                 log.exception('gateway cycle failed')
                 self.stat['lastError'] = 'Unexpected problem: ' + str(e)[:120]
+                self.stat['lastErrorKey'] = ''
+                self.stat['lastErrorVars'] = {}
                 delay = min(max(delay * 2, 10), 600)
 
+    def _note(self, exc):
+        """Remember a mailbox problem in the screen's language. The text is the English source; the key is what the screen shows."""
+        self.stat['lastError'] = str(exc)
+        key, vars_ = errkeys.key_for(str(exc))
+        self.stat['lastErrorKey'] = key
+        self.stat['lastErrorVars'] = vars_
+
+    def _reopen(self):
+        if self._training():
+            return False
+        url = self.secrets.url or str(self.cfg.get('gateway_url') or '')
+        if not self.secrets.reopen_auto(url):
+            return False
+        self.pushed.clear()
+        self.removed.clear()
+        self.release.clear()
+        self.say('Mailbox connected again')
+        return True
+
     def status(self):
-        return {'configured': self.secrets.configured, 'hasSecrets': self.secrets.has_secrets, 'url': self.secrets.url, 'pollSeconds': int(self.secrets.data.get('pollSeconds') or 60), **self.stat}
+        return {'configured': self.secrets.configured, 'hasSecrets': self.secrets.has_secrets, 'url': self.secrets.url,
+                'auto': bool(self.secrets.data.get('tenantId')), 'pollSeconds': int(self.secrets.data.get('pollSeconds') or 60), **self.stat}
 
     # -- one round
     def cycle(self):
         with self.lock:
             self.stat['lastTry'] = _now()
-            self.push_cards()
-            self.pull()
+            try:
+                self.push_cards()
+                self.pull()
+            except GatewayError as e:
+                # The row was removed after 90 idle days. The PC that opened the mailbox connects again;
+                # a second PC has no install id, so it is left as it is and the message asks for the new code.
+                if e.reason != 'expired' or not self._reopen():
+                    raise
+                self.push_cards()
+                self.pull()
             self.stat['lastOk'] = _now()
             self.stat['lastError'] = None
+            self.stat['lastErrorKey'] = ''
+            self.stat['lastErrorVars'] = {}
 
     def push_cards(self):
         st = self.store.state()

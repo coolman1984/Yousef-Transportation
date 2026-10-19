@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 import urllib.request
@@ -32,9 +33,10 @@ def node_ok():
 
 
 class GatewayProcess:
-    def __init__(self, secret=SECRET, db=None):
-        self.port = free_port()
-        env = {**os.environ, 'PORT': str(self.port), 'OFFICE_SECRET': secret, **({'GATEWAY_DB': db} if db else {})}
+    def __init__(self, secret=SECRET, db=None, master='master-key-for-the-office-tests-0123456789', port=None):
+        self.port = port or free_port()
+        self.master = master
+        env = {**os.environ, 'PORT': str(self.port), 'OFFICE_SECRET': secret, 'MASTER_KEY': master, **({'GATEWAY_DB': db} if db else {})}
         self.proc = subprocess.Popen(['node', '--no-warnings', os.path.join(ROOT, 'gateway', 'dev', 'server.js')], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         line = self.proc.stdout.readline()
         assert line.startswith('READY'), line
@@ -148,6 +150,36 @@ class UnitTest(unittest.TestCase):
         msg = '\n'.join(['GET', '/office/status', '1000', 'ab' * 8, hashlib.sha256(b'').hexdigest()])
         import hmac
         self.assertEqual(h['X-TO-Sig'], hmac.new(b'k', msg.encode(), hashlib.sha256).hexdigest())
+        self.assertNotIn('X-TO-Tenant', h)
+        tenant = 'ab' * 16
+        ht = G.sign_headers('k', 'GET', '/office/status', b'', t=1000, nonce='ab' * 8, tenant=tenant)
+        msg_t = msg + '\n' + tenant
+        self.assertEqual(ht['X-TO-Tenant'], tenant)
+        self.assertEqual(ht['X-TO-Sig'], hmac.new(b'k', msg_t.encode(), hashlib.sha256).hexdigest())
+
+    def test_an_existing_mailbox_is_not_replaced_and_a_setup_code_carries_the_tenant(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            a = G.Secrets(os.path.join(d, 'a.json'))
+            a.set_url('https://keep.example.workers.dev')
+            a.generate()
+            kept = a.data['officeSecret']
+            self.assertFalse(a.auto_register('http://127.0.0.1:9'), 'a saved address is not a fresh install')
+            self.assertEqual(a.data['officeSecret'], kept)
+            a.data['tenantId'] = 'cd' * 16
+            a.data['auto'] = True
+            a.save()
+            b = G.Secrets(os.path.join(d, 'b.json'))
+            b.from_code(a.setup_code())
+            self.assertEqual((b.data['tenantId'], b.data['officeSecret'], b.url), ('cd' * 16, kept, a.url))
+            c = G.Secrets(os.path.join(d, 'c.json'))
+            c.set_url('https://other.example.workers.dev')
+            c.generate()
+            self.assertFalse(c.apply_remote(a.export_blob()))
+            self.assertNotEqual(c.data['officeSecret'], kept)
+            fresh = G.Secrets(os.path.join(d, 'd.json'))
+            self.assertTrue(fresh.apply_remote(a.export_blob()))
+            self.assertEqual(fresh.data['tenantId'], 'cd' * 16)
 
 
 class SecretsBeforeAddressTest(unittest.TestCase):
@@ -432,6 +464,317 @@ class IntegrationTest(unittest.TestCase):
         with self.assertRaises(ApiError) as e:
             self.ac.post('/api/gateway/save', {'url': 'http://not-secure.example.com'})
         self.assertIn('https://', str(e.exception.msg))
+
+
+def _gw_file(server):
+    return os.path.join(server.data_dir, 'gateway.json')
+
+
+def _read_gw(server):
+    with open(_gw_file(server), encoding='utf-8') as f:
+        return json.load(f)
+
+
+def _tenant_count(db):
+    script = ("import {DatabaseSync} from 'node:sqlite';"
+              "const db = new DatabaseSync(process.argv[1]);"
+              "console.log(db.prepare('SELECT COUNT(*) n FROM tenants').get().n);")
+    last = ''
+    for _ in range(20):
+        r = subprocess.run(['node', '--input-type=module', '-e', script, db], capture_output=True, text=True, timeout=15)
+        if r.returncode == 0 and r.stdout.strip().isdigit():
+            return int(r.stdout.strip())
+        last = (r.stderr or r.stdout)[-300:]
+        time.sleep(0.15)
+    raise AssertionError('could not read the mailbox database: ' + last)
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class TenantClientTest(unittest.TestCase):
+    """The office client sends its tenant. Install A cannot read install B, and the old secret still works."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = os.path.join(tempfile.mkdtemp(prefix='gw-tenants-'), 'box.sqlite')
+        cls.gw = GatewayProcess(db=cls.db)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.gw.stop()
+
+    def test_two_registers_cannot_see_each_other_and_the_legacy_path_still_works(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            a, b = G.Secrets(os.path.join(d, 'a.json')), G.Secrets(os.path.join(d, 'b.json'))
+            self.assertTrue(a.auto_register(self.gw.url))
+            self.assertTrue(b.auto_register(self.gw.url))
+            self.assertNotEqual(a.data['tenantId'], b.data['tenantId'])
+            self.assertNotEqual(a.data['officeSecret'], b.data['officeSecret'])
+            self.assertEqual(os.stat(a.path).st_mode & 0o777, 0o600)
+            ca = G.Client(self.gw.url, a.data['officeSecret'], tenant=a.data['tenantId'])
+            cb = G.Client(self.gw.url, b.data['officeSecret'], tenant=b.data['tenantId'])
+            token = 'Tk_officeAofficeAofficeA'
+            ca.put_cards([{'tokenHash': G.token_hash(token), 'tripId': 'trip-a', 'body': {'no': 'A'}, 'expiresAt': int(time.time()) + 3600}])
+            e = {'uuid': str(uuid.uuid4()), 'v': 1, 'type': 'start', 'deviceId': 'device-AAAA-1', 'seq': 1, 'phoneAt': datetime.now(timezone.utc).isoformat(), 'data': {'startKm': 10}}
+            self.assertEqual(self.gw.driver('POST', f'/api/event/{token}', e)[0], 200)
+            self.assertEqual(len(ca.inbox()['events']), 1)
+            self.assertEqual(cb.inbox()['events'], [])
+            self.assertEqual(cb.inbox()['photos'], [])
+            self.assertEqual(G.Client(self.gw.url, SECRET).inbox()['events'], [])
+            legacy = G.Client(self.gw.url, SECRET)
+            legacy.put_cards([{'tokenHash': G.token_hash('Tk_legacylegacylegacy1'), 'tripId': 'trip-old', 'body': {}, 'expiresAt': int(time.time()) + 3600}])
+            self.assertEqual(legacy.status()['cards'], 1)
+            self.assertEqual(ca.status()['cards'], 1)
+            dumped = open(self.db, 'rb').read()
+            self.assertNotIn(a.data['officeSecret'].encode(), dumped)
+            self.assertNotIn(b.data['officeSecret'].encode(), dumped)
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoConnectTest(unittest.TestCase):
+    """A fresh office, the real program: register, keep old settings, skip training, share with the second PC, finish a trip."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.db = os.path.join(tempfile.mkdtemp(prefix='gw-auto-'), 'box.sqlite')
+        cls.gw = GatewayProcess(db=cls.db)
+        cls.S = Server('auto', extra_cfg={'sign_in': False, 'gateway_url': cls.gw.url}).start()
+        cls.c = cls.S.client()
+        wait_until(lambda: cls.c.get('/api/gateway').get('configured'), 30, what='automatic mailbox')
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.S.cleanup()
+        cls.gw.stop()
+
+    def test_a_fresh_install_registers_and_the_secret_is_not_in_the_log_or_the_state(self):
+        gw = _read_gw(self.S)
+        self.assertEqual(len(gw['tenantId']), 32)
+        self.assertTrue(gw['auto'])
+        self.assertGreaterEqual(len(gw['officeSecret']), 32)
+        self.assertEqual(os.stat(_gw_file(self.S)).st_mode & 0o777, 0o600)
+        st = self.c.get('/api/gateway')
+        self.assertTrue(st['auto'] and st['configured'])
+        self.assertNotIn('officeSecret', st)
+        state = json.dumps(self.c.get('/api/state'))
+        log = ''.join(self.S.out)
+        try:
+            log += open(os.path.join(self.S.data_dir, 'logs', 'server.log'), encoding='utf-8').read()
+        except OSError:
+            pass
+        for secret in (gw['officeSecret'], gw['linkSecret'], gw['tenantId'], gw['installId']):
+            self.assertNotIn(secret, state)
+            self.assertNotIn(secret, log)
+        self.assertNotIn(gw['officeSecret'], json.dumps(self.c.get('/api/activity')))
+
+    def test_b_driver_start_photo_and_end_finish_the_trip(self):
+        c = self.c
+        c.post('/api/commit', {'label': 'lists', 'ops': [
+            put('tripCategories', 'cat1', name='Manager car', exportSheet='All Car'),
+            put('vehicles', 'v1', plate='ط و ي 6829', plateKey='طوي6829', active=True, type='Sedan'),
+            put('drivers', 'd1', name='Driver One', active=True, mobile='01012345678'),
+            put('people', 'p1', name='Sara Adel', isRequester=True, isPassenger=True)]})
+        t = c.post('/api/trips/new', {'categoryId': 'cat1', 'vehicleId': 'v1', 'driverId': 'd1', 'requesterId': 'p1', 'destination': 'Factory'})
+        link = c.post('/api/trips/link', {'id': t['id'], 'sent': True})
+        token = link['url'].rsplit('/t/', 1)[1]
+        c.post('/api/gateway/pull')
+        self.assertEqual(self.gw.driver('GET', f'/api/card/{token}')[0], 200)
+
+        def event(typ, **data):
+            e = {'uuid': str(uuid.uuid4()), 'v': 1, 'type': typ, 'deviceId': 'device-AAAA-1', 'seq': 1,
+                 'phoneAt': datetime.now(timezone.utc).astimezone().isoformat(timespec='seconds'), 'data': data}
+            self.assertEqual(self.gw.driver('POST', f'/api/event/{token}', e)[0], 200, typ)
+            return e
+
+        e1 = event('start', startKm=45000)
+        photo = jpeg()
+        pid = str(uuid.uuid4())
+        self.assertEqual(self.gw.driver('PUT', f'/api/photo/{token}/{pid}', photo, {'X-Kind': 'start_odo', 'X-Sha256': hashlib.sha256(photo).hexdigest(), 'X-Event': e1['uuid']})[0], 200)
+        event('end', endKm=45120, routeText='Factory - Capital - Factory')
+        res = c.post('/api/gateway/pull')
+        self.assertIsNone(res['lastError'])
+        row = next(x for x in c.get('/api/state')['trips'] if x['id'] == t['id'])
+        self.assertEqual((row['status'], row['startKm'], row['endKm'], row['locked']), ('finished', 45000, 45120, True))
+        self.assertTrue(any(p['kind'] == 'start_odo' and p['tripId'] == t['id'] for p in c.get('/api/state')['tripPhotos']))
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoOfflineThenOnlineTest(unittest.TestCase):
+    def test_it_waits_and_then_connects(self):
+        port = free_port()
+        S = Server('off', extra_cfg={'sign_in': False, 'gateway_url': f'http://127.0.0.1:{port}'}).start()
+        gw = None
+        try:
+            time.sleep(1.2)
+            self.assertFalse(S.client().get('/api/gateway')['configured'])
+            offline = S.client().get('/api/gateway')
+            self.assertIn('internet', (offline.get('lastError') or '').lower())
+            self.assertEqual(offline.get('lastErrorKey'), 'err.mailboxLater')
+            gw = GatewayProcess(port=port)
+            wait_until(lambda: S.client().get('/api/gateway').get('configured'), 30, what='mailbox after the internet returns')
+            self.assertTrue(_read_gw(S)['auto'])
+        finally:
+            S.cleanup()
+            if gw:
+                gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoLegacyUntouchedTest(unittest.TestCase):
+    def test_an_existing_gateway_file_is_not_rewritten(self):
+        gw = GatewayProcess()
+        S = Server('legacy', extra_cfg={'sign_in': False, 'gateway_url': gw.url})
+        os.makedirs(S.data_dir, exist_ok=True)
+        original = {'url': 'https://custom.example.workers.dev', 'officeSecret': 'legacy-office-secret-0123456789abcd',
+                    'linkSecret': 'legacy-link-secret-0123456789abcdef', 'pollSeconds': 45}
+        with open(_gw_file(S), 'w', encoding='utf-8') as f:
+            json.dump(original, f)
+        try:
+            S.start()
+            time.sleep(2)
+            self.assertEqual(_read_gw(S), original)
+            self.assertFalse(S.client().get('/api/gateway')['auto'])
+        finally:
+            S.cleanup()
+            gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoTrainingSkipTest(unittest.TestCase):
+    def test_training_does_not_register_or_push(self):
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-train-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        S = Server('train', extra_cfg={'sign_in': False, 'training': True, 'gateway_url': gw.url}).start()
+        try:
+            self.assertTrue(S.client().get('/api/auth/status')['me']['training'])
+            self.assertTrue(S.client().get('/api/state')['trips'], 'sample trips are loaded')
+            time.sleep(2)
+            self.assertFalse(os.path.exists(_gw_file(S)))
+            self.assertFalse(S.client().get('/api/gateway')['configured'])
+            self.assertEqual(_tenant_count(db), 0)
+            self.assertNotIn('Mailbox connected', ''.join(S.out))
+        finally:
+            S.cleanup()
+            gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoLanShareTest(unittest.TestCase):
+    def test_the_paired_pc_receives_the_same_mailbox_and_does_not_register_another(self):
+        from harness import pair, ADMIN
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-lan-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        main = Server('mainpc', extra_cfg={'sign_in': True, 'gateway_url': gw.url}).start()
+        other = Server('otherpc', extra_cfg={'sign_in': True, 'gateway_url': gw.url}).start()
+        try:
+            ac = make_authority(main)
+            wait_until(lambda: ac.get('/api/gateway').get('configured'), 30, what='main PC mailbox')
+            mc = pair(ac, main, other, name='Second PC')
+            mc.login(*ADMIN)
+            wait_until(lambda: _read_gw(other).get('tenantId') == _read_gw(main)['tenantId'], 30, what='mailbox on the second PC')
+            self.assertEqual(_read_gw(other)['officeSecret'], _read_gw(main)['officeSecret'])
+            self.assertEqual(_read_gw(other)['linkSecret'], _read_gw(main)['linkSecret'])
+            self.assertEqual(_tenant_count(db), 1)
+            secret, link = _read_gw(main)['officeSecret'], _read_gw(main)['linkSecret']
+            for S in (main, other):
+                blob = ''
+                for fn in os.listdir(os.path.join(S.data_dir, 'logs')):
+                    with open(os.path.join(S.data_dir, 'logs', fn), encoding='utf-8', errors='replace') as f:
+                        blob += f.read()
+                self.assertNotIn(secret, blob)
+                self.assertNotIn(link, blob)
+        finally:
+            other.cleanup()
+            main.cleanup()
+            gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoReplayTest(unittest.TestCase):
+    """A lost registration answer must not open a second mailbox, and the install id never lands in the database."""
+
+    def test_retry_keeps_the_same_mailbox_and_a_received_pc_does_not_open_another(self):
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-replay-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                s = G.Secrets(os.path.join(d, 'gw.json'))
+                self.assertTrue(s.auto_register(gw.url))
+                tid, sec, iid = s.data['tenantId'], s.data['officeSecret'], s.data['installId']
+                s.data = {'installId': iid}
+                s.save()
+                self.assertTrue(s.blank())
+                self.assertTrue(s.auto_register(gw.url))
+                self.assertEqual(s.data['tenantId'], tid)
+                self.assertEqual(s.data['officeSecret'], sec)
+                self.assertEqual(_tenant_count(db), 1)
+                raw = open(db, 'rb').read()
+                self.assertNotIn(sec.encode(), raw)
+                self.assertNotIn(iid.encode(), raw)
+                self.assertNotIn(gw.master.encode(), raw)
+                kept = s.data['officeSecret']
+                s.data.pop('installId')
+                s.save()
+                self.assertFalse(s.reopen_auto(gw.url))
+                self.assertEqual(s.data['officeSecret'], kept)
+                self.assertNotIn('installId', s.data)
+        finally:
+            gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoReopenTest(unittest.TestCase):
+    """After the idle cleanup removes the mailbox, the PC that opened it connects again and the driver link still works."""
+
+    def test_a_removed_mailbox_reconnects_without_changing_the_link(self):
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-reopen-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        S = Server('reopen', extra_cfg={'sign_in': False, 'gateway_url': gw.url}).start()
+        try:
+            c = S.client()
+            wait_until(lambda: c.get('/api/gateway').get('configured'), 30, what='mailbox before the cleanup')
+            c.post('/api/commit', {'label': 'lists', 'ops': [
+                put('tripCategories', 'cat1', name='Manager car', exportSheet='All Car'),
+                put('vehicles', 'v1', plate='ط و ي 6829', plateKey='طوي6829', active=True, type='Sedan'),
+                put('drivers', 'd1', name='Driver One', active=True, mobile='01012345678'),
+                put('people', 'p1', name='Sara Adel', isRequester=True, isPassenger=True)]})
+            t = c.post('/api/trips/new', {'categoryId': 'cat1', 'vehicleId': 'v1', 'driverId': 'd1', 'requesterId': 'p1', 'destination': 'Factory'})
+            link = c.post('/api/trips/link', {'id': t['id'], 'sent': True})
+            token = link['url'].rsplit('/t/', 1)[1]
+            c.post('/api/gateway/pull')
+            self.assertEqual(gw.driver('GET', f'/api/card/{token}')[0], 200)
+            saved = _read_gw(S)
+            self._sql(db, 'DELETE FROM tenants')
+            res = c.post('/api/gateway/pull')
+            self.assertIsNone(res.get('lastError'))
+            now = _read_gw(S)
+            self.assertEqual(now['linkSecret'], saved['linkSecret'])
+            self.assertEqual(now['installId'], saved['installId'])
+            self.assertNotEqual(now['tenantId'], saved['tenantId'])
+            self.assertNotEqual(now['officeSecret'], saved['officeSecret'])
+            self.assertEqual(_tenant_count(db), 1)
+            self.assertEqual(gw.driver('GET', f'/api/card/{token}')[0], 200)
+            raw = open(db, 'rb').read()
+            self.assertNotIn(now['officeSecret'].encode(), raw)
+            self.assertNotIn(now['installId'].encode(), raw)
+            self.assertNotIn(gw.master.encode(), raw)
+        finally:
+            S.cleanup()
+            gw.stop()
+
+    @staticmethod
+    def _sql(db, sql):
+        script = ("import {DatabaseSync} from 'node:sqlite';"
+                  "const db = new DatabaseSync(process.argv[1]);"
+                  "db.exec(process.argv[2]);")
+        last = ''
+        for _ in range(20):
+            r = subprocess.run(['node', '--input-type=module', '-e', script, db, sql], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return
+            last = (r.stderr or r.stdout)[-300:]
+            time.sleep(0.15)
+        raise AssertionError('could not update the mailbox database: ' + last)
 
 
 if __name__ == '__main__':

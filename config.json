@@ -15,6 +15,7 @@
   "min_password_length": 8,
   "device_name": "",
   "sign_in": false,
+  "gateway_url": "https://trip-orders-gateway.mflma2040.workers.dev",
   "sync_port": 8453,
   "sync_interval_seconds": 5,
   "peer_addresses": {}

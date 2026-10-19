@@ -18,4 +18,6 @@ crons = ["17 3 * * *"]
 [vars]
 RETENTION_DAYS = "30"
 
-# Secret (never written in this file):  npx wrangler secret put OFFICE_SECRET
+# Secrets (never written in this file):
+#   npx wrangler secret put OFFICE_SECRET   # the old single mailbox; keep it so existing installs and sent links still work
+#   npx wrangler secret put MASTER_KEY      # once, a random value; derives each install's office secret. Never print it or run it again.

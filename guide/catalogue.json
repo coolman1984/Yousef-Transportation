@@ -933,7 +933,15 @@
    "errors": [
     "err.clockOff",
     "err.mailboxSecret",
-    "err.mailboxReplay"
+    "err.mailboxReplay",
+    "err.mailboxBusy",
+    "err.mailboxNotReady",
+    "err.mailboxRejected",
+    "err.mailboxExpired",
+    "err.mailboxNoSecret",
+    "err.mailboxStatus",
+    "err.mailboxLater",
+    "err.mailboxOffline"
    ]
   },
   {

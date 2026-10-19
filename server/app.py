@@ -799,6 +799,19 @@ class Handler(BaseHTTPRequestHandler):
             name = 'Vehicles_template.xlsx' if kind == 'vehicles' else 'Drivers_template.xlsx'
             STORE.log_activity(self.user, self.ip, [{'type': 'export', 'action': 'Fleet template', 'target': name}])
             return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': content_disposition(name)})
+        if p == '/api/fleet/practice':
+            # The sample sheet is for the training copy only, so a practice import cannot land in the real lists.
+            if not CFG.get('training'):
+                raise Forbidden('The practice sheet is only available in training mode.', 'err.flt.practice')
+            kind = qs.get('kind', '')
+            try:
+                kind = fleet_import.kind_or_raise(kind)
+            except fleet_import.FleetError as e:
+                raise BadRequest(str(e), e.code)
+            self.need(fleet_import.PERM[kind])
+            data = fleet_import.practice_book(kind)
+            name = fleet_import.practice_name(kind)
+            return self.send(200, data, TYPES['.xlsx'], {'Content-Disposition': content_disposition(name)})
         if p in ('/api/excel/export', '/api/excel/template'):
             self.need('excel.export')
             self.need_all_scopes()

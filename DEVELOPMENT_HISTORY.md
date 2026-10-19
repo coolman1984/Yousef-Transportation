@@ -1,6 +1,15 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Teach the Excel import in the tour, the guide and training (2026-10-19)
+
+**What/why:** After the fleet import landed, the office still had to guess the buttons, the columns and what a red row meant. The moving tour, the help and training now teach that path in Arabic and English.
+- The spotlight tour walks Vehicles, then Drivers: the import button, the template, what each column means, the usual mistakes, the file box, then a lesson preview (new, update, errors with the row and the reason, how to fix, the confirm button, the summary). The lesson saves nothing, and its confirm button stays closed. Skip, back, restart and Escape still work. The first five welcome steps are unchanged.
+- Training shows a practice card. It downloads a built-in sheet (good rows plus rows that are wrong on purpose) and uploads it only in the training copy. The real office gets a refusal. After the upload, the same spotlight explains the live preview.
+- Help has a question and a tour button. The step-by-step guide `importFleet` is on the administrator and full-access paths.
+**Review:** the drivers half of the tour was missing its own import button and the update count; both are steps now. The lesson banner says the numbers are an example, not the open file. A list step of the tour leaves the import screen so the spotlight can find the toolbar buttons. Wording was checked against the guide lint (short formal sentences in the tour and the help; the import screen keeps its own voice).
+**Checks:** After merging main at 1.1.7 (no further version bump): gateway 39/39. Python suite 490 ran; one mailbox reconnect wait timed out while the full list was busy, then passed alone. The rest OK, skipped 42 (browser tests; the project's Playwright Chromium is not installed). `test_fleet_import` covers the practice sheet counts and the refusal outside training. `test_guide_gate` covers the wording. A headless Chrome walk (Arabic, night theme, XL, then a 360px window, then English) stepped through every spotlight card: the hole moved, the card stayed on screen, skip and restart worked, and the lesson confirm button stayed closed. In training, the sample file previewed 3 new / 1 update / 3 errors for cars and 2 new / 1 update / 3 errors for drivers, and the save button was open only there. **Next:** owner review; do not merge.
+
 ## Import the whole fleet from one Excel sheet (2026-10-19)
 
 **What/why:** The office asked to upload one Excel file with every vehicle instead of typing them one by one. Vehicles and drivers were manual only; the Excel screen imported trips, not the lists.

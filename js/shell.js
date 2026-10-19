@@ -221,6 +221,7 @@
       { icon: 'present', label: TO.t('act.slides'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.slides.open(); } },
       { icon: 'info', label: TO.t('act.about'), group: TO.t('pal.g.actions'), hint: '', run: function () { openAbout(); } }
     );
+    if (TO.can('vehicles.manage') || TO.can('drivers.manage')) items.push({ icon: 'sheet', label: TO.t('act.tour.fleet'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.tour.start('fleet'); } });
     if (TO.me.training) items.push({ icon: 'route', label: TO.t('train.back'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.training.back(); } });
     else items.push({ icon: 'play', label: TO.t('train.btn'), group: TO.t('pal.g.actions'), hint: '', run: function () { TO.training.open(); } });
     if (TO.me.signIn) items.push({ icon: 'logout', label: TO.t('act.logout'), group: TO.t('pal.g.actions'), hint: '', run: function () { logout(); } });
@@ -387,6 +388,13 @@
       return;
     }
     if (typing || e.ctrlKey || e.metaKey || e.altKey || TO.overlay.isOpen) return;
+    if (TO.tour.active) {
+      var tourRtl = document.documentElement.dir === 'rtl';
+      var tourNext = tourRtl ? 'ArrowLeft' : 'ArrowRight', tourPrev = tourRtl ? 'ArrowRight' : 'ArrowLeft';
+      if (e.key === tourNext) { e.preventDefault(); TO.tour.next(); return; }
+      if (e.key === tourPrev) { e.preventDefault(); TO.tour.prev(); return; }
+      return;
+    }
     if (TO.slides.active) { if (e.key === 'ArrowRight' || e.key === 'ArrowLeft' || e.key === ' ') TO.slides.key(e); return; }
     var code = e.code || '';
     if (goPending && Date.now() - goPending < 1300) {
@@ -406,45 +414,239 @@
     else if (e.key === '/') { e.preventDefault(); openPalette(); }
   });
 
-  /* ---------- guided tour (spotlight) ---------- */
-  var TOUR = [
-    { sel: '[data-tour="nav"]', k: 1 }, { sel: '[data-tour="search"]', k: 2 }, { sel: '[data-tour="tools"]', k: 3 },
-    { sel: '[data-tour="kpis"]', k: 4, page: 'overview' }, { sel: '[data-act="account"]', k: 5 }
+  /* ---------- guided tour (spotlight) ----------
+     The hole and the card are placed with physical viewport coordinates from getBoundingClientRect.
+     Those coordinates do not flip in Arabic: inset-inline-start would put the hole on the wrong side.
+     The welcome steps are unchanged. The fleet tour walks Vehicles and Drivers and may open a lesson
+     preview that saves nothing. */
+  var WELCOME = [
+    { sel: '[data-tour="nav"]', k: '1' }, { sel: '[data-tour="search"]', k: '2' }, { sel: '[data-tour="tools"]', k: '3' },
+    { sel: '[data-tour="kpis"]', k: '4', page: 'overview' }, { sel: '[data-act="account"]', k: '5' }
   ];
+  var FLEET = [
+    { sel: '[data-import]', page: 'vehicles', k: 'flt.v.btn' },
+    { sel: '[data-template]', page: 'vehicles', k: 'flt.v.tpl' },
+    { sel: '[data-tour="flt-cols"]', page: 'vehicles', k: 'flt.v.cols', lesson: 'pick' },
+    { sel: '[data-tour="flt-mistakes"]', page: 'vehicles', k: 'flt.v.bad', lesson: 'pick' },
+    { sel: '#flt-dz', page: 'vehicles', k: 'flt.v.file', lesson: 'pick' },
+    { sel: '[data-tour="flt-new"]', page: 'vehicles', k: 'flt.v.new', lesson: 'preview' },
+    { sel: '[data-tour="flt-update"]', page: 'vehicles', k: 'flt.v.upd', lesson: 'preview' },
+    { sel: '[data-tour="flt-errors"]', page: 'vehicles', k: 'flt.v.err', lesson: 'preview' },
+    { sel: '[data-tour="flt-errors"]', page: 'vehicles', k: 'flt.v.fix', lesson: 'preview' },
+    { sel: '[data-commit]', page: 'vehicles', k: 'flt.v.ok', lesson: 'preview' },
+    { sel: '[data-tour="flt-done"]', page: 'vehicles', k: 'flt.v.done', lesson: 'done' },
+    { sel: '[data-import]', page: 'drivers', k: 'flt.d.btn' },
+    { sel: '[data-template]', page: 'drivers', k: 'flt.d.tpl' },
+    { sel: '[data-tour="flt-cols"]', page: 'drivers', k: 'flt.d.cols', lesson: 'pick' },
+    { sel: '[data-tour="flt-mistakes"]', page: 'drivers', k: 'flt.d.bad', lesson: 'pick' },
+    { sel: '#flt-dz', page: 'drivers', k: 'flt.d.file', lesson: 'pick' },
+    { sel: '[data-tour="flt-new"]', page: 'drivers', k: 'flt.d.new', lesson: 'preview' },
+    { sel: '[data-tour="flt-update"]', page: 'drivers', k: 'flt.d.upd', lesson: 'preview' },
+    { sel: '[data-tour="flt-errors"]', page: 'drivers', k: 'flt.d.err', lesson: 'preview' },
+    { sel: '[data-tour="flt-errors"]', page: 'drivers', k: 'flt.d.fix', lesson: 'preview' },
+    { sel: '[data-commit]', page: 'drivers', k: 'flt.d.ok', lesson: 'preview' },
+    { sel: '[data-tour="flt-done"]', page: 'drivers', k: 'flt.d.done', lesson: 'done' }
+  ];
+  var PRACTICE = [
+    { kind: 'vehicles', sel: '[data-tour="flt-new"]', page: 'vehicles', k: 'flt.p.v.new' },
+    { kind: 'vehicles', sel: '[data-tour="flt-update"]', page: 'vehicles', k: 'flt.p.v.upd' },
+    { kind: 'vehicles', sel: '[data-tour="flt-errors"]', page: 'vehicles', k: 'flt.p.v.err' },
+    { kind: 'vehicles', sel: '[data-tour="flt-errors"]', page: 'vehicles', k: 'flt.p.v.fix' },
+    { kind: 'vehicles', sel: '[data-commit]', page: 'vehicles', k: 'flt.p.v.ok' },
+    { kind: 'drivers', sel: '[data-tour="flt-new"]', page: 'drivers', k: 'flt.p.d.new' },
+    { kind: 'drivers', sel: '[data-tour="flt-update"]', page: 'drivers', k: 'flt.p.d.upd' },
+    { kind: 'drivers', sel: '[data-tour="flt-errors"]', page: 'drivers', k: 'flt.p.d.err' },
+    { kind: 'drivers', sel: '[data-tour="flt-errors"]', page: 'drivers', k: 'flt.p.d.fix' },
+    { kind: 'drivers', sel: '[data-commit]', page: 'drivers', k: 'flt.p.d.ok' }
+  ];
+  function placePop(rect, pop, view) {
+    var gap = 16, margin = 12;
+    var vw = Math.max(0, view.w || 0), vh = Math.max(0, view.h || 0);
+    var pw = Math.min(Math.max(0, pop.w || 0), Math.max(0, vw - margin * 2));
+    var ph = Math.max(0, pop.h || 0);
+    var rw = rect.width || 0, rh = rect.height || 0;
+    var right = rect.right != null ? rect.right : (rect.left || 0) + rw;
+    var bottom = rect.bottom != null ? rect.bottom : (rect.top || 0) + rh;
+    var left0 = rect.left || 0, top0 = rect.top || 0;
+    function clamp(n, lo, hi) { return Math.min(Math.max(n, lo), Math.max(lo, hi)); }
+    var maxLeft = Math.max(margin, vw - pw - margin);
+    var maxTop = Math.max(margin, vh - ph - margin);
+    var tall = rh > vh * 0.55;
+    var top, left, where;
+    if (!tall && bottom + gap + ph <= vh - margin) {
+      where = 'below'; top = bottom + gap; left = clamp(left0 + rw / 2 - pw / 2, margin, maxLeft);
+    } else if (!tall && top0 - gap - ph >= margin) {
+      where = 'above'; top = top0 - gap - ph; left = clamp(left0 + rw / 2 - pw / 2, margin, maxLeft);
+    } else if (left0 - gap - pw >= margin) {
+      where = 'west'; left = left0 - gap - pw; top = clamp(top0, margin, maxTop);
+    } else if (right + gap + pw <= vw - margin) {
+      where = 'east'; left = right + gap; top = clamp(top0, margin, maxTop);
+    } else {
+      where = 'over'; left = clamp(margin, margin, maxLeft); top = clamp(vh - ph - margin, margin, maxTop);
+    }
+    return { top: Math.round(top), left: Math.round(left), where: where, pw: Math.round(pw), ph: Math.round(ph) };
+  }
+  function pointArrow(arrow, where, box, rect) {
+    if (!arrow) return;
+    arrow.hidden = !where || where === 'over';
+    arrow.style.cssText = '';
+    if (arrow.hidden) return;
+    var along = Math.min(Math.max(18, (rect.left + rect.width / 2) - box.left), Math.max(18, box.pw - 18));
+    var down = Math.min(Math.max(18, (rect.top + rect.height / 2) - box.top), Math.max(18, box.ph - 18));
+    arrow.style.position = 'absolute';
+    arrow.style.width = '0';
+    arrow.style.height = '0';
+    arrow.style.border = '.45rem solid transparent';
+    if (where === 'below') { arrow.style.left = (along - 7) + 'px'; arrow.style.top = '-.8rem'; arrow.style.borderBottomColor = 'var(--raised)'; }
+    else if (where === 'above') { arrow.style.left = (along - 7) + 'px'; arrow.style.bottom = '-.8rem'; arrow.style.borderTopColor = 'var(--raised)'; }
+    else if (where === 'west') { arrow.style.right = '-.8rem'; arrow.style.top = (down - 7) + 'px'; arrow.style.borderLeftColor = 'var(--raised)'; }
+    else { arrow.style.left = '-.8rem'; arrow.style.top = (down - 7) + 'px'; arrow.style.borderRightColor = 'var(--raised)'; }
+  }
+  var session = null;
+  function onTourGeom() { if (session) placeNow(); }
+  function rectOf(el) {
+    var box = el && el.getBoundingClientRect ? el.getBoundingClientRect() : null;
+    if (!box || (!box.width && !box.height)) return null;
+    return { top: box.top, left: box.left, width: box.width, height: box.height, right: box.right, bottom: box.bottom };
+  }
+  function armLesson(step) {
+    if (!TO.fleetLesson) return;
+    var changed = false;
+    if (step.lesson) { TO.fleetLesson.show(step.page, step.lesson); changed = true; }
+    else if (TO.fleetLesson.reset) changed = TO.fleetLesson.reset();
+    var path = TO.route ? TO.route().path : '';
+    if (step.page && path !== step.page) TO.go(step.page);
+    else if (changed && TO.rerender) TO.rerender();
+  }
+  function waitTarget(sel, tries, done) {
+    var n = 0;
+    (function look() {
+      if (!session) return;
+      var el = sel ? TO.$(sel) : null;
+      if (rectOf(el)) { done(el); return; }
+      if (++n > tries) { done(null); return; }
+      setTimeout(look, 50);
+    })();
+  }
+  function buildCard(el) {
+    var host = TO.$('#tour'); if (!host || !session) return;
+    var s = session.steps[session.i], n = session.steps.length, i = session.i;
+    session.built = i;
+    session.miss = !el;
+    host.innerHTML = '<div class="hole"' + (el ? '' : ' hidden') + '></div><div class="pop" role="dialog" aria-labelledby="tour-title" style="visibility:hidden">' +
+      '<i class="arrow" aria-hidden="true"></i><h3 id="tour-title">' + TO.esc(TO.t('tour.' + s.k + '.t')) + '</h3>' +
+      '<p class="muted">' + TO.esc(TO.t('tour.' + s.k + '.b')) + '</p>' +
+      (el ? '' : '<p class="faint">' + TO.esc(TO.t('tour.miss')) + '</p>') +
+      (n > 8 ? '' : '<div class="dots">' + session.steps.map(function (_, k) { return '<i class="' + (k === i ? 'on' : '') + '"></i>'; }).join('') + '</div>') +
+      '<p class="faint tour-count num">' + TO.t('tour.of', { n: i + 1, m: n }) + '</p>' +
+      '<div class="tour-actions"><button type="button" class="btn ghost sm" data-tprev' + (i ? '' : ' disabled') + '>' + TO.esc(TO.t('common.back')) + '</button>' +
+      '<button type="button" class="btn ghost sm" data-trestart>' + TO.esc(TO.t('tour.restart')) + '</button><span class="grow"></span>' +
+      '<button type="button" class="btn ghost sm" data-tskip>' + TO.esc(TO.t('common.skip')) + '</button>' +
+      '<button type="button" class="btn primary sm" data-tnext>' + TO.esc(i === n - 1 ? TO.t('common.done') : TO.t('common.next')) + '</button></div></div>';
+    host.querySelector('[data-tskip]').onclick = function () { TO.tour.stop(); };
+    host.querySelector('[data-trestart]').onclick = function () { TO.tour.restart(); };
+    host.querySelector('[data-tprev]').onclick = function () { TO.tour.prev(); };
+    host.querySelector('[data-tnext]').onclick = function () { TO.tour.next(); };
+    var next = host.querySelector('[data-tnext]');
+    if (next && next.focus) next.focus();
+  }
+  function placeNow() {
+    if (!session) return;
+    var host = TO.$('#tour'); if (!host) return;
+    var s = session.steps[session.i];
+    var el = s.sel ? TO.$(s.sel) : null;
+    var have = !!rectOf(el);
+    if (have === !!session.miss) buildCard(have ? el : null);
+    var hole = host.querySelector('.hole'), pop = host.querySelector('.pop');
+    if (!pop) return;
+    var rect = rectOf(el) || { top: window.innerHeight / 2, left: window.innerWidth / 2, width: 0, height: 0, right: window.innerWidth / 2, bottom: window.innerHeight / 2 };
+    if (hole) {
+      hole.hidden = !have;
+      if (have) {
+        var pad = 6;
+        hole.style.top = (rect.top - pad) + 'px';
+        hole.style.left = (rect.left - pad) + 'px';
+        hole.style.width = Math.max(0, rect.width + pad * 2) + 'px';
+        hole.style.height = Math.max(0, rect.height + pad * 2) + 'px';
+      }
+    }
+    var positioned = placePop(rect, { w: pop.offsetWidth || Math.min(352, window.innerWidth - 32), h: pop.offsetHeight || 180 }, { w: window.innerWidth, h: window.innerHeight });
+    pop.style.top = positioned.top + 'px';
+    pop.style.left = positioned.left + 'px';
+    pop.dataset.place = positioned.where;
+    pop.style.visibility = '';
+    pointArrow(pop.querySelector('.arrow'), have ? positioned.where : 'over', positioned, rect);
+  }
+  function showStep(scroll) {
+    if (!session) return;
+    var s = session.steps[session.i];
+    if (session.follow) armLesson(s);
+    session.built = -1;
+    waitTarget(s.sel, session.follow ? 40 : 8, function (el) {
+      if (!session) return;
+      buildCard(el);
+      if (el && scroll && el.scrollIntoView) el.scrollIntoView({ block: 'nearest', behavior: TO.motionOff && TO.motionOff() ? 'auto' : 'smooth' });
+      if (window.requestAnimationFrame) requestAnimationFrame(placeNow);
+      else placeNow();
+    });
+  }
+  function stepsFor(id, opt) {
+    if (id === 'fleet') {
+      return { follow: true, steps: FLEET.filter(function (s) {
+        if (s.page === 'drivers') return TO.can('drivers.manage');
+        if (s.page === 'vehicles') return TO.can('vehicles.manage');
+        return true;
+      }) };
+    }
+    if (id === 'practice') {
+      var kind = opt.kind === 'drivers' ? 'drivers' : 'vehicles';
+      return { follow: false, steps: PRACTICE.filter(function (s) { return s.kind === kind; }) };
+    }
+    return { follow: false, steps: WELCOME.filter(function (s) { return TO.$(s.sel); }) };
+  }
   TO.tour = {
     active: false,
-    start: function () {
-      var steps = TOUR.filter(function (s) { return TO.$(s.sel); });
-      if (!steps.length) return;
-      var i = 0, host = TO.$('#tour');
+    catalog: { welcome: WELCOME, fleet: FLEET, practice: PRACTICE },
+    stepsFor: stepsFor,
+    place: placePop,
+    start: function (id, opt) {
+      var host = TO.$('#tour');
+      if (!host) return;
+      if (TO.tour.active) TO.tour.stop();
+      var picked = stepsFor(id, opt || {});
+      if (!picked.steps.length) return;
+      session = { id: id || 'welcome', steps: picked.steps, i: 0, follow: picked.follow, built: -1, miss: false };
       TO.tour.active = true;
       host.style.pointerEvents = 'auto';
-      function show() {
-        var s = steps[i], el = TO.$(s.sel);
-        el.scrollIntoView({ block: 'center' });
-        var r = el.getBoundingClientRect(), pad = 6;
-        var pw = Math.min(352, window.innerWidth - 32), ph = 210, gap = 16, vw = window.innerWidth, vh = window.innerHeight;
-        var top, left, tall = r.height > vh * 0.5;
-        var clampX = function (x) { return Math.min(Math.max(12, x), vw - pw - 12); };
-        var clampY = function (y) { return Math.min(Math.max(12, y), vh - ph - 12); };
-        if (!tall && r.bottom + gap + ph <= vh) { top = r.bottom + gap; left = clampX(r.left + r.width / 2 - pw / 2); }
-        else if (!tall && r.top - gap - ph >= 0) { top = r.top - gap - ph; left = clampX(r.left + r.width / 2 - pw / 2); }
-        else if (r.left - gap - pw >= 12) { left = r.left - gap - pw; top = clampY(r.top + 24); }
-        else if (r.right + gap + pw <= vw - 12) { left = r.right + gap; top = clampY(r.top + 24); }
-        else { left = clampX(12); top = clampY(vh - ph - 12); }
-        host.innerHTML = '<div class="hole" style="top:' + (r.top - pad) + 'px;left:' + (r.left - pad) + 'px;width:' + (r.width + pad * 2) + 'px;height:' + (r.height + pad * 2) + 'px"></div>' +
-          '<div class="pop" role="dialog" style="top:' + top + 'px;left:' + left + 'px"><h3>' + TO.esc(TO.t('tour.' + s.k + '.t')) + '</h3><p class="muted">' + TO.esc(TO.t('tour.' + s.k + '.b')) + '</p>' +
-          '<div class="row"><span class="dots">' + steps.map(function (_, n) { return '<i class="' + (n === i ? 'on' : '') + '"></i>'; }).join('') + '</span><span class="faint num">' + TO.t('tour.of', { n: i + 1, m: steps.length }) + '</span>' +
-          '<span class="grow"></span><button class="btn ghost sm" data-tskip>' + TO.esc(TO.t('common.skip')) + '</button><button class="btn primary sm" data-tnext>' + TO.esc(i === steps.length - 1 ? TO.t('common.done') : TO.t('common.next')) + '</button></div></div>';
-        host.querySelector('[data-tskip]').onclick = TO.tour.stop;
-        host.querySelector('[data-tnext]').onclick = function () { if (i === steps.length - 1) TO.tour.stop(); else { i++; show(); } };
-      }
-      show();
+      window.addEventListener('resize', onTourGeom);
+      document.addEventListener('scroll', onTourGeom, true);
+      showStep(true);
+    },
+    next: function () {
+      if (!session) return;
+      if (session.i >= session.steps.length - 1) { TO.tour.stop(); return; }
+      session.i++;
+      showStep(true);
+    },
+    prev: function () {
+      if (!session || session.i <= 0) return;
+      session.i--;
+      showStep(true);
+    },
+    restart: function () {
+      if (!session) return;
+      session.i = 0;
+      showStep(true);
     },
     stop: function () {
       var host = TO.$('#tour');
+      var lesson = TO.fleetLesson && TO.fleetLesson.active && TO.fleetLesson.active();
+      session = null;
       TO.tour.active = false;
+      window.removeEventListener('resize', onTourGeom);
+      document.removeEventListener('scroll', onTourGeom, true);
       if (host) { host.innerHTML = ''; host.style.pointerEvents = 'none'; }
+      if (lesson && TO.fleetLesson.clear()) { if (TO.rerender) TO.rerender(); }
     }
   };
 

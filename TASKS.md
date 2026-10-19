@@ -72,6 +72,7 @@ Add sub-tasks you discover under the task that caused them. Never delete a line;
 - [x] P3.8 Word: `docx_write.py`, `docx_read.py`, `word_io.py` (trip order form EN/AR blank or filled, read filled forms incl. the original paper form, monthly report), `/api/word/*`, `test_word_io`
 - [x] P3.9 Review step, alerts, plain error messages, month summary, Guide (12 Q&A + error list) in the Excel page; browser test `ExcelPageTest`
 - [x] P3.10 Fleet lists from one sheet (`server/fleet_import.py`, `/api/fleet/template|preview|commit`, buttons on Vehicles and Drivers). Match by plate or driver name, preview, one save. Bad rows skipped. Test map: `test_fleet_import`
+- [x] P3.10a Teach that import: spotlight tour on Vehicles and Drivers, training practice sheet, help and the `importFleet` guide in Arabic and English. Test map: `test_guides_frontend`, `test_fleet_import`, `test_guide_gate`
 - Test map: `test_xlsx` (reader/writer), `test_excel_io` (plan, alerts, API flow), `test_word_io` (times/dates/forms/API), `test_e2e_browser.ExcelPageTest`, `test_fleet_import` (vehicles and drivers)
 
 ## Phase 4 – Gateway + driver page

@@ -99,6 +99,10 @@
     { id: 'import', cat: 'office', icon: 'upload', perm: 'excel.import', steps: [
       S('tip'), S('go', 'excel'), S('click', 'excel', '[data-tab="import"]'), S('click', 'excel', '#dz'), S('check', 'excel', '#xl-body'), S('choose', 'excel', '[data-f]'),
       S('click', 'excel', '[data-commit]'), S('check'), S('warn')] },
+    { id: 'importFleet', cat: 'office', icon: 'upload', perm: ['vehicles.manage', 'drivers.manage'], steps: [
+      S('tip'), S('go', 'vehicles'), S('click', 'vehicles', '[data-template]'), S('tip'), S('tip'), S('tip'),
+      S('click', 'vehicles', '[data-import]'), S('click', 'vehicles', '#flt-dz'), S('check', 'vehicles', '[data-tour="flt-cols"]'),
+      S('tip'), S('tip'), S('tip'), S('tip'), S('go', 'drivers'), S('click', 'drivers', '[data-template]'), S('tip'), S('warn')] },
 
     /* ---------- safety and administration ---------- */
     { id: 'backup', cat: 'admin', icon: 'lock', perm: 'backups.manage', steps: [
@@ -128,7 +132,7 @@
   // every problem offers "Guide me" through the guide that fixes it (situation id -> guide id)
   var SIT_GUIDE = { driverNoShow: 'cancel', carBroke: 'newTrip', wrongDate: 'amend', duplicate: 'cancel', approvedByMistake: 'amend', cancelledByMistake: 'amend',
     linkNotOpening: 'sendLink', newPhone: 'sendLink', noSignal: 'board', whatsappNotOpening: 'sendLink', noCategories: 'categories', unknownPassenger: 'people',
-    newDriver: 'drivers', rentedCar: 'vehicles', importVehicles: 'vehicles', licenceExpired: 'drivers', redTrip: 'review', wrongKm: 'amend', kmBackwards: 'review', tripStillOpen: 'close',
+    newDriver: 'drivers', rentedCar: 'vehicles', importVehicles: 'importFleet', licenceExpired: 'drivers', redTrip: 'review', wrongKm: 'amend', kmBackwards: 'review', tripStillOpen: 'close',
     photoUnclear: 'review', monthToExcel: 'excelExport', excelRefused: 'import', monthReport: 'reports', paperForm: 'print', forgotPassword: 'staff',
     personLeft: 'staff', newEmployee: 'staff', tooManyRights: 'profiles', deletedByMistake: 'bin', pcBroken: 'backup', powerCut: 'pcs', networkDown: 'pcs',
     mailboxRed: 'mailbox', whoChanged: 'activity', wrongLanguage: 'appearance' };
@@ -139,12 +143,12 @@
   function L(guide, fact) { return { guide: guide, fact: fact || null }; }
   var PATHS = [
     { id: 'admin', admin: true, icon: 'shield', roles: ['administrator'], lessons: [
-      L('first', 'passwordChanged'), L('categories', 'categoriesAdded'), L('vehicles', 'vehiclesAdded'), L('drivers', 'driversAdded'), L('people', 'peopleAdded'),
+      L('first', 'passwordChanged'), L('categories', 'categoriesAdded'), L('vehicles', 'vehiclesAdded'), L('drivers', 'driversAdded'), L('importFleet'), L('people', 'peopleAdded'),
       L('places', 'placesAdded'), L('staff', 'staffAdded'), L('profiles'), L('mailbox', 'mailboxReady'), L('newTrip', 'myTripCreated'), L('backup', 'backupFolder'),
       L('activity')] },
     // full access = every daily right but no administrator right: the setup lists and the daily work, without people and the mailbox
     { id: 'manager', icon: 'star', roles: ['full-access'], lessons: [
-      L('first', 'passwordChanged'), L('categories', 'categoriesAdded'), L('vehicles', 'vehiclesAdded'), L('drivers', 'driversAdded'), L('people', 'peopleAdded'),
+      L('first', 'passwordChanged'), L('categories', 'categoriesAdded'), L('vehicles', 'vehiclesAdded'), L('drivers', 'driversAdded'), L('importFleet'), L('people', 'peopleAdded'),
       L('places', 'placesAdded'), L('newTrip', 'myTripCreated'), L('sendLink', 'myLinkMade'), L('review'), L('close', 'myTripClosed'), L('reports'), L('activity')] },
     { id: 'dispatcher', icon: 'route', roles: ['dispatcher'], lessons: [
       L('first', 'passwordChanged'), L('tour'), L('newTrip', 'myTripCreated'), L('sendLink', 'myLinkMade'), L('board'), L('find'), L('cancel', 'myCancel'),

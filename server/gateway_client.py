@@ -24,6 +24,7 @@ import uuid
 from datetime import timedelta
 
 import domain
+import errkeys
 from store import Conflict
 
 log = logging.getLogger('to.gateway')
@@ -31,7 +32,11 @@ RANK = {s: i for i, s in enumerate(['draft', 'sent', 'started', 'finished', 'clo
 
 
 class GatewayError(Exception):
-    """A problem with a message for the person at the office."""
+    """A problem with a message for the person at the office. `reason` is a short code, never a secret."""
+
+    def __init__(self, message, reason=''):
+        super().__init__(message)
+        self.reason = reason
 
 
 def b64url(b):
@@ -131,6 +136,7 @@ class Secrets:
         with self._lock:
             self.data.pop('tenantId', None)
             self.data.pop('auto', None)
+            self.data.pop('installId', None)
             self.data['officeSecret'] = pysecrets.token_urlsafe(32)
             self.data['linkSecret'] = pysecrets.token_urlsafe(32)
             self.save()
@@ -180,6 +186,8 @@ class Secrets:
         else:
             self.data.pop('tenantId', None)
             self.data.pop('auto', None)
+        # A mailbox that arrived from another PC must not retry this PC's own registration later.
+        self.data.pop('installId', None)
         self.save()
 
     def from_code(self, code):
@@ -199,6 +207,43 @@ class Secrets:
             self._apply(self._checked(blob))
             return True
 
+    def _ensure_install_id(self):
+        """Saved before the request, so a lost answer is retried as the same mailbox. Never logged."""
+        cur = str(self.data.get('installId') or '').strip().lower()
+        if _TENANT_RE.fullmatch(cur):
+            return cur
+        cur = pysecrets.token_hex(16)
+        self.data['installId'] = cur
+        self.save()
+        return cur
+
+    def _claim(self, url, install_id):
+        """Ask for this PC's mailbox. The answer is not logged: it contains the office secret."""
+        body = json.dumps({'installId': install_id}).encode()
+        req = urllib.request.Request(url + '/office/register', data=body, method='POST',
+                                     headers={'Content-Type': 'application/json', 'User-Agent': 'TripOrders-Office'})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r:
+                raw = r.read(8192)
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                raise GatewayError('The mailbox is busy. This PC will try again shortly.', 'busy')
+            if e.code == 503:
+                raise GatewayError('The mailbox is not ready for a new office yet.', 'notready')
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        except (urllib.error.URLError, TimeoutError, OSError) as e:
+            raise GatewayError('Cannot reach the mailbox. This PC will try again when the internet is back.', 'offline') from e
+        try:
+            data = json.loads(raw or b'{}')
+        except ValueError:
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        if not isinstance(data, dict):
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        tid, sec = str(data.get('tenantId') or ''), str(data.get('officeSecret') or '')
+        if not _TENANT_RE.fullmatch(tid) or len(sec) < 32:
+            raise GatewayError('The mailbox did not accept this PC. It will be tried again.', 'rejected')
+        return tid, sec
+
     def auto_register(self, url):
         """Claim a private mailbox. Does nothing when this PC already has an address or a secret. Returns True when it saved one."""
         url = self._check_url(url)
@@ -208,23 +253,9 @@ class Secrets:
             self.load()
             if not self.blank():
                 return False
+            install_id = self._ensure_install_id()
             link = pysecrets.token_urlsafe(32)
-            req = urllib.request.Request(url + '/office/register', data=b'{}', method='POST',
-                                         headers={'Content-Type': 'application/json', 'User-Agent': 'TripOrders-Office'})
-            try:
-                with urllib.request.urlopen(req, timeout=20) as r:
-                    data = json.loads(r.read() or b'{}')
-            except urllib.error.HTTPError as e:
-                if e.code == 429:
-                    raise GatewayError('The mailbox is busy. This PC will try again shortly.')
-                if e.code == 503:
-                    raise GatewayError('The mailbox is not ready for a new office yet.')
-                raise GatewayError('The mailbox did not accept this PC. It will be tried again.')
-            except (urllib.error.URLError, TimeoutError, OSError) as e:
-                raise GatewayError('Cannot reach the mailbox. This PC will try again when the internet is back.') from e
-            tid, sec = str(data.get('tenantId') or ''), str(data.get('officeSecret') or '')
-            if not _TENANT_RE.fullmatch(tid) or len(sec) < 32:
-                raise GatewayError('The mailbox did not accept this PC. It will be tried again.')
+            tid, sec = self._claim(url, install_id)
             self.load()
             if not self.blank():
                 return False   # another attempt saved one while we were waiting; the spare mailbox is unused and expires
@@ -232,6 +263,32 @@ class Secrets:
             self.data['tenantId'] = tid
             self.data['officeSecret'] = sec
             self.data['linkSecret'] = link
+            self.data['installId'] = install_id
+            self.data['auto'] = True
+            self.save()
+            return True
+
+    def reopen_auto(self, url):
+        """The mailbox row was deleted after a long silence. Same install id and same driver-link secret, new office secret.
+        A PC that received the mailbox from another PC has no install id and is left unchanged."""
+        url = self._check_url(url or self.url)
+        if not url:
+            return False
+        with self._lock:
+            self.load()
+            install_id = str(self.data.get('installId') or '').strip().lower()
+            if not _TENANT_RE.fullmatch(install_id):
+                return False
+            link = self.data.get('linkSecret') or pysecrets.token_urlsafe(32)
+            tid, sec = self._claim(url, install_id)
+            self.load()
+            if str(self.data.get('installId') or '').strip().lower() != install_id:
+                return False
+            self.data['url'] = url
+            self.data['tenantId'] = tid
+            self.data['officeSecret'] = sec
+            self.data['linkSecret'] = link
+            self.data['installId'] = install_id
             self.data['auto'] = True
             self.save()
             return True
@@ -260,15 +317,17 @@ class Client:
                     info = {}
                 if info.get('reason') == 'clock':   # the gateway says it is the clock, not the secret
                     mins = max(1, round(abs(float(info.get('skewSeconds') or 0)) / 60))
-                    raise GatewayError(f'The clock of this PC is off by {mins} minutes compared with the mailbox. Correct the date and time of this PC, then try again.')
+                    raise GatewayError(f'The clock of this PC is off by {mins} minutes compared with the mailbox. Correct the date and time of this PC, then try again.', 'clock')
                 if info.get('reason') == 'replay':
-                    raise GatewayError('The mailbox saw this request twice. Try again.')
-                raise GatewayError('The mailbox refused this PC. The secret does not match the one set on the gateway.')
+                    raise GatewayError('The mailbox saw this request twice. Try again.', 'replay')
+                if info.get('reason') == 'expired':
+                    raise GatewayError('This mailbox was removed after a long time with no use. The first PC connects again by itself. Another PC needs the new setup code from the first one.', 'expired')
+                raise GatewayError('The mailbox refused this PC. The secret does not match the one set on the gateway.', 'secret')
             if e.code == 503:
-                raise GatewayError('The mailbox is running but has no secret yet. Set OFFICE_SECRET on it (see the setup guide).')
-            raise GatewayError(f'The mailbox answered with an error ({e.code}).')
+                raise GatewayError('The mailbox is running but has no secret yet. Set OFFICE_SECRET on it (see the setup guide).', 'notready')
+            raise GatewayError(f'The mailbox answered with an error ({e.code}).', 'status')
         except (urllib.error.URLError, TimeoutError, OSError) as e:
-            raise GatewayError('Cannot reach the mailbox. Check the internet on this PC and the address.') from e
+            raise GatewayError('Cannot reach the mailbox. Check the internet on this PC and the address.', 'offline') from e
 
     def status(self):
         return self.call('GET', '/office/status')
@@ -394,7 +453,7 @@ class GatewaySync:
         self.pushed = {}            # token hash -> signature of the card the gateway has
         self.release = set()        # token hashes whose bound phone the office released
         self.removed = set()        # replaced link hashes the gateway has already been told to remove (the trips keep the list, so a restart repeats it harmlessly)
-        self.stat = {'lastOk': None, 'lastError': None, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
+        self.stat = {'lastOk': None, 'lastError': None, 'lastErrorKey': '', 'lastErrorVars': {}, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
         self._stop = False
         self._thread = None
 
@@ -453,11 +512,11 @@ class GatewaySync:
                             delay = 0
                             continue
                     except GatewayError as e:
-                        self.stat['lastError'] = str(e)
+                        self._note(e)
                         reg_delay = min(max(reg_delay * 2, 2), 600)
                     except Exception:
                         log.exception('mailbox register failed')
-                        self.stat['lastError'] = 'Cannot reach the mailbox. This PC will try again.'
+                        self._note(GatewayError('Cannot reach the mailbox. This PC will try again when the internet is back.', 'offline'))
                         reg_delay = min(max(reg_delay * 2, 2), 600)
                     delay = reg_delay
                 else:
@@ -467,12 +526,33 @@ class GatewaySync:
                 self.cycle()
                 delay = int(self.secrets.data.get('pollSeconds') or 60)
             except GatewayError as e:
-                self.stat['lastError'] = str(e)
+                self._note(e)
                 delay = min(max(delay * 2, 10), 600)
             except Exception as e:      # never let the thread die; the next round tries again
                 log.exception('gateway cycle failed')
                 self.stat['lastError'] = 'Unexpected problem: ' + str(e)[:120]
+                self.stat['lastErrorKey'] = ''
+                self.stat['lastErrorVars'] = {}
                 delay = min(max(delay * 2, 10), 600)
+
+    def _note(self, exc):
+        """Remember a mailbox problem in the screen's language. The text is the English source; the key is what the screen shows."""
+        self.stat['lastError'] = str(exc)
+        key, vars_ = errkeys.key_for(str(exc))
+        self.stat['lastErrorKey'] = key
+        self.stat['lastErrorVars'] = vars_
+
+    def _reopen(self):
+        if self._training():
+            return False
+        url = self.secrets.url or str(self.cfg.get('gateway_url') or '')
+        if not self.secrets.reopen_auto(url):
+            return False
+        self.pushed.clear()
+        self.removed.clear()
+        self.release.clear()
+        self.say('Mailbox connected again')
+        return True
 
     def status(self):
         return {'configured': self.secrets.configured, 'hasSecrets': self.secrets.has_secrets, 'url': self.secrets.url,
@@ -482,10 +562,20 @@ class GatewaySync:
     def cycle(self):
         with self.lock:
             self.stat['lastTry'] = _now()
-            self.push_cards()
-            self.pull()
+            try:
+                self.push_cards()
+                self.pull()
+            except GatewayError as e:
+                # The row was removed after 90 idle days. The PC that opened the mailbox connects again;
+                # a second PC has no install id, so it is left as it is and the message asks for the new code.
+                if e.reason != 'expired' or not self._reopen():
+                    raise
+                self.push_cards()
+                self.pull()
             self.stat['lastOk'] = _now()
             self.stat['lastError'] = None
+            self.stat['lastErrorKey'] = ''
+            self.stat['lastErrorVars'] = {}
 
     def push_cards(self):
         st = self.store.state()

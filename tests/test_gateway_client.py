@@ -562,7 +562,7 @@ class AutoConnectTest(unittest.TestCase):
             log += open(os.path.join(self.S.data_dir, 'logs', 'server.log'), encoding='utf-8').read()
         except OSError:
             pass
-        for secret in (gw['officeSecret'], gw['linkSecret'], gw['tenantId']):
+        for secret in (gw['officeSecret'], gw['linkSecret'], gw['tenantId'], gw['installId']):
             self.assertNotIn(secret, state)
             self.assertNotIn(secret, log)
         self.assertNotIn(gw['officeSecret'], json.dumps(self.c.get('/api/activity')))
@@ -607,7 +607,9 @@ class AutoOfflineThenOnlineTest(unittest.TestCase):
         try:
             time.sleep(1.2)
             self.assertFalse(S.client().get('/api/gateway')['configured'])
-            self.assertIn('internet', (S.client().get('/api/gateway').get('lastError') or '').lower())
+            offline = S.client().get('/api/gateway')
+            self.assertIn('internet', (offline.get('lastError') or '').lower())
+            self.assertEqual(offline.get('lastErrorKey'), 'err.mailboxLater')
             gw = GatewayProcess(port=port)
             wait_until(lambda: S.client().get('/api/gateway').get('configured'), 30, what='mailbox after the internet returns')
             self.assertTrue(_read_gw(S)['auto'])
@@ -685,6 +687,94 @@ class AutoLanShareTest(unittest.TestCase):
             other.cleanup()
             main.cleanup()
             gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoReplayTest(unittest.TestCase):
+    """A lost registration answer must not open a second mailbox, and the install id never lands in the database."""
+
+    def test_retry_keeps_the_same_mailbox_and_a_received_pc_does_not_open_another(self):
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-replay-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        try:
+            with tempfile.TemporaryDirectory() as d:
+                s = G.Secrets(os.path.join(d, 'gw.json'))
+                self.assertTrue(s.auto_register(gw.url))
+                tid, sec, iid = s.data['tenantId'], s.data['officeSecret'], s.data['installId']
+                s.data = {'installId': iid}
+                s.save()
+                self.assertTrue(s.blank())
+                self.assertTrue(s.auto_register(gw.url))
+                self.assertEqual(s.data['tenantId'], tid)
+                self.assertEqual(s.data['officeSecret'], sec)
+                self.assertEqual(_tenant_count(db), 1)
+                raw = open(db, 'rb').read()
+                self.assertNotIn(sec.encode(), raw)
+                self.assertNotIn(iid.encode(), raw)
+                self.assertNotIn(gw.master.encode(), raw)
+                kept = s.data['officeSecret']
+                s.data.pop('installId')
+                s.save()
+                self.assertFalse(s.reopen_auto(gw.url))
+                self.assertEqual(s.data['officeSecret'], kept)
+                self.assertNotIn('installId', s.data)
+        finally:
+            gw.stop()
+
+
+@unittest.skipUnless(node_ok(), 'node with node:sqlite is needed')
+class AutoReopenTest(unittest.TestCase):
+    """After the idle cleanup removes the mailbox, the PC that opened it connects again and the driver link still works."""
+
+    def test_a_removed_mailbox_reconnects_without_changing_the_link(self):
+        db = os.path.join(tempfile.mkdtemp(prefix='gw-reopen-'), 'box.sqlite')
+        gw = GatewayProcess(db=db)
+        S = Server('reopen', extra_cfg={'sign_in': False, 'gateway_url': gw.url}).start()
+        try:
+            c = S.client()
+            wait_until(lambda: c.get('/api/gateway').get('configured'), 30, what='mailbox before the cleanup')
+            c.post('/api/commit', {'label': 'lists', 'ops': [
+                put('tripCategories', 'cat1', name='Manager car', exportSheet='All Car'),
+                put('vehicles', 'v1', plate='ط و ي 6829', plateKey='طوي6829', active=True, type='Sedan'),
+                put('drivers', 'd1', name='Driver One', active=True, mobile='01012345678'),
+                put('people', 'p1', name='Sara Adel', isRequester=True, isPassenger=True)]})
+            t = c.post('/api/trips/new', {'categoryId': 'cat1', 'vehicleId': 'v1', 'driverId': 'd1', 'requesterId': 'p1', 'destination': 'Factory'})
+            link = c.post('/api/trips/link', {'id': t['id'], 'sent': True})
+            token = link['url'].rsplit('/t/', 1)[1]
+            c.post('/api/gateway/pull')
+            self.assertEqual(gw.driver('GET', f'/api/card/{token}')[0], 200)
+            saved = _read_gw(S)
+            self._sql(db, 'DELETE FROM tenants')
+            res = c.post('/api/gateway/pull')
+            self.assertIsNone(res.get('lastError'))
+            now = _read_gw(S)
+            self.assertEqual(now['linkSecret'], saved['linkSecret'])
+            self.assertEqual(now['installId'], saved['installId'])
+            self.assertNotEqual(now['tenantId'], saved['tenantId'])
+            self.assertNotEqual(now['officeSecret'], saved['officeSecret'])
+            self.assertEqual(_tenant_count(db), 1)
+            self.assertEqual(gw.driver('GET', f'/api/card/{token}')[0], 200)
+            raw = open(db, 'rb').read()
+            self.assertNotIn(now['officeSecret'].encode(), raw)
+            self.assertNotIn(now['installId'].encode(), raw)
+            self.assertNotIn(gw.master.encode(), raw)
+        finally:
+            S.cleanup()
+            gw.stop()
+
+    @staticmethod
+    def _sql(db, sql):
+        script = ("import {DatabaseSync} from 'node:sqlite';"
+                  "const db = new DatabaseSync(process.argv[1]);"
+                  "db.exec(process.argv[2]);")
+        last = ''
+        for _ in range(20):
+            r = subprocess.run(['node', '--input-type=module', '-e', script, db, sql], capture_output=True, text=True, timeout=15)
+            if r.returncode == 0:
+                return
+            last = (r.stderr or r.stdout)[-300:]
+            time.sleep(0.15)
+        raise AssertionError('could not update the mailbox database: ' + last)
 
 
 if __name__ == '__main__':

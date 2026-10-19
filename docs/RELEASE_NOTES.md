@@ -4,9 +4,10 @@
 # Trip Orders 1.1.7
 
 - **Mailbox connects by itself.** A new install reaches the internet mailbox the first time it runs. Nothing to type. Each install gets its own mailbox, so one office cannot read another office's driver messages or photos.
-- **Other office PCs** of the same company receive that mailbox over the office network after the PCs are paired. If a PC does not, the setup code on the Mailbox page still works.
+- **Another office PC** uses the setup code from the first PC, even if it already connected by itself. Pairing on the office network shares the mailbox only when that PC has not connected yet.
 - **An office that already set up the mailbox** keeps its address and its secrets. Links already sent to drivers keep working.
 - **Training mode** does not connect and does not send the sample trips.
+- **If the mailbox cannot connect**, the screen says why in Arabic and English (no internet, busy, not ready, or removed after a long time unused) and the help says what to do.
 
 # Next (not released yet)
 

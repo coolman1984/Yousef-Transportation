@@ -4,6 +4,7 @@
 ## Current work queue — first sale
 
 - [x] Mailbox auto-connect, one mailbox per install (2026-10-19): fresh install registers itself; legacy `OFFICE_SECRET` and an existing `gateway.json` stay; paired PCs share the mailbox over LAN sync; training does not register. Test map: `gateway/test/gateway.test.js` (register, rate limit, isolation, legacy, caps, migration), `tests/test_gateway_client.py` (`AutoConnectTest`, `TenantClientTest`). Not deployed, not released.
+- [x] Second review of that mailbox (2026-10-19): per-mailbox revocation, idempotent registration, global registration ceiling, fail-closed `MASTER_KEY`, old-database `schema.sql`, reconnect after the idle cleanup, Arabic setup-code wording. Test map: `gateway/test/gateway.test.js`, `tests/test_gateway_client.py` (`AutoReplayTest`, `AutoReopenTest`). Not deployed, not released.
 
 
 

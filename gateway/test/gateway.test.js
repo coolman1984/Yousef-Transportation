@@ -450,13 +450,217 @@ test('each mailbox has a card cap and a daily photo cap, and an unused mailbox i
 test('an old mailbox without a tenant column is migrated and stays on the legacy secret', async () => {
   const env = newEnv();
   for (const index of ['events_tenant', 'photos_tenant', 'cards_tenant']) await env.DB.prepare('DROP INDEX IF EXISTS ' + index).run();
-  for (const table of ['cards', 'events', 'photos', 'revoked']) {
+  for (const table of ['cards', 'events', 'photos']) {
     await env.DB.prepare('ALTER TABLE ' + table + ' DROP COLUMN tenant').run();
   }
+  // tenant is part of the revocation key, so the old table is recreated rather than altered in place
+  await env.DB.prepare('DROP TABLE revoked').run();
+  await env.DB.prepare('CREATE TABLE revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)').run();
   await putCard(env);
   await postEvent(env, ev());
   const inbox = await (await office(env, 'GET', '/office/inbox')).json();
   assert.equal(inbox.events[0].type, 'start');
   assert.equal((await env.DB.prepare("SELECT tenant FROM cards").first()).tenant, 'legacy');
   assert.equal((await env.DB.prepare("SELECT tenant FROM events").first()).tenant, 'legacy');
+  const pk = (await env.DB.prepare('PRAGMA table_info(revoked)').all()).results.filter((c) => c.pk).map((c) => c.name).sort();
+  assert.deepEqual(pk, ['tenant', 'token_hash']);
+});
+
+test('adding the tenant column from two requests at once keeps the old rows', async () => {
+  const env = newEnv();
+  for (const table of ['cards', 'events', 'photos']) await env.DB.prepare('ALTER TABLE ' + table + ' DROP COLUMN tenant').run();
+  const hash = 'ab'.repeat(32);
+  await env.DB.prepare('INSERT INTO cards(token_hash, trip_id, body, cancelled, updated_at) VALUES(?,?,?,?,?)').bind(hash, 't-old', '{}', 0, 1).run();
+  const [a, b] = await Promise.all([office(env, 'GET', '/office/status'), office(env, 'GET', '/office/status')]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM cards').first()).n, 1);
+  assert.equal((await env.DB.prepare('SELECT tenant FROM cards').first()).tenant, 'legacy');
+});
+
+test('schema.sql can be applied again on an old database and does not drop rows', async () => {
+  const { DatabaseSync } = await import('node:sqlite');
+  const { readFileSync } = await import('node:fs');
+  const { dirname, join } = await import('node:path');
+  const { fileURLToPath } = await import('node:url');
+  const schema = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', 'schema.sql'), 'utf8');
+  const db = new DatabaseSync(':memory:');
+  db.exec(`
+    CREATE TABLE cards (token_hash TEXT PRIMARY KEY, trip_id TEXT NOT NULL, body TEXT NOT NULL, cancelled INTEGER NOT NULL DEFAULT 0, bound_device TEXT, expires_at INTEGER, updated_at INTEGER NOT NULL);
+    CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL, trip_id TEXT NOT NULL, type TEXT NOT NULL, body TEXT NOT NULL, device_id TEXT NOT NULL, phone_at TEXT, recv_at INTEGER NOT NULL, second INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE photos (id INTEGER PRIMARY KEY AUTOINCREMENT, uuid TEXT NOT NULL UNIQUE, token_hash TEXT NOT NULL, trip_id TEXT NOT NULL, kind TEXT NOT NULL, fallback INTEGER NOT NULL DEFAULT 0, event_uuid TEXT, sha256 TEXT NOT NULL, size INTEGER NOT NULL, data BLOB NOT NULL, recv_at INTEGER NOT NULL);
+    CREATE TABLE revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER NOT NULL DEFAULT 0);
+    INSERT INTO cards(token_hash, trip_id, body, updated_at) VALUES('aa', 'trip-old', '{}', 1);
+    INSERT INTO revoked(token_hash, at) VALUES('aa', 5);
+  `);
+  db.exec(schema);
+  db.exec(schema);
+  assert.equal(db.prepare('SELECT trip_id FROM cards').get().trip_id, 'trip-old');
+  assert.equal(db.prepare('SELECT at FROM revoked').get().at, 5);
+  db.close();
+});
+
+test('a missing or short master key refuses registration and does not open a mailbox', async () => {
+  const env = newEnv();
+  env.MASTER_KEY = '';
+  assert.equal((await call(env, 'POST', '/office/register', { body: '{}' })).status, 503);
+  env.MASTER_KEY = 'too-short';
+  assert.equal((await call(env, 'POST', '/office/register', { body: '{}' })).status, 503);
+  const tenant = 'ab'.repeat(16);
+  const forged = await office(env, 'GET', '/office/status', undefined, { tenant, master: '', secret: 'not-the-key' });
+  assert.equal(forged.status, 503);
+  assert.equal((await office(env, 'GET', '/office/status')).status, 200, 'the old office secret still works');
+  const closed = await call(env, 'POST', '/office/register', { body: '{}' });
+  assert.equal(closed.status, 503);
+  assert.equal((await closed.text()).includes('too-short'), false);
+  env.MASTER_KEY = MASTER;
+  const echoed = await call(env, 'POST', '/office/register', { body: JSON.stringify({ installId: 'nope', echo: 'SECRETTEXT' }), headers: { 'CF-Connecting-IP': '198.51.100.61' } });
+  const text = await echoed.text();
+  assert.equal(echoed.status, 400);
+  assert.equal(text.includes('SECRETTEXT'), false);
+  assert.equal(text.includes('nope'), false);
+});
+
+test('the same install is one mailbox, and new mailboxes stop at the global ceiling', async () => {
+  const env = newEnv();
+  const install = 'cd'.repeat(16);
+  const body = JSON.stringify({ installId: install });
+  const first = await (await call(env, 'POST', '/office/register', { body, headers: { 'CF-Connecting-IP': '198.51.100.70' } })).json();
+  const again = await (await call(env, 'POST', '/office/register', { body, headers: { 'CF-Connecting-IP': '198.51.100.70' } })).json();
+  assert.equal(again.tenantId, first.tenantId);
+  assert.equal(again.officeSecret, first.officeSecret);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM tenants').first()).n, 1);
+  const dump = JSON.stringify((await env.DB.prepare('SELECT * FROM tenants').all()).results);
+  assert.equal(dump.includes(install), false, 'the install id itself is not stored');
+  assert.equal(dump.includes(first.officeSecret), false);
+  await env.DB.prepare('UPDATE rate SET count = 200 WHERE key = ?').bind('reg:gd').run();
+  const blocked = await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': '198.51.100.71' } });
+  assert.equal(blocked.status, 429);
+  const replay = await call(env, 'POST', '/office/register', { body, headers: { 'CF-Connecting-IP': '198.51.100.72' } });
+  assert.equal(replay.status, 200, 'a PC that already registered can still recover when the global ceiling is full');
+  assert.equal((await replay.json()).tenantId, first.tenantId);
+  await env.DB.prepare('UPDATE rate SET count = 5 WHERE key = ?').bind('reg:h:198.51.100.70').run();
+  const home = await call(env, 'POST', '/office/register', { body, headers: { 'CF-Connecting-IP': '198.51.100.70' } });
+  assert.equal(home.status, 200, 'a lost answer can be retried after this address used its hourly new-mailbox budget');
+  assert.equal((await home.json()).tenantId, first.tenantId);
+  assert.equal((await call(env, 'POST', '/office/register', { body: '{}', headers: { 'CF-Connecting-IP': '198.51.100.70' } })).status, 429);
+});
+
+test('one office cannot cancel or rewrite another office link, and a removed link stays dead', async () => {
+  const env = newEnv();
+  const a = await register(env, '198.51.100.80');
+  const b = await register(env, '198.51.100.81');
+  const token = 'Tk_poisonpoisonpoisonpo';
+  const hash = await sha256Hex(token);
+  const as = (who) => ({ tenant: who.tenantId, secret: who.officeSecret });
+  const card = (who, body) => office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: hash, tripId: 'tr-p', body, expiresAt: Math.floor(Date.now() / 1000) + 86400 }] }, as(who));
+  assert.equal((await card(a, { no: 'A' })).status, 200);
+  assert.equal((await card(b, { no: 'B' })).status, 200);
+  assert.equal(JSON.parse((await env.DB.prepare('SELECT body FROM cards WHERE token_hash = ?').bind(hash).first()).body).no, 'A');
+  assert.equal((await office(env, 'PUT', '/office/cards', { remove: [hash] }, as(b))).status, 200);
+  assert.equal((await call(env, 'GET', '/api/card/' + token)).status, 200, 'B cannot kill A link');
+  assert.equal((await office(env, 'PUT', '/office/cards', { remove: [hash] }, as(a))).status, 200);
+  assert.equal((await call(env, 'GET', '/api/card/' + token)).status, 404);
+  assert.equal((await card(a, { no: 'A2' })).status, 200);
+  assert.equal((await call(env, 'GET', '/api/card/' + token)).status, 404, 'A tombstone still blocks A');
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM revoked WHERE token_hash = ?').bind(hash).first()).n, 2);
+});
+
+test('a deleted mailbox can be claimed again by its office, and a live one cannot', async () => {
+  const env = newEnv();
+  const a = await register(env, '198.51.100.90');
+  const token = 'Tk_orphanorphanorphano';
+  const hash = await sha256Hex(token);
+  const as = { tenant: a.tenantId, secret: a.officeSecret };
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: hash, tripId: 'tr-o', body: { no: 'old' }, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, as)).status, 200);
+  await env.DB.prepare('DELETE FROM tenants WHERE id = ?').bind(a.tenantId).run();
+  assert.equal((await office(env, 'GET', '/office/status', undefined, as)).status, 401);
+  assert.equal((await (await office(env, 'GET', '/office/status', undefined, as)).json()).reason, 'expired');
+  const fresh = await register(env, '198.51.100.91');
+  const fs = { tenant: fresh.tenantId, secret: fresh.officeSecret };
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: hash, tripId: 'tr-o', body: { no: 'new' }, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, fs)).status, 200);
+  assert.equal((await env.DB.prepare('SELECT tenant FROM cards').first()).tenant, fresh.tenantId);
+  assert.equal((await call(env, 'GET', '/api/card/' + token)).status, 200);
+  const other = await register(env, '198.51.100.92');
+  const live = 'Tk_liveliveliveliveli1';
+  const liveHash = await sha256Hex(live);
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: liveHash, tripId: 'tr-l', body: { no: 'keep' }, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, fs)).status, 200);
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: liveHash, tripId: 'tr-l', body: { no: 'stolen' }, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, { tenant: other.tenantId, secret: other.officeSecret })).status, 200);
+  assert.equal(JSON.parse((await env.DB.prepare('SELECT body FROM cards WHERE token_hash = ?').bind(liveHash).first()).body).no, 'keep');
+});
+
+test('a photo id that belongs to another mailbox is not stored and does not spend the quota', async () => {
+  const env = newEnv();
+  const a = await register(env, '198.51.100.93');
+  const b = await register(env, '198.51.100.94');
+  const tokenA = 'Tk_photoAphotoAphotoAaa';
+  const tokenB = 'Tk_photoBphotoBphotoBbb';
+  for (const [who, token] of [[a, tokenA], [b, tokenB]]) {
+    const hash = await sha256Hex(token);
+    assert.equal((await office(env, 'PUT', '/office/cards', { cards: [{ tokenHash: hash, tripId: 'tr-' + token.slice(3, 4), body: {}, expiresAt: Math.floor(Date.now() / 1000) + 3600 }] }, { tenant: who.tenantId, secret: who.officeSecret })).status, 200);
+  }
+  const id = randomUUID();
+  const bytes = jpeg();
+  assert.equal((await putPhoto(env, id, bytes, {}, tokenA)).status, 200);
+  const stolen = await putPhoto(env, id, bytes, {}, tokenB);
+  assert.equal(stolen.status, 503);
+  assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM photos').first()).n, 1);
+  assert.equal((await env.DB.prepare('SELECT COALESCE(SUM(bytes), 0) n FROM usage').first()).n, bytes.length);
+  assert.equal((await office(env, 'GET', '/office/photo/' + id, undefined, { tenant: a.tenantId, secret: a.officeSecret })).status, 200);
+  assert.equal((await office(env, 'GET', '/office/photo/' + id, undefined, { tenant: b.tenantId, secret: b.officeSecret })).status, 404);
+});
+
+test('a revocation copy left beside an empty table is put back, and two rebuilds keep the row', async () => {
+  const env = newEnv();
+  await env.DB.prepare('DROP TABLE revoked').run();
+  await env.DB.prepare(`CREATE TABLE revoked_scope (
+    token_hash TEXT NOT NULL, at INTEGER NOT NULL, until INTEGER NOT NULL DEFAULT 0,
+    tenant TEXT NOT NULL DEFAULT 'legacy', PRIMARY KEY (token_hash, tenant))`).run();
+  await env.DB.prepare("INSERT INTO revoked_scope(token_hash, at, until, tenant) VALUES('aa', 5, 9, 'legacy')").run();
+  await env.DB.prepare(`CREATE TABLE revoked (
+    token_hash TEXT NOT NULL, at INTEGER NOT NULL, until INTEGER NOT NULL DEFAULT 0,
+    tenant TEXT NOT NULL DEFAULT 'legacy', PRIMARY KEY (token_hash, tenant))`).run();
+  assert.equal((await office(env, 'PUT', '/office/cards', { cards: [] })).status, 200);
+  const row = await env.DB.prepare("SELECT at, until, tenant FROM revoked WHERE token_hash = 'aa'").first();
+  assert.equal(row.at, 5);
+  assert.equal(row.until, 9);
+  assert.equal(row.tenant, 'legacy');
+  assert.equal(await env.DB.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'revoked_scope'").first(), null);
+
+  const again = newEnv();
+  await again.DB.prepare('DROP TABLE revoked').run();
+  await again.DB.prepare('CREATE TABLE revoked (token_hash TEXT PRIMARY KEY, at INTEGER NOT NULL, until INTEGER NOT NULL DEFAULT 0)').run();
+  await again.DB.prepare("INSERT INTO revoked(token_hash, at, until) VALUES('bb', 7, 11)").run();
+  const [a, b] = await Promise.all([office(again, 'PUT', '/office/cards', { cards: [] }), office(again, 'PUT', '/office/cards', { cards: [] })]);
+  assert.equal(a.status, 200);
+  assert.equal(b.status, 200);
+  const kept = await again.DB.prepare("SELECT at, until, tenant FROM revoked WHERE token_hash = 'bb'").first();
+  assert.equal(kept.at, 7);
+  assert.equal(kept.until, 11);
+  assert.equal(kept.tenant, 'legacy');
+  assert.equal((await again.DB.prepare('SELECT COUNT(*) n FROM revoked').first()).n, 1);
+});
+
+test('stopping the idle cleanup between batches does not leave a card without its mailbox', async () => {
+  const env = newEnv();
+  const old = Math.floor(Date.now() / 1000) - 91 * 86400;
+  for (let i = 0; i < 8; i++) {
+    const id = (i + 1).toString(16).padStart(32, '0');
+    await env.DB.prepare('INSERT INTO tenants(id, created_at, last_seen) VALUES(?, ?, ?)').bind(id, old, old).run();
+    await env.DB.prepare('INSERT INTO cards(token_hash, trip_id, body, cancelled, updated_at, tenant) VALUES(?, ?, ?, 0, 1, ?)').bind(id, 't' + i, '{}', id).run();
+  }
+  let calls = 0;
+  const orig = env.DB.batch.bind(env.DB);
+  env.DB.batch = async (stmts) => {
+    calls += 1;
+    if (calls > 1) throw new Error('stop');
+    return orig(stmts);
+  };
+  await assert.rejects(() => worker.scheduled({}, env), /stop/);
+  const orphans = await env.DB.prepare("SELECT COUNT(*) n FROM cards c WHERE c.tenant != 'legacy' AND NOT EXISTS (SELECT 1 FROM tenants t WHERE t.id = c.tenant)").first();
+  assert.equal(orphans.n, 0);
+  const left = await env.DB.prepare('SELECT COUNT(*) n FROM tenants').first();
+  assert.ok(left.n > 0 && left.n < 8, 'a later mailbox is still whole');
+  const cards = await env.DB.prepare('SELECT COUNT(*) n FROM cards').first();
+  assert.equal(cards.n, left.n);
 });

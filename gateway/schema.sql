@@ -39,15 +39,17 @@ CREATE TABLE IF NOT EXISTS photos (
   tenant     TEXT NOT NULL DEFAULT 'legacy'
 );
 CREATE TABLE IF NOT EXISTS revoked (        -- links the office replaced: a removed card cannot be published again by a PC with old data
-  token_hash TEXT PRIMARY KEY,
+  token_hash TEXT NOT NULL,                 -- one tombstone per mailbox; the hash alone is not unique
   at         INTEGER NOT NULL,
   until      INTEGER NOT NULL DEFAULT 0,      -- remembered until the link would have expired (+7 days); 90 days if its card is unknown
-  tenant     TEXT NOT NULL DEFAULT 'legacy'
+  tenant     TEXT NOT NULL DEFAULT 'legacy',
+  PRIMARY KEY (token_hash, tenant)
 );
 CREATE TABLE IF NOT EXISTS tenants (         -- one row per auto-registered office; the secret is NOT stored (it is derived from MASTER_KEY)
-  id         TEXT PRIMARY KEY,               -- 128-bit hex
-  created_at INTEGER NOT NULL,
-  last_seen  INTEGER NOT NULL
+  id           TEXT PRIMARY KEY,             -- 128-bit hex
+  created_at   INTEGER NOT NULL,
+  last_seen    INTEGER NOT NULL,
+  install_hash TEXT                          -- sha256 of the PC's install id; the id itself is not stored
 );
 CREATE TABLE IF NOT EXISTS usage (           -- photo bytes accepted per mailbox per day (abuse limit)
   tenant TEXT NOT NULL,
@@ -63,6 +65,5 @@ CREATE TABLE IF NOT EXISTS nonces (nonce TEXT PRIMARY KEY, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS rate (key TEXT NOT NULL, window INTEGER NOT NULL, count INTEGER NOT NULL, PRIMARY KEY (key, window));
 CREATE INDEX IF NOT EXISTS events_recv ON events (recv_at);
 CREATE INDEX IF NOT EXISTS photos_recv ON photos (recv_at);
-CREATE INDEX IF NOT EXISTS events_tenant ON events (tenant, id);
-CREATE INDEX IF NOT EXISTS photos_tenant ON photos (tenant, id);
-CREATE INDEX IF NOT EXISTS cards_tenant ON cards (tenant);
+-- Tenant indexes are created by the worker after it adds the column. Putting them here makes schema.sql
+-- fail on a database that does not have the column yet, and deploy stops before the worker can migrate.

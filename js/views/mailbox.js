@@ -10,9 +10,10 @@
   function statusCard() {
     var badge = !st.configured ? '<span class="badge">' + TO.esc(TO.t('gw.st.off')) + '</span>' : st.lastError ? '<span class="badge bad">' + TO.esc(TO.t('gw.st.bad')) + '</span>' : st.lastOk ? '<span class="badge ok">' + TO.esc(TO.t('gw.st.ok')) + '</span>' : '<span class="badge info">' + TO.esc(TO.t('gw.st.wait')) + '</span>';
     return '<section class="card"><header><h3>' + TO.icon('cloud') + ' ' + TO.esc(TO.t('gw.status')) + '</h3>' + badge + '</header>' +
-      (st.configured ? '<dl class="kv"><dt>' + TO.esc(TO.t('gw.lastok')) + '</dt><dd>' + when(st.lastOk) + '</dd><dt>' + TO.esc(TO.t('gw.waiting')) + '</dt><dd class="num">' + TO.fmt.num(st.waiting || 0) + '</dd><dt>' + TO.esc(TO.t('gw.applied')) + '</dt><dd class="num">' + TO.fmt.num(st.applied || 0) + '</dd></dl>' : '<p class="muted">' + TO.esc(TO.t('gw.off.body')) + '</p>') +
+      (st.auto ? '<div class="tip" data-gw-auto style="margin-bottom:1rem">' + TO.icon('check') + '<span>' + TO.esc(TO.t('gw.auto')) + '</span></div>' : '<p class="muted" data-gw-auto>' + TO.esc(TO.t(st.configured ? 'gw.manual' : 'gw.off.body')) + '</p>') +
+      (st.configured ? '<dl class="kv"><dt>' + TO.esc(TO.t('gw.lastok')) + '</dt><dd>' + when(st.lastOk) + '</dd><dt>' + TO.esc(TO.t('gw.waiting')) + '</dt><dd class="num">' + TO.fmt.num(st.waiting || 0) + '</dd><dt>' + TO.esc(TO.t('gw.applied')) + '</dt><dd class="num">' + TO.fmt.num(st.applied || 0) + '</dd></dl>' : '') +
       (st.late ? '<div class="tip warn" role="alert" data-gw-late style="margin-top:1rem">' + TO.icon('alert') + '<span>' + TO.esc(TO.t('gw.late', { d: Math.floor((st.oldestSeconds || 0) / 86400) })) + '</span></div>' : '') +
-      (st.lastError ? '<div class="tip bad" role="alert" style="margin-top:1rem">' + TO.icon('alert') + '<span>' + TO.esc(st.lastError) + '</span></div>' : '') +
+      (st.lastError ? '<div class="tip bad" role="alert" style="margin-top:1rem">' + TO.icon('alert') + '<span>' + TO.esc((TO.errMessage && TO.errMessage({ key: st.lastErrorKey, vars: st.lastErrorVars })) || st.lastError) + '</span></div>' : '') +
       (testing ? '<div class="tip ' + (testing.ok ? '' : 'bad') + '" style="margin-top:1rem">' + TO.icon(testing.ok ? 'check' : 'alert') + '<span>' + (testing.ok ? TO.esc(TO.t('gw.test.ok')) + ' · ' + TO.esc(TO.t('gw.test.counts', { e: testing.events, p: testing.photos, c: testing.cards })) : TO.esc(testing.error)) + '</span></div>' : '') +
       '<div class="row wrap" style="gap:.6rem;margin-top:1rem"><button class="btn" data-gw="test"' + (st.configured ? '' : ' disabled') + '>' + TO.icon('refresh', 'sm') + TO.esc(TO.t('gw.test')) + '</button>' +
       '<button class="btn" data-gw="pull"' + (st.configured ? '' : ' disabled') + '>' + TO.icon('download', 'sm') + TO.esc(TO.t('gw.pull')) + '</button></div></section>';
@@ -57,17 +58,30 @@
           return load().then(function () { return secrets && st.hasSecrets ? TO.get('/api/gateway/secrets').then(function (s) { secrets = s; }, function () { secrets = null; }) : (secrets = null); })
             .then(function () { TO.data.load(); TO.rerender(); });
         };
-        if (a === 'save') U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value }), 'common.saved', b).then(done);
+        // An empty box means "I did not type an address", not "delete the one just saved". A box that was showing an
+        // address and is now empty is a real clear. The page may have opened a moment before the first connection finished.
+        function typedUrl() { return String((root.querySelector('#gw-url') || {}).value || '').trim(); }
+        function chosenUrl() {
+          var typed = typedUrl();
+          if (typed || st.url) return Promise.resolve(typed);
+          return TO.get('/api/gateway').then(function (s) { return (s && s.url) || ''; });
+        }
+        function saveUrl() {
+          return chosenUrl().then(function (url) { return TO.post('/api/gateway/save', { url: url, pollSeconds: (root.querySelector('#gw-poll') || {}).value }); });
+        }
+        if (a === 'save') U.run(saveUrl(), 'common.saved', b).then(done);
         else if (a === 'generate') {
           /* replacing the secrets stops every driver link until the gateway gets the new office secret: ask first */
-          var replace = !!st.hasSecrets;
-          (replace ? U.confirm({ title: TO.t('gw.remake.title'), body: TO.t('gw.remake.body'), ok: TO.t('gw.secret.remake'), danger: true }) : Promise.resolve(true)).then(function (yes) {
-            if (!yes) return;
-            return U.run(TO.post('/api/gateway/save', { url: (root.querySelector('#gw-url') || {}).value, pollSeconds: (root.querySelector('#gw-poll') || {}).value })
-              .then(function () { return TO.post('/api/gateway/generate', { replace: replace }); })
-              .then(function () { return TO.get('/api/gateway/secrets'); }), 'gw.made', b)
-              .then(function (s) { secrets = s; return done(); }, function () { /* U.run already showed the error */ });
-          });
+          TO.get('/api/gateway').then(function (fresh) {
+            var replace = !!(st.hasSecrets || (fresh && fresh.hasSecrets));
+            return (replace ? U.confirm({ title: TO.t('gw.remake.title'), body: TO.t('gw.remake.body'), ok: TO.t('gw.secret.remake'), danger: true }) : Promise.resolve(true)).then(function (yes) {
+              if (!yes) return;
+              return U.run(saveUrl()
+                .then(function () { return TO.post('/api/gateway/generate', { replace: replace }); })
+                .then(function () { return TO.get('/api/gateway/secrets'); }), 'gw.made', b)
+                .then(function (s) { secrets = s; return done(); }, function () { /* U.run already showed the error */ });
+            });
+          }, function (er) { TO.toast(U.errorText(er), 'bad'); });
         }
         else if (a === 'show') { if (secrets) { secrets = null; TO.rerender(); } else TO.get('/api/gateway/secrets').then(function (s) { secrets = s; TO.rerender(); }, function (er) { TO.toast(U.errorText(er), 'bad'); }); }
         else if (a === 'copy') {

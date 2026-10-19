@@ -46,7 +46,17 @@
 الـ Worker ← **Settings ← Triggers ← Cron Triggers ← Add** ← `17 3 * * *`.
 ده بيمسح الرسائل القديمة (أكتر من 30 يوم) لوحده.
 
-## الخطوة 7 — وصّل البرنامج بالبوابة
+## من الإصدار 1.1.7 — البرنامج بيتصل لوحده
+
+تثبيت جديد بيوصل للصندوق أول ما يشتغل، من غير عنوان ومن غير أسرار تكتبها. كل مكتب ليه صندوق لوحده. المكتب اللي اتظبط قبل كده (عنوان أو أسرار موجودة) **ما يتغيرش**.
+
+جهاز مكتب تاني: انسخ كود الإعداد من الجهاز الأول والصقه هناك، حتى لو الجهاز التاني اتصل لوحده. الربط على شبكة المكتب بينقل الصندوق بس لو الجهاز التاني لسه ما اتصلش (الخطوة 8).
+
+وضع التدريب ما بيتصلش وما يبعتش مشاوير التجربة.
+
+نشر البوابة نفسها (مرة واحدة، عند المسؤول عن Cloudflare): سر `MASTER_KEY` يتضاف مرة واحدة، و`OFFICE_SECRET` يفضل. التفاصيل في `GATEWAY_DEPLOY.md`.
+
+## الخطوة 7 — وصّل البرنامج بالبوابة (مكتب قديم، أو عنوان مختلف)
 1. انسخ عنوان الـ Worker (شكله `https://trip-orders.اسمك.workers.dev`).
 2. في البرنامج: **الإعدادات ← صندوق الإنترنت**، الصق العنوان في «عنوان الصندوق» واضغط **حفظ**.
 3. اضغط **جرّب الاتصال**. لازم تشوف «الصندوق ردّ». لو ظهر «السر مش مطابق» يبقى السر في الخطوة 5 اتنسخ غلط.
@@ -80,5 +90,5 @@
 - لو حد سرق السر: **الإعدادات ← صندوق الإنترنت ← اعمل أسرار جديدة** (هيسألك قبل الاستبدال) ثم حدّث `OFFICE_SECRET` في Cloudflare. تغيير الأسرار **مش بيلغي** اللينكات اللي اتبعتت: لإلغاء لينك، اعمل لينك جديد للرحلة.
 
 ## للتقنيين (اختياري)
-بدل الـ Dashboard: `cd gateway && npx wrangler d1 create trip-orders`، حط الـ id في `wrangler.toml`، `npx wrangler d1 execute trip-orders --remote --file=schema.sql`، `npx wrangler secret put OFFICE_SECRET`، `npx wrangler deploy`.
+بدل الـ Dashboard: `cd gateway && npx wrangler d1 create trip-orders`، حط الـ id في `wrangler.toml`، `npx wrangler d1 execute trip-orders --remote --file=schema.sql`، `npx wrangler secret put OFFICE_SECRET`، **مرة واحدة** `npx wrangler secret put MASTER_KEY`، `npx wrangler deploy`. قاعدة قديمة ما تحتاجش SQL بإيد: أول طلب يضيف عمود المكتب. `schema.sql` ما يمسحش الصفوف القديمة.
 تشغيل محلي للتجربة: `cd gateway && OFFICE_SECRET=x node dev/server.js` والاختبارات: `node --test test/gateway.test.js`.

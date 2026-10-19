@@ -3,6 +3,11 @@
 
 ## Current work queue — first sale
 
+- [x] Mailbox auto-connect, one mailbox per install (2026-10-19): fresh install registers itself; legacy `OFFICE_SECRET` and an existing `gateway.json` stay; paired PCs share the mailbox over LAN sync; training does not register. Test map: `gateway/test/gateway.test.js` (register, rate limit, isolation, legacy, caps, migration), `tests/test_gateway_client.py` (`AutoConnectTest`, `TenantClientTest`). Not deployed, not released.
+- [x] Second review of that mailbox (2026-10-19): per-mailbox revocation, idempotent registration, global registration ceiling, fail-closed `MASTER_KEY`, old-database `schema.sql`, reconnect after the idle cleanup, Arabic setup-code wording. Test map: `gateway/test/gateway.test.js`, `tests/test_gateway_client.py` (`AutoReplayTest`, `AutoReopenTest`). Not deployed, not released.
+
+
+
 - [x] Training mode (owner 2026-10-17): big button opens a separate training copy with sample data, "Back to real work" bar, start again. Test map: `test_demo.NoSignInTest.test_e`, `test_demo.TrainingWatchTest`.
 - [x] No sign-in + no licence (owner 2026-10-17): no sign-in, real work starts empty, licence/activation removed. Test map: `test_demo` (sign-in on/off, upgrade from sign-in, no licence, restart), `test_assist.NoHubTest.test_a`, `test_yt_115.test_YT16`, `tools/journey_exe.py`.
 

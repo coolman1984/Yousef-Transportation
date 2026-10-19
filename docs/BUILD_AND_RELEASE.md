@@ -7,7 +7,7 @@
 
 Every push and pull request runs all tests and the installed Windows journey (`tools/journey_exe.py`). The resulting installers are labelled **CI TEST / NOT FOR CUSTOMERS**, and the CI workflow **does not publish them as customer releases**.
 
-For an actual customer build:
+For an actual customer build: run the **Customer release build** workflow (`.github/workflows/customer-release.yml`, manual, main only, restored on 19 October 2026 without any licence step) with the expected version and the previous tag. It builds the commercial-channel installer, installs the previous release, upgrades over it, runs the installed core journey and uploads the installer with `RELEASE-PROOF.txt`. It never publishes. Or by hand:
 1. On a trusted Windows builder with Python, Nuitka, the required libraries, Inno Setup and Node installed, run `python tools/build_windows.py`.
 2. Confirm installer/upgrade/disaster-recovery acceptance on the exact binary, hash and archive that binary. Only explicitly approved, verified builds may be sent to a customer. There is **no automated publishing**.
 

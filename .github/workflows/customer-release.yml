@@ -1,0 +1,108 @@
+# Builds the CUSTOMER installer (commercial channel, normal AppId and folder) on a GitHub Windows runner.
+# No licence, no signing key, no secret is used. Manual only, from main. It never publishes:
+# the release is created separately after the owner approved it and this run's checks passed.
+name: Customer release build
+
+on:
+  workflow_dispatch:
+    inputs:
+      expected_version:
+        description: 'VERSION in server/version.py must equal this (e.g. 1.1.7)'
+        required: true
+      previous_tag:
+        description: 'Published release to upgrade from (N-1)'
+        required: true
+        default: 'v1.1.6'
+
+permissions:
+  contents: read
+
+env:
+  TO_BUILD_CHANNEL: commercial
+  VERSION_IN: ${{ inputs.expected_version }}
+  PREVIOUS_TAG: ${{ inputs.previous_tag }}
+
+jobs:
+  customer-installer:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - name: Only from main
+        shell: bash
+        run: '[ "$GITHUB_REF" = "refs/heads/main" ] || { echo "run this on main, not $GITHUB_REF"; exit 1; }'
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '^22.13.0'
+      - name: Version matches
+        shell: bash
+        run: |
+          [[ "$VERSION_IN" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'bad version input'; exit 1; }
+          [[ "$PREVIOUS_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo 'bad previous tag'; exit 1; }
+          v=$(python -c "import sys; sys.path.insert(0,'server'); import version; print(version.VERSION)")
+          [ "$v" = "$VERSION_IN" ] || { echo "VERSION is $v, expected $VERSION_IN"; exit 1; }
+      - name: Build tools
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install "nuitka>=2.4,<3" ordered-set zstandard cryptography
+          choco upgrade innosetup -y --no-progress
+      - name: Build the CUSTOMER installer (commercial channel)
+        run: python tools/build_windows.py
+      - name: It is the customer installer, not the CI test one
+        shell: pwsh
+        run: |
+          $setup = "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
+          if (-not (Test-Path $setup)) { Get-ChildItem dist; throw "missing $setup" }
+          if (Test-Path dist/CI-TEST-BUILD-NOT-FOR-CUSTOMERS.txt) { throw 'CI-TEST marker present' }
+      - name: Install the previous release (N-1)
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force n1 | Out-Null
+          gh release download $env:PREVIOUS_TAG --repo $env:GITHUB_REPOSITORY --pattern 'TripOrders-Setup-*.exe' --dir n1
+          $old = Get-ChildItem n1/TripOrders-Setup-*.exe | Select-Object -First 1
+          if (-not $old) { throw 'the previous installer could not be downloaded' }
+          (Start-Process -FilePath $old.FullName -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          if (-not (Test-Path $exe)) { throw 'the previous release did not install' }
+          Write-Host "installed N-1: $((Get-Item $exe).VersionInfo.ProductVersion)"
+          'kept' | Set-Content (Join-Path ${env:ProgramData} 'TripOrders\upgrade-marker.txt')
+      - name: Silent upgrade over N-1, then the installed core journey
+        shell: pwsh
+        run: |
+          $setup = "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
+          (Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          $exe = Join-Path ${env:ProgramFiles} 'TripOrders\TripOrders.exe'
+          $ver = (Get-Item $exe).VersionInfo.ProductVersion
+          Write-Host "installed version: $ver"
+          if (-not $ver.StartsWith($env:VERSION_IN)) { throw "installed version is $ver" }
+          if (Test-Path (Join-Path ${env:ProgramFiles} 'TripOrders-CITest')) { throw 'CI-test folder present' }
+          if (-not (Test-Path (Join-Path ${env:ProgramData} 'TripOrders\upgrade-marker.txt'))) { throw 'the upgrade removed the office data folder' }
+          $h = Join-Path $env:RUNNER_TEMP 'journey'
+          python tools/journey_exe.py first $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the first journey failed' }
+          (Start-Process -FilePath $setup -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART' -PassThru).WaitForExit()
+          python tools/journey_exe.py after $h $exe
+          if ($LASTEXITCODE -ne 0) { throw 'the office did not survive a reinstall' }
+      - name: Proof
+        shell: pwsh
+        run: |
+          $setup = Get-Item "dist/TripOrders-Setup-$($env:VERSION_IN).exe"
+          $hash = (Get-FileHash $setup.FullName -Algorithm SHA256).Hash.ToLower()
+          @("product: Trip Orders", "version: $($env:VERSION_IN)", "channel: commercial", "source_commit: ${env:GITHUB_SHA}",
+            "installer: $($setup.Name)", "size: $($setup.Length)", "installer_sha256: $hash",
+            "workflow_run: ${env:GITHUB_SERVER_URL}/${env:GITHUB_REPOSITORY}/actions/runs/${env:GITHUB_RUN_ID}",
+            "checks: customer channel (no CI-test marker), silent install of $($env:PREVIOUS_TAG), silent upgrade keeps the data folder, installed version, installed core journey, reinstall keeps the trip and backup") |
+            Set-Content -Encoding utf8 dist/RELEASE-PROOF.txt
+          Get-Content dist/RELEASE-PROOF.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: TripOrders-CUSTOMER-${{ env.VERSION_IN }}
+          path: |
+            dist/TripOrders-Setup-*.exe
+            dist/RELEASE-PROOF.txt
+          retention-days: 90

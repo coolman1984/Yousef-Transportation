@@ -190,6 +190,18 @@
     xlsb: 'imp.e.xlsb', old: 'imp.e.oldoffice', pdf: 'imp.e.pdf', image: 'imp.e.picture', drm: 'imp.e.drm', wordGiven: 'imp.e.wordgiven' };
   var FIELD_KEY = { plate: 'f.plate', type: 'f.type', category: 'f.category', vendor: 'f.vendor', notes: 'f.notes', name: 'f.name',
     licenseNo: 'f.licenseNo', mobile: 'f.mobile', ownership: 'f.ownership', active: 'f.active', startKm: 'f.baselineKm' };
+  // column card on the import screen: label key, required/optional key, one-line meaning
+  var FLEET_COLS = {
+    vehicles: [
+      ['f.plate', 'flt.need', 'flt.col.plate'], ['f.type', 'flt.opt', 'flt.col.type'], ['f.category', 'flt.opt', 'flt.col.category'],
+      ['f.ownership', 'flt.opt', 'flt.col.own'], ['f.vendor', 'flt.opt', 'flt.col.vendor'], ['f.baselineKm', 'flt.opt', 'flt.col.km'],
+      ['f.notes', 'flt.opt', 'flt.col.notes'], ['f.active', 'flt.opt', 'flt.col.active']
+    ],
+    drivers: [
+      ['f.name', 'flt.need', 'flt.col.name'], ['f.mobile', 'flt.opt', 'flt.col.mobile'], ['f.vendor', 'flt.opt', 'flt.col.vendor'],
+      ['f.licenseNo', 'flt.opt', 'flt.col.lic'], ['f.licenseExpiry', 'flt.opt', 'flt.col.exp'], ['f.active', 'flt.opt', 'flt.col.active']
+    ]
+  };
 
   function fleetButtons(cfg) {
     if (!cfg.import || !TO.can(cfg.perm)) return '';
@@ -225,15 +237,83 @@
     fleet = { entity: cfg.entity, phase: 'pick', err: '', pv: null, done: null, spent: false, token: {} };
     TO.rerender();
   }
-  function kpi(icon, label, value, hint) {
-    return '<div class="card kpi"><span class="label">' + TO.esc(label) + '<span class="tile-ic">' + TO.icon(icon) + '</span></span><span class="value num">' +
+  function kpi(icon, label, value, hint, tour) {
+    return '<div class="card kpi"' + (tour ? ' data-tour="' + tour + '"' : '') + '><span class="label">' + TO.esc(label) + '<span class="tile-ic">' + TO.icon(icon) + '</span></span><span class="value num">' +
       TO.fmt.num(value) + '</span>' + (hint ? '<span class="hint">' + TO.esc(hint) + '</span>' : '') + '</div>';
   }
+  function lessonBanner() {
+    if (!fleet || !fleet.lesson) return '';
+    return '<div class="tip" role="note">' + TO.icon('info') + '<span>' + TO.esc(TO.t('flt.lesson')) + '</span></div>';
+  }
+  function colsHTML(entity) {
+    var rows = FLEET_COLS[entity] || [];
+    var bad = entity === 'drivers' ? ['flt.bad.d.1', 'flt.bad.d.2', 'flt.bad.d.3'] : ['flt.bad.v.1', 'flt.bad.v.2', 'flt.bad.v.3'];
+    return '<section class="card" data-tour="flt-cols"><header><h3>' + TO.icon('sheet') + ' ' + TO.esc(TO.t('flt.cols.t')) + '</h3></header>' +
+      '<ul class="col-guide">' + rows.map(function (c) {
+        return '<li><b>' + TO.esc(TO.t(c[0])) + '</b><span class="badge' + (c[1] === 'flt.need' ? ' signal' : '') + '">' + TO.esc(TO.t(c[1])) + '</span>' +
+          '<span class="muted">' + TO.esc(TO.t(c[2])) + '</span></li>';
+      }).join('') + '</ul><p class="muted">' + TO.esc(TO.t('flt.formats')) + '</p>' +
+      '<div class="tip warn" data-tour="flt-mistakes">' + TO.icon('alert') + '<div><b>' + TO.esc(TO.t('flt.bad.t')) + '</b><ul>' +
+      bad.map(function (k) { return '<li>' + TO.esc(TO.t(k)) + '</li>'; }).join('') + '</ul></div></div></section>';
+  }
+  // Example numbers for the tour only. Keep them in step with PracticeSheetTest (the training car and driver).
+  function lessonPlan(entity) {
+    if (entity === 'drivers') {
+      return {
+        pv: {
+          filename: 'Drivers_practice.xlsx', sheets: ['السائقون'], ready: 3,
+          stats: { new: 2, update: 1, error: 3, same: 0, blank: 1 },
+          samples: [
+            { row: 2, label: 'سامي فريد', status: 'new' },
+            { row: 3, label: 'أحمد سمير', status: 'update' },
+            { row: 8, label: 'ليلى حسن', status: 'new' }
+          ],
+          errors: [
+            { row: 4, label: '', messages: [{ code: 'name_required' }] },
+            { row: 5, label: 'سامي فريد', messages: [{ code: 'dup_file', vars: { row: 2 } }] },
+            { row: 7, label: 'نادر خطأ', messages: [{ code: 'mobile' }, { code: 'date' }] }
+          ]
+        },
+        done: { new: 2, updated: 1, skipped: 3, same: 0, blank: 1 }
+      };
+    }
+    return {
+      pv: {
+        filename: 'Vehicles_practice.xlsx', sheets: ['السيارات'], ready: 4,
+        stats: { new: 3, update: 1, error: 3, same: 0, blank: 1 },
+        samples: [
+          { row: 2, label: 'ت ث ج 1001', status: 'new' },
+          { row: 3, label: 'ت ث ج 1002', status: 'new' },
+          { row: 4, label: 'أ ب ج 1234', status: 'update' },
+          { row: 9, label: 'ت ث ج 1005', status: 'new' }
+        ],
+        errors: [
+          { row: 5, label: '', messages: [{ code: 'plate_required' }] },
+          { row: 6, label: 'ت ث ج 1001', messages: [{ code: 'dup_file', vars: { row: 2 } }] },
+          { row: 8, label: 'ت ث ج 1004', messages: [{ code: 'category', vars: { name: 'فئة ليست هنا' } }, { code: 'ownership' }, { code: 'km' }, { code: 'active' }] }
+        ]
+      },
+      done: { new: 3, updated: 1, skipped: 3, same: 0, blank: 1 }
+    };
+  }
+  function lessonState(entity, phase) {
+    var plan = lessonPlan(entity);
+    var base = { entity: entity, err: '', spent: false, token: {}, lesson: true, pv: null, done: null };
+    if (phase === 'done') return Object.assign(base, { phase: 'done', done: plan.done });
+    if (phase === 'preview') return Object.assign(base, { phase: 'preview', pv: plan.pv });
+    return Object.assign(base, { phase: 'pick' });
+  }
+  TO.fleetLesson = {
+    show: function (entity, phase) { fleet = lessonState(entity === 'drivers' ? 'drivers' : 'vehicles', phase || 'pick'); },
+    clear: function () { if (fleet && fleet.lesson) { fleet = null; return true; } return false; },
+    reset: function () { if (!fleet) return false; fleet = null; return true; },
+    active: function () { return !!(fleet && fleet.lesson); }
+  };
   function fleetHTML(cfg) {
     var title = TO.t('flt.title.' + cfg.entity);
     var back = '<button type="button" class="btn ghost" data-back>' + TO.esc(TO.t('flt.back')) + '</button>';
     if (fleet.phase === 'busy' || fleet.phase === 'saving') {
-      return '<section class="card"><header><h3>' + TO.esc(title) + '</h3></header><p>' + TO.esc(TO.t(fleet.phase === 'saving' ? 'flt.saving' : 'flt.busy')) +
+      return lessonBanner() + '<section class="card"><header><h3>' + TO.esc(title) + '</h3></header><p>' + TO.esc(TO.t(fleet.phase === 'saving' ? 'flt.saving' : 'flt.busy')) +
         '</p><div class="skeleton" style="height:8rem"></div></section>';
     }
     if (fleet.phase === 'done' && fleet.done) {
@@ -241,19 +321,19 @@
       if (d.skipped) lines.push(TO.t('flt.done.skip', { n: d.skipped }));
       if (d.same) lines.push(TO.t('flt.done.same', { n: d.same }));
       if (d.blank) lines.push(TO.t('flt.done.blank', { n: d.blank }));
-      return '<section class="card"><div class="empty"><div class="art ok">' + TO.icon('check', 'lg') + '</div><h3>' + TO.esc(TO.t('flt.done.t')) + '</h3><p>' +
+      return lessonBanner() + '<section class="card" data-tour="flt-done"><div class="empty"><div class="art ok">' + TO.icon('check', 'lg') + '</div><h3>' + TO.esc(TO.t('flt.done.t')) + '</h3><p>' +
         lines.map(function (line) { return '<span class="badge">' + line + '</span>'; }).join(' ') + '</p><p>' + TO.esc(TO.t('flt.done.b')) + '</p>' +
         '<div class="row" style="justify-content:center">' + back + '</div></div></section>';
     }
-    if (fleet.phase === 'preview' && fleet.pv) return previewHTML(cfg);
-    return '<div class="grid split"><section class="card"><header><h3>' + TO.icon('upload') + ' ' + TO.esc(TO.t('flt.pick')) + '</h3>' + back + '</header>' +
+    if (fleet.phase === 'preview' && fleet.pv) return lessonBanner() + previewHTML(cfg);
+    return lessonBanner() + '<div class="grid split"><section class="card"><header><h3>' + TO.icon('upload') + ' ' + TO.esc(TO.t('flt.pick')) + '</h3>' + back + '</header>' +
       '<p class="muted">' + TO.esc(TO.t('flt.pick.sub')) + '</p>' +
       '<label class="dropzone" id="flt-dz" for="flt-file" tabindex="0"><span class="art">' + TO.icon('sheet', 'lg') + '</span><b>' + TO.esc(TO.t('flt.drop')) +
       '</b><span class="muted">' + TO.esc(TO.t('flt.types')) + '</span></label><input type="file" id="flt-file" accept=".xlsx,.xlsm,.xls,.csv,.txt,.ods" hidden>' +
       (fleet.err ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<span>' + TO.esc(fleet.err) + '</span></div>' : '') +
-      '<div class="row"><button type="button" class="btn ghost" data-template>' + TO.icon('download', 'sm') + TO.esc(TO.t('flt.template')) + '</button></div></section>' +
-      '<section class="card"><header><h3>' + TO.icon('info') + ' ' + TO.esc(title) + '</h3></header><ol class="steps">' +
-      [1, 2, 3].map(function (i) { return '<li>' + TO.esc(TO.t('flt.how.' + i)) + '</li>'; }).join('') + '</ol></section></div>';
+      '<div class="row"><button type="button" class="btn ghost" data-template>' + TO.icon('download', 'sm') + TO.esc(TO.t('flt.template')) + '</button></div>' +
+      '<ol class="steps">' + [1, 2, 3].map(function (i) { return '<li>' + TO.esc(TO.t('flt.how.' + i)) + '</li>'; }).join('') + '</ol></section>' +
+      colsHTML(cfg.entity) + '</div>';
   }
   function previewHTML(cfg) {
     var p = fleet.pv, st = p.stats, many = (p.sheets || []).length > 1;
@@ -272,39 +352,55 @@
     return '<div class="stack"><div class="toolbar"><h2>' + TO.esc(TO.t('flt.title.' + cfg.entity)) + '</h2><span class="grow"></span>' +
       '<button type="button" class="btn ghost" data-back>' + TO.esc(TO.t('flt.back')) + '</button></div>' +
       (p.filename ? '<p class="muted"><bdi dir="ltr">' + TO.esc(p.filename) + '</bdi></p>' : '') +
-      '<div class="grid cols-3">' + kpi('plus', TO.t('flt.k.new'), st.new, TO.t('flt.k.new.h')) + kpi('pen', TO.t('flt.k.update'), st.update, TO.t('flt.k.update.h')) +
-      kpi('alert', TO.t('flt.k.error'), st.error, TO.t('flt.k.error.h')) + '</div>' +
+      '<div class="grid cols-3">' + kpi('plus', TO.t('flt.k.new'), st.new, TO.t('flt.k.new.h'), 'flt-new') + kpi('pen', TO.t('flt.k.update'), st.update, TO.t('flt.k.update.h'), 'flt-update') +
+      kpi('alert', TO.t('flt.k.error'), st.error, TO.t('flt.k.error.h'), 'flt-error') + '</div>' +
       (extra.length ? '<p class="muted">' + extra.join(' · ') + '</p>' : '') +
       (samples.length ? '<section class="card"><header><h3>' + TO.esc(TO.t('flt.will')) + '</h3></header>' + U.table([
         { h: 'flt.c.row', cell: function (r) { return '<span class="num">' + TO.fmt.num(r.row) + '</span>'; } },
         { h: 'flt.will', cell: function (r) { return cfg.entity === 'vehicles' ? U.plate(r.label) : TO.esc(r.label || ''); } },
         { h: 'f.status', cell: function (r) { return '<span class="badge ' + (r.status === 'new' ? 'ok' : 'info') + '">' + TO.esc(TO.t('flt.st.' + r.status)) + '</span>'; } }
       ], samples) + ((st.new + st.update) > samples.length ? '<p class="muted">' + TO.esc(TO.t('flt.more', { n: st.new + st.update - samples.length })) + '</p>' : '') + '</section>' : '') +
-      (st.error ? '<section class="card"><header><h3>' + TO.esc(TO.t('flt.err.title')) + '</h3></header>' + U.table(cols, shown) +
+      (st.error ? '<section class="card" data-tour="flt-errors"><header><h3>' + TO.esc(TO.t('flt.err.title')) + '</h3></header>' + U.table(cols, shown) +
         (p.errors.length > shown.length ? '<p class="muted">' + TO.esc(TO.t('flt.more', { n: p.errors.length - shown.length })) + '</p>' : '') + '</section>' : '') +
       (fleet.err ? '<div class="tip bad" role="alert">' + TO.icon('alert') + '<span>' + TO.esc(fleet.err) + '</span></div>' : '') +
       '<div class="actionbar"><button type="button" class="btn ghost" data-again>' + TO.esc(TO.t('flt.again')) + '</button>' +
-      '<button type="button" class="btn primary" data-commit' + (p.ready > 0 && !fleet.spent ? '' : ' disabled') + '>' + TO.icon('check', 'sm') + TO.esc(TO.t('flt.commit', { n: p.ready })) + '</button></div>' +
+      '<button type="button" class="btn primary" data-commit' + (p.ready > 0 && !fleet.spent && !fleet.lesson ? '' : ' disabled') + '>' + TO.icon('check', 'sm') + TO.esc(TO.t('flt.commit', { n: p.ready })) + '</button></div>' +
       (fleet.err ? '' : '<p class="muted">' + TO.esc(TO.t(p.ready > 0 ? 'flt.note' : 'flt.none')) + '</p>') + '</div>';
   }
   function sendFile(cfg, file) {
-    if (!file) return;
+    if (!file) return Promise.resolve();
     var token = {};
     fleet = { entity: cfg.entity, phase: 'busy', err: '', pv: null, done: null, spent: false, token: token };
     TO.rerender();
     var name = file.name || 'file';
-    TO.api('POST', '/api/fleet/preview?kind=' + encodeURIComponent(cfg.entity) + '&name=' + encodeURIComponent(name), file, { raw: true }).then(function (pv) {
-      if (!fleet || fleet.token !== token) return;
+    return TO.api('POST', '/api/fleet/preview?kind=' + encodeURIComponent(cfg.entity) + '&name=' + encodeURIComponent(name), file, { raw: true }).then(function (pv) {
+      if (!fleet || fleet.token !== token) return false;
       fleet.phase = 'preview'; fleet.pv = pv; fleet.err = '';
       TO.rerender();
+      return true;
     }, function (e) {
-      if (!fleet || fleet.token !== token) return;
+      if (!fleet || fleet.token !== token) return false;
       fleet.phase = 'pick'; fleet.err = fileErr(e);
       TO.rerender();
+      return false;
     });
   }
+  function runPractice(cfg, btn) {
+    if (!TO.me || !TO.me.training) { TO.toast(TO.t('err.flt.practice'), 'bad', 6000); return; }
+    if (btn) btn.disabled = true;
+    fetch('/api/fleet/practice?kind=' + encodeURIComponent(cfg.entity), { credentials: 'same-origin' }).then(function (r) {
+      if (!r.ok) return r.json().then(function (j) { var er = new Error((j && j.error) || ('HTTP ' + r.status)); er.data = j; throw er; }, function () { throw new Error('HTTP ' + r.status); });
+      var cd = r.headers.get('Content-Disposition') || '', m = /filename="([^"]+)"/.exec(cd);
+      var name = m ? m[1] : (cfg.entity === 'drivers' ? 'Drivers_practice.xlsx' : 'Vehicles_practice.xlsx');
+      return r.blob().then(function (b) { b.name = name; return b; });
+    }).then(function (file) {
+      return sendFile(cfg, file);
+    }).then(function (ok) {
+      if (ok && TO.tour) TO.tour.start('practice', { kind: cfg.entity });
+    }).catch(function (e) { TO.toast(fileErr(e), 'bad', 6000); }).then(function () { if (btn) btn.disabled = false; });
+  }
   function commitFleet(cfg) {
-    if (!fleet || fleet.phase === 'saving' || fleet.spent || !fleet.pv || !fleet.pv.ready) return;
+    if (!fleet || fleet.lesson || fleet.phase === 'saving' || fleet.spent || !fleet.pv || !fleet.pv.ready) return;
     var token = fleet.token, id = fleet.pv.id;
     fleet.phase = 'saving';
     TO.rerender();
@@ -349,16 +445,30 @@
       !q && TO.can(cfg.perm) ? '<button type="button" class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '');
     return U.table(cfg.cols, rows, { click: true, rowAttr: function (r) { return 'data-id="' + TO.esc(r.id) + '"'; } });
   }
+  function practiceCard(cfg) {
+    if (!cfg.import || !TO.me || !TO.me.training || !TO.can(cfg.perm)) return '';
+    return '<section class="card" data-tour="flt-practice"><header><h3>' + TO.icon('play') + ' ' + TO.esc(TO.t('flt.practice.t')) + '</h3></header>' +
+      '<p class="muted">' + TO.esc(TO.t('flt.practice.d')) + '</p><div class="row wrap">' +
+      '<button type="button" class="btn primary" data-practice>' + TO.icon('upload', 'sm') + TO.esc(TO.t('flt.practice.go')) + '</button>' +
+      '<button type="button" class="btn" data-fleet-tour>' + TO.icon('compass', 'sm') + TO.esc(TO.t('flt.tour')) + '</button></div></section>';
+  }
+  function tourButton(cfg) {
+    if (!cfg.import || !TO.can(cfg.perm) || (TO.me && TO.me.training)) return '';
+    return '<button type="button" class="btn ghost" data-fleet-tour>' + TO.icon('compass', 'sm') + TO.esc(TO.t('flt.tour')) + '</button>';
+  }
   function listPage(cfg) {
     return '<div class="toolbar"><input class="input" data-q type="search" placeholder="' + TO.esc(TO.t('list.search')) + '" style="max-width:22rem" aria-label="' + TO.esc(TO.t('list.search')) + '">' +
       '<span class="grow"></span><span class="muted"><span class="num" data-count>' + TO.data.list(cfg.entity).length + '</span></span>' +
-      fleetButtons(cfg) +
-      (TO.can(cfg.perm) ? '<button type="button" class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '') + '</div><div data-body>' + tableHTML(cfg, '') + '</div>';
+      tourButton(cfg) + fleetButtons(cfg) +
+      (TO.can(cfg.perm) ? '<button type="button" class="btn primary" data-add>' + TO.icon('plus', 'sm') + TO.esc(TO.t(cfg.add)) + '</button>' : '') + '</div>' +
+      practiceCard(cfg) + '<div data-body>' + tableHTML(cfg, '') + '</div>';
   }
   function mountList(root, cfg) {
     var body = root.querySelector('[data-body]'), q = root.querySelector('[data-q]');
     function open(id) { var r = TO.data.get(cfg.entity, id); if (r) openForm(cfg, r); }
     root.addEventListener('click', function (e) {
+      if (e.target.closest('[data-practice]')) { if (TO.can(cfg.perm)) runPractice(cfg, e.target.closest('[data-practice]')); return; }
+      if (e.target.closest('[data-fleet-tour]')) { if (TO.can(cfg.perm) && TO.tour) TO.tour.start('fleet'); return; }
       if (e.target.closest('[data-template]')) { downloadTemplate(cfg.entity, e.target.closest('[data-template]')); return; }
       if (e.target.closest('[data-import]')) { if (TO.can(cfg.perm)) startFleet(cfg); return; }
       if (e.target.closest('[data-add]')) { if (TO.can(cfg.perm)) openForm(cfg); return; }

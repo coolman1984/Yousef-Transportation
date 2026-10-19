@@ -438,3 +438,141 @@ test('GET passes the abort signal through and does not turn a cancel into an off
   assert.equal(plain.total, 2);
   assert.equal(seen[seen.length - 1].signal, undefined);
 });
+
+function hasSel(html, sel) {
+  if (sel.startsWith('#')) return html.includes('id="' + sel.slice(1) + '"');
+  const attr = sel.match(/^\[([^\]=]+)(?:="([^"]*)")?\]$/);
+  assert.ok(attr, 'selector ' + sel);
+  if (attr[2] === undefined) return html.includes(attr[1] + '=') || html.includes(attr[1] + ' ') || html.includes(attr[1] + '>');
+  return html.includes(attr[1] + '="' + attr[2] + '"');
+}
+
+function office(lang, extra) {
+  const TO = startup(lang);
+  TO.prefs.data = {};
+  TO.me = Object.assign({ full_name: 'مدير', perms: ['fleet.view', 'vehicles.manage', 'drivers.manage', 'overview.view'], training: false }, extra || {});
+  TO.data.state = { vehicles: [], drivers: [], trips: [], tripCategories: [], people: [], places: [] };
+  return TO;
+}
+
+function renderList(TO, page) {
+  return TO.views[page].render({ route: { path: page, q: {} } });
+}
+
+test('the welcome tour still points at the same five controls, in the same order', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const TO = office('ar');
+  const welcome = TO.tour.catalog.welcome;
+  // Arrays built inside the page sandbox have another prototype; copy them before a strict compare.
+  assert.deepEqual(Array.from(welcome, (s) => s.sel), [
+    '[data-tour="nav"]', '[data-tour="search"]', '[data-tour="tools"]', '[data-tour="kpis"]', '[data-act="account"]'
+  ]);
+  assert.deepEqual(Array.from(welcome, (s) => s.k), ['1', '2', '3', '4', '5']);
+  const shell = fs.readFileSync(path.join(__dirname, '..', 'js', 'shell.js'), 'utf8');
+  const overview = fs.readFileSync(path.join(__dirname, '..', 'js', 'views', 'overview.js'), 'utf8');
+  for (const sel of ['data-tour="nav"', 'data-tour="search"', 'data-tour="tools"', 'data-act="account"']) assert.ok(shell.includes(sel), sel);
+  assert.ok(overview.includes('data-tour="kpis"'));
+  const present = new Set(['[data-tour="nav"]', '[data-act="account"]']);
+  const real = TO.$;
+  TO.$ = (sel) => present.has(sel);
+  const picked = TO.tour.stepsFor('welcome');
+  TO.$ = real;
+  assert.equal(picked.follow, false);
+  assert.deepEqual(Array.from(picked.steps, (s) => s.k), ['1', '5']);
+});
+
+test('every Excel-import tour step points at a control that the page actually draws', () => {
+  const TO = office('ar');
+  assert.equal(TO.tour.catalog.fleet.length, 22);
+  assert.equal(TO.tour.catalog.practice.length, 10);
+  for (const step of TO.tour.catalog.fleet) {
+    if (step.lesson) TO.fleetLesson.show(step.page, step.lesson);
+    else TO.fleetLesson.clear();
+    const html = renderList(TO, step.page);
+    assert.ok(hasSel(html, step.sel), step.k + ' missing ' + step.sel);
+  }
+  TO.fleetLesson.show('vehicles', 'preview');
+  assert.match(renderList(TO, 'vehicles'), /data-commit disabled/);
+  assert.ok(renderList(TO, 'vehicles').includes(TO.t('flt.lesson')));
+  for (const step of TO.tour.catalog.practice) {
+    TO.fleetLesson.show(step.page, 'preview');
+    assert.ok(hasSel(renderList(TO, step.page), step.sel), step.k + ' missing ' + step.sel);
+  }
+  const driversOnly = office('en', { perms: ['fleet.view', 'drivers.manage'] });
+  const drivers = driversOnly.tour.stepsFor('fleet');
+  assert.equal(drivers.follow, true);
+  assert.ok(drivers.steps.length > 0 && drivers.steps.every((s) => s.page === 'drivers'));
+  const carsOnly = office('en', { perms: ['fleet.view', 'vehicles.manage'] });
+  assert.ok(carsOnly.tour.stepsFor('fleet').steps.every((s) => s.page === 'vehicles'));
+  const practice = TO.tour.stepsFor('practice', { kind: 'drivers' });
+  assert.equal(practice.follow, false);
+  assert.deepEqual(Array.from(practice.steps, (s) => s.page), ['drivers', 'drivers', 'drivers', 'drivers', 'drivers']);
+});
+
+test('Excel-import tour, help and palette words exist in Arabic and English', () => {
+  const TO = office('ar');
+  const keys = ['act.tour.fleet', 'help.q9', 'help.a9', 'help.tour.fleet', 'train.excel', 'tour.restart', 'tour.miss'];
+  for (const step of [...TO.tour.catalog.welcome, ...TO.tour.catalog.fleet, ...TO.tour.catalog.practice]) {
+    keys.push('tour.' + step.k + '.t', 'tour.' + step.k + '.b');
+  }
+  for (const lang of ['ar', 'en']) {
+    const dict = TO.dict[lang];
+    for (const key of keys) assert.equal(typeof dict[key], 'string', lang + ' ' + key);
+    assert.ok(dict['gd.importFleet.17'] && dict['gd.importFleet.ok'] && dict['gd.importFleet.x']);
+    assert.equal(dict['gd.importFleet.18'], undefined);
+  }
+  const guide = TO.guides.list.find((g) => g.id === 'importFleet');
+  assert.ok(guide && guide.steps.length === 17);
+  assert.equal(TO.guides.sitGuide.importVehicles, 'importFleet');
+  assert.ok(TO.guides.paths.find((p) => p.id === 'admin').lessons.some((l) => l.guide === 'importFleet'));
+  assert.ok(TO.guides.paths.find((p) => p.id === 'manager').lessons.some((l) => l.guide === 'importFleet'));
+  assert.ok(!TO.guides.paths.find((p) => p.id === 'dispatcher').lessons.some((l) => l.guide === 'importFleet'));
+});
+
+test('the practice card is only in training, and the real office still has the tour', () => {
+  const real = office('ar', { training: false });
+  const list = renderList(real, 'vehicles');
+  assert.ok(list.includes('data-import') && list.includes('data-template') && list.includes('data-fleet-tour'));
+  assert.ok(!list.includes('data-practice'));
+  const training = office('en', { training: true });
+  const practice = renderList(training, 'drivers');
+  assert.ok(practice.includes('data-practice') && practice.includes('data-fleet-tour'));
+  const look = office('ar', { perms: ['fleet.view'], training: true });
+  const locked = renderList(look, 'vehicles');
+  assert.ok(!locked.includes('data-import') && !locked.includes('data-practice') && !locked.includes('data-fleet-tour'));
+  const home = office('ar', { training: false });
+  assert.ok(home.views.overview.render().includes(home.t('train.excel')));
+  const help = office('en');
+  const faq = help.views.help.render({ route: { q: { view: 'faq' } } });
+  assert.ok(faq.includes(help.t('help.q9')) && faq.includes('data-a="fleet-tour"'));
+  const noRight = office('en', { perms: ['overview.view'] });
+  assert.ok(!noRight.views.help.render({ route: { q: {} } }).includes('data-a="fleet-tour"'));
+});
+
+test('the tour card stays inside the window and uses the control\'s physical position', () => {
+  const place = office('ar').tour.place;
+  const below = place(
+    { left: 400, top: 80, width: 120, height: 40, right: 520, bottom: 120 },
+    { w: 300, h: 160 },
+    { w: 1280, h: 800 }
+  );
+  assert.equal(below.where, 'below');
+  const centerX = 460, centerY = 100;
+  const covers = below.left <= centerX && centerX <= below.left + below.pw && below.top <= centerY && centerY <= below.top + below.ph;
+  assert.equal(covers, false);
+  for (const view of [{ w: 320, h: 640 }, { w: 768, h: 500 }, { w: 1280, h: 400 }, { w: 320, h: 280 }]) {
+    const box = place(
+      { left: Math.max(12, view.w - 80), top: 40, width: 60, height: 36, right: Math.max(72, view.w - 20), bottom: 76 },
+      { w: 352, h: 180 },
+      view
+    );
+    assert.ok(box.left >= 12 && box.left + box.pw <= view.w - 12, 'width ' + view.w + ' ' + JSON.stringify(box));
+    assert.ok(box.top >= 12 && box.top + box.ph <= view.h - 12, 'height ' + view.h + ' ' + JSON.stringify(box));
+  }
+  const tall = { left: 250, top: 20, width: 60, height: 400, right: 310, bottom: 420 };
+  const west = place(tall, { w: 200, h: 120 }, { w: 360, h: 500 });
+  assert.equal(west.where, 'west');
+  assert.ok(west.left + west.pw <= tall.left);
+  assert.deepEqual(place(tall, { w: 200, h: 120 }, { w: 360, h: 500 }), west);
+});

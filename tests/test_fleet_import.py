@@ -389,6 +389,76 @@ class ApiTest(unittest.TestCase):
         self.assertEqual(saved['new'], 999)
         self.assertEqual(len(self.vehicles()), before + 999)
 
+    def test_practice_sheet_is_refused_outside_training(self):
+        with self.assertRaises(ApiError) as vehicles:
+            self.ac.call('GET', '/api/fleet/practice?kind=vehicles')
+        self.assertEqual(vehicles.exception.code, 403)
+        self.assertEqual(vehicles.exception.data.get('key'), 'err.flt.practice')
+        with self.assertRaises(ApiError) as drivers:
+            self.ac.call('GET', '/api/fleet/practice?kind=drivers')
+        self.assertEqual(drivers.exception.code, 403)
+        self.assertEqual(drivers.exception.data.get('key'), 'err.flt.practice')
+
+
+class PracticeSheetTest(unittest.TestCase):
+    """The bundled exercise. These counts are written out here; they are not copied from the builder."""
+
+    def plan(self, kind, state=None):
+        return F.parse_bytes(F.practice_book(kind), F.practice_name(kind), kind, state or {})
+
+    def test_empty_lists_count_the_good_rows_and_the_deliberate_errors(self):
+        cars = self.plan('vehicles')
+        self.assertTrue(F.practice_book('vehicles').startswith(b'PK'))
+        self.assertEqual(F.practice_name('vehicles'), 'Vehicles_practice.xlsx')
+        self.assertEqual(cars['sheets'], ['السيارات'])
+        self.assertEqual(cars['stats'], {'rows': 7, 'new': 4, 'update': 0, 'same': 0, 'error': 3, 'blank': 1})
+        self.assertEqual(cars['ready'], 4)
+        self.assertEqual(cars['rows'][1]['values']['startKm'], 12000)
+        by = {item['row']: item for item in cars['rows']}
+        self.assertEqual(codes(by[5]), ['plate_required'])
+        self.assertEqual(codes(by[6]), ['dup_file'])
+        self.assertEqual(by[6]['messages'][0]['vars']['row'], 2)
+        self.assertEqual(set(codes(by[8])), {'category', 'ownership', 'km', 'active'})
+        self.assertEqual([b['row'] for b in cars['blanks']], [7])
+
+        people = self.plan('drivers')
+        self.assertEqual(F.practice_name('drivers'), 'Drivers_practice.xlsx')
+        self.assertEqual(people['sheets'], ['السائقون'])
+        self.assertEqual(people['stats'], {'rows': 6, 'new': 3, 'update': 0, 'same': 0, 'error': 3, 'blank': 1})
+        self.assertEqual(people['ready'], 3)
+        by = {item['row']: item for item in people['rows']}
+        self.assertEqual(codes(by[4]), ['name_required'])
+        self.assertEqual(codes(by[5]), ['dup_file'])
+        self.assertEqual(by[5]['messages'][0]['vars']['row'], 2)
+        self.assertEqual(codes(by[7]), ['mobile', 'date'])
+        self.assertEqual(by[8]['status'], 'new')
+        self.assertEqual(by[8]['values']['licenseExpiry'], '2028-06-30')
+        self.assertEqual([b['row'] for b in people['blanks']], [6])
+
+    def test_the_training_plate_and_name_become_updates(self):
+        label, key = domain.norm_plate('أ ب ج 1234')
+        cars = self.plan('vehicles', {'vehicles': [{
+            'id': 'dv-1', 'plate': label, 'plateKey': key, 'type': 'Sedan', 'ownership': 'rent',
+            'active': True, 'startKm': 85210}]})
+        self.assertEqual(cars['stats']['new'], 3)
+        self.assertEqual(cars['stats']['update'], 1)
+        self.assertEqual(cars['stats']['error'], 3)
+        self.assertEqual(cars['stats']['blank'], 1)
+        self.assertEqual(cars['stats']['same'], 0)
+        updated = next(item for item in cars['rows'] if item['row'] == 4)
+        self.assertEqual(updated['status'], 'update')
+        self.assertEqual(updated['values']['startKm'], 86000)
+
+        name_key = domain.key_text('أحمد سمير')
+        people = self.plan('drivers', {'drivers': [{
+            'id': 'dd-1', 'name': 'أحمد سمير', 'nameKey': name_key, 'mobile': '01001234567',
+            'active': True, 'licenseExpiry': '2027-01-01'}]})
+        self.assertEqual(people['stats']['new'], 2)
+        self.assertEqual(people['stats']['update'], 1)
+        self.assertEqual(people['stats']['error'], 3)
+        self.assertEqual(people['stats']['blank'], 1)
+        self.assertEqual(next(item for item in people['rows'] if item['row'] == 3)['status'], 'update')
+
 
 if __name__ == '__main__':
     unittest.main()

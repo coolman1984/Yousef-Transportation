@@ -6,7 +6,7 @@
 (function () {
   'use strict';
   var TO = window.TO, U = TO.ui;
-  var N = 8;   // help.q1..q8 / help.a1..a8
+  var N = 9;   // help.q1..q9 / help.a1..a9
   var VIEWS = ['path', 'guides', 'situations', 'faq'];
   var VIEW_ICON = { path: 'flag', guides: 'compass', situations: 'life', faq: 'help' };
 
@@ -25,6 +25,7 @@
         return '<button type="button" role="tab" data-hview="' + v + '" aria-pressed="' + (v === view) + '">' + TO.icon(VIEW_ICON[v], 'sm') + TO.esc(TO.t('help.view.' + v)) + '</button>'; }).join('') + '</div>';
       var head = '<div class="page-head"><div class="titles"><h1>' + TO.esc(TO.t('help.title')) + '</h1><p>' + TO.esc(TO.t('help.sub')) + '</p></div>' +
         '<button class="btn" data-a="tour">' + TO.icon('play', 'sm') + TO.esc(TO.t('help.tour.start')) + '</button>' +
+        (TO.can('vehicles.manage') || TO.can('drivers.manage') ? '<button class="btn" data-a="fleet-tour">' + TO.icon('sheet', 'sm') + TO.esc(TO.t('help.tour.fleet')) + '</button>' : '') +
         '<button class="btn" data-a="slides">' + TO.icon('present', 'sm') + TO.esc(TO.t('help.slides.start')) + '</button></div>' + seg;
       if (view === 'path') return head + '<div class="stack">' + TO.guides.pathShell() + '</div>';
       if (view === 'guides') return head + '<div class="stack">' + TO.guides.html(q.for || '') + '</div>';
@@ -36,6 +37,7 @@
       root.addEventListener('click', function (e) {
         var v = e.target.closest('[data-hview]'); if (v) { TO.go('help?view=' + v.dataset.hview); return; }
         if (e.target.closest('[data-a="tour"]')) { TO.go('overview'); setTimeout(TO.tour.start, 350); return; }
+        if (e.target.closest('[data-a="fleet-tour"]')) { TO.tour.start('fleet'); return; }
         if (e.target.closest('[data-a="slides"]')) TO.slides.open();
       });
       TO.guides.fillPath(root);

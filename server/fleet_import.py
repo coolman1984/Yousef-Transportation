@@ -476,6 +476,49 @@ def parse_bytes(data, filename, kind, state):
     return plan
 
 
+# The training exercise. Counts below are what parse_bytes returns, and the tests lock them.
+# Vehicles: four good plates, one of them the training car «أ ب ج 1234» (an update only when that plate
+# already exists), three bad rows (empty plate, a repeated plate, and a row with a bad category,
+# ownership, odometer and active flag) and one blank row between them.
+# Drivers: three good names, one of them «أحمد سمير» (an update only when that name already exists),
+# three bad rows (empty name, a repeated name, a bad mobile and date) and one blank row.
+_PRACTICE_ROWS = {
+    'vehicles': [
+        ['ت ث ج 1001', 'تويوتا', '', 'ملك', '', '45000', '', 'نعم'],
+        ['ت ث ج 1002', 'هيونداي', '', 'إيجار', 'شركة النور', '١٢٠٠٠', '', 'نعم'],
+        ['أ ب ج ١٢٣٤', 'سيدان محدّثة', '', 'إيجار', '', '86000', '', 'نعم'],
+        ['', 'بدون لوحة', '', 'ملك', '', '', '', 'نعم'],
+        ['ت ث ج 1001', 'مكرر', '', 'ملك', '', '', '', 'نعم'],
+        ['', '', '', '', '', '', '', ''],
+        ['ت ث ج 1004', 'كيا', 'فئة ليست هنا', 'عربية', '', 'abc', '', 'ربما'],
+        ['ت ث ج 1005', 'نيسان', '', 'ملك', '', '', '', 'نعم'],
+    ],
+    'drivers': [
+        ['سامي فريد', '01099887766', '', '998877', '2028-06-30', 'نعم'],
+        ['أحمد سمير', '01001234567', '', '', '2029-01-15', 'نعم'],
+        ['', '01011111111', '', '', '', 'نعم'],
+        ['سامي فريد', '01099887766', '', '', '', 'نعم'],
+        ['', '', '', '', '', ''],
+        ['نادر خطأ', '123', '', '', 'غدا', 'لا'],
+        ['ليلى حسن', '01123456789', '', '', '30/06/2028', 'نعم'],
+    ],
+}
+
+
+def practice_book(kind):
+    """The bundled exercise sheet: good rows plus rows that are wrong on purpose. Nothing is saved here."""
+    kind = kind_or_raise(kind)
+    headers = VEHICLE_HEADERS if kind == 'vehicles' else DRIVER_HEADERS
+    sheet = 'السيارات' if kind == 'vehicles' else 'السائقون'
+    rows = [list(headers), *[list(row) for row in _PRACTICE_ROWS[kind]]]
+    return w.build([w.Sheet(sheet, rows, rtl=True)])
+
+
+def practice_name(kind):
+    kind_or_raise(kind)
+    return 'Vehicles_practice.xlsx' if kind == 'vehicles' else 'Drivers_practice.xlsx'
+
+
 def template(kind):
     """An .xlsx the office fills in: Arabic headers, one example row, and a short instruction sheet."""
     kind = kind_or_raise(kind)

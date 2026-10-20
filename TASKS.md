@@ -3,6 +3,8 @@
 
 ## Current work queue — first sale
 
+- [x] DB/sync read performance (2026-10-20): positional public-row decoding, focused card snapshot, shared lookups, skip idle card rebuild, mailbox-aware cache invalidation. Test map: `test_gateway_client.CardSnapshotTest`, `tools/bench_db_sync.py`. No poll interval/schema/version changes.
+
 - [x] LAN final-pull race (2026-10-20, L2): apply concurrent changes returned by the last pull. Test map: `test_multinode.FinalPullTest`. Existing protocol preserved.
 
 - [x] D1 batch compatibility (2026-10-20): 100-parameter limit, batched card writes, duplicate capacity accounting, office batches safe against deployed worker, partial-upload retry. Test map: `gateway/test/gateway.test.js`, `test_gateway_client.BatchCompatibilityTest`. Not deployed.

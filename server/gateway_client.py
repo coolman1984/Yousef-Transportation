@@ -371,16 +371,25 @@ def oldest_waiting_seconds(items, now=None):
     return max(0, int(max(ages))) if ages else 0
 
 
-def card_for(state, trip):
+def _card_lookup(state):
+    lookup = {e: {r['id']: r for r in state.get(e, [])}
+              for e in ('vehicles', 'drivers', 'people', 'tripCategories')}
+    passengers = {}
+    for row in state.get('tripPassengers', []):
+        passengers.setdefault(row.get('tripId'), []).append(row)
+    lookup['tripPassengers'] = passengers
+    return lookup
+
+
+def card_for(state, trip, lookup=None):
     """What the driver's page shows - nothing else leaves the office."""
-    by = lambda ent: {r['id']: r for r in state.get(ent, [])}  # noqa: E731
-    veh, drv, ppl, cat = by('vehicles'), by('drivers'), by('people'), by('tripCategories')
+    lookup = lookup if lookup is not None else _card_lookup(state)
+    veh, drv, ppl, cat = (lookup[e] for e in ('vehicles', 'drivers', 'people', 'tripCategories'))
     pax = []
-    for p in state.get('tripPassengers', []):
-        if p.get('tripId') == trip['id']:
-            nm = (ppl.get(p.get('personId')) or {}).get('name') or p.get('freeText')
-            if nm:
-                pax.append(nm)
+    for p in lookup['tripPassengers'].get(trip['id'], []):
+        nm = (ppl.get(p.get('personId')) or {}).get('name') or p.get('freeText')
+        if nm:
+            pax.append(nm)
     req = (ppl.get(trip.get('requesterId')) or {}).get('name')
     if req and req not in pax:
         pax.insert(0, req)
@@ -461,6 +470,9 @@ class GatewaySync:
         self.stat = {'lastOk': None, 'lastError': None, 'lastErrorKey': '', 'lastErrorVars': {}, 'lastTry': None, 'waiting': 0, 'oldestSeconds': 0, 'late': False, 'applied': 0}
         self._stop = False
         self._thread = None
+        self._card_target = None
+        self._card_snapshot = None
+        self._card_checked = 0
 
     # -- control
     def start(self):
@@ -583,14 +595,29 @@ class GatewaySync:
             self.stat['lastErrorVars'] = {}
 
     def push_cards(self):
-        st = self.store.state()
-        cards, sigs = [], {}
         cutoff = (domain.business_now() - timedelta(days=45)).date().isoformat()
+        # Saved addresses can change without changing trips.db. Cached receipts
+        # belong to one mailbox, never to the new address/tenant/credential.
+        target = hashlib.sha256(json.dumps([self.secrets.url, self.secrets.data.get('tenantId'),
+                                           self.secrets.data.get('officeSecret')]).encode()).hexdigest()
+        if target != self._card_target:
+            self.pushed.clear()
+            self.removed.clear()
+            self._card_snapshot = None
+            self._card_target = target
+        def snapshot(version):
+            return (version, cutoff, frozenset(self.release), len(self.pushed), len(self.removed))
+        version = self.store.version()
+        if self._card_snapshot == snapshot(version) and time.monotonic() - self._card_checked < 3600:
+            return
+        st = self.store.gateway_state(cutoff)
+        lookup = _card_lookup(st)
+        cards, sigs = [], {}
         for t in st.get('trips', []):
             h = t.get('linkHash')
             if not h or str(t.get('date', '')) < cutoff:
                 continue
-            body = card_for(st, t)
+            body = card_for(st, t, lookup)
             cancelled = t.get('status') == 'cancelled'
             exp = _epoch(t.get('linkExpiry')) or int(time.time()) + 7 * 86400
             rel = h in self.release
@@ -620,6 +647,8 @@ class GatewaySync:
                 cl.put_cards(batch)
                 self.pushed.update({c['tokenHash']: sigs[c['tokenHash']] for c in batch})
                 self.release -= {c['tokenHash'] for c in batch if c.get('releaseDevice')}
+        self._card_snapshot = snapshot(st['version'])
+        self._card_checked = time.monotonic()
 
     def pull(self):
         cl = self.client()

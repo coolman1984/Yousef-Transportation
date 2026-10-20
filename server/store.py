@@ -253,13 +253,39 @@ class Store:
         return None
 
     # ------------------------------------------------------------ read
+    def _read_entity(self, entity, where='deleted=0', params=()):
+        """Read public fields in column order, avoiding repeated sqlite Row name scans.
+        Called with the store lock held; entity/where are internal SQL only.
+        """
+        table, _, fields = ENTITIES[entity]
+        columns = ','.join(['id', 'ver'] + [col for _, col, _, _ in fields])
+        out = []
+        for row in self.conn.execute(f'SELECT {columns} FROM {table} WHERE {where} ORDER BY rowid', params):
+            values = tuple(row)
+            item = {'id': values[0], 'ver': values[1]}
+            for (js, _, kind, _), value in zip(fields, values[2:]):
+                if value is not None:
+                    item[js] = _out(kind, value)
+            out.append(item)
+        return out
+
+    def gateway_state(self, cutoff):
+        """Only the rows needed to publish current driver cards, in one snapshot."""
+        with self.lock:
+            rows = {e: self._read_entity(e) for e in ('vehicles', 'drivers', 'people', 'tripCategories')}
+            rows['trips'] = self._read_entity('trips', 'deleted=0 AND date>=? AND (link_hash IS NOT NULL OR old_links IS NOT NULL)', (cutoff,))
+            rows['tripPassengers'] = self._read_entity('tripPassengers',
+                'deleted=0 AND trip_id IN (SELECT id FROM trips WHERE deleted=0 AND date>=? AND link_hash IS NOT NULL)', (cutoff,))
+            return {**rows, 'version': self.version()}
+
     def state(self, scopes=None):
         """Everything the page needs, one list per entity. scopes: only trips of these category ids (None = all);
         rows that belong to a trip follow their trip."""
         with self.lock:
             rows = {}
-            for e, (table, _, _) in ENTITIES.items():
-                rows[e] = [self._row_js(e, r) for r in self.conn.execute(f'SELECT * FROM {table} WHERE deleted=0 ORDER BY rowid')]
+            for e in ENTITIES:
+                rows[e] = self._read_entity(e)
+            settings_ver = {r['id']: r['ver'] for r in rows['settings']}
             settings = {r['id']: r.get('value') for r in rows.pop('settings')}
             if scopes is not None:
                 allowed = set(scopes)
@@ -269,7 +295,6 @@ class Store:
                 for e in TRIP_CHILDREN:
                     rows[e] = [r for r in rows[e] if r.get('tripId') in ids]
             initialized = self.conn.execute("SELECT 1 FROM meta WHERE key='initialized'").fetchone() is not None
-            settings_ver = {r[0]: r[1] for r in self.conn.execute('SELECT id, ver FROM settings WHERE deleted=0')}
             return {'settings': settings, 'settingsVer': settings_ver, **rows, 'initialized': initialized,
                     'version': int(self.conn.execute("SELECT value FROM meta WHERE key='data_version'").fetchone()[0])}
 

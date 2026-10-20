@@ -186,8 +186,9 @@ class System:
         for e, (table, _, fields) in ENTITIES.items():
             for r in self.store.conn.execute(f'SELECT * FROM {table} ORDER BY rowid'):
                 s, n = {}, {}
+                row = self.store._row_js(e, r)
                 for js, col, kind, _ in fields:
-                    v = self.store._row_js(e, r).get(js)
+                    v = row.get(js)
                     if v is not None:
                         s[js] = v
                 op = {'e': e, 'id': r['id'], 'op': 'insert', 's': s, 'x': bool(r['deleted']), 'noaudit': True,

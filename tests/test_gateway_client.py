@@ -779,3 +779,47 @@ class AutoReopenTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class BatchCompatibilityTest(unittest.TestCase):
+    def test_ack_splits_uuids_for_the_deployed_worker(self):
+        from unittest.mock import Mock
+        client = G.Client('http://127.0.0.1:1', 'synthetic')
+        client.call = Mock(return_value={'ok': True})
+        events = [str(uuid.UUID(int=i + 1, version=4)) for i in range(200)]
+        photos = [str(uuid.UUID(int=i + 1001, version=4)) for i in range(100)]
+        client.ack(events, photos)
+        sent_e, sent_p = [], []
+        for args in client.call.call_args_list:
+            body = args.args[2]
+            self.assertLessEqual(len(body['events']), 80)
+            self.assertLessEqual(len(body['photos']), 80)
+            sent_e.extend(body['events'])
+            sent_p.extend(body['photos'])
+        self.assertEqual(sent_e, events)
+        self.assertEqual(sent_p, photos)
+
+    def test_partial_card_upload_keeps_successful_batches(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        today = G.domain.business_now().date().isoformat()
+        trips = [{'id': str(i), 'date': today, 'linkHash': hashlib.sha256(str(i).encode()).hexdigest(),
+                  'linkExpiry': '2099-01-01T00:00:00Z'} for i in range(90)]
+        store = Mock()
+        store.state.return_value = {'trips': trips}
+        store.version.return_value = 1
+        journal = Mock()
+        journal.meta.return_value = None
+        sync = G.GatewaySync(store, journal, 'test', SimpleNamespace(configured=True), Mock())
+        cl = Mock()
+        cl.put_cards.side_effect = [None, G.GatewayError('offline')]
+        sync.client = lambda: cl
+        with self.assertRaises(G.GatewayError):
+            sync.push_cards()
+        successful = cl.put_cards.call_args_list[0].args[0]
+        self.assertLessEqual(len(successful), 40, 'works within old worker D1 query/parameter limits')
+        self.assertEqual(set(sync.pushed), {c['tokenHash'] for c in successful})
+        cl.put_cards.reset_mock(side_effect=True)
+        sync.push_cards()
+        resent = [c['tokenHash'] for args in cl.put_cards.call_args_list for c in args.args[0]]
+        self.assertFalse(set(resent) & set(sync.pushed.keys() & {c['tokenHash'] for c in successful}))

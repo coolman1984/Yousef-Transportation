@@ -3,6 +3,8 @@
 
 ## Current work queue — first sale
 
+- [x] D1 batch compatibility (2026-10-20): 100-parameter limit, batched card writes, duplicate capacity accounting, office batches safe against deployed worker, partial-upload retry. Test map: `gateway/test/gateway.test.js`, `test_gateway_client.BatchCompatibilityTest`. Not deployed.
+
 - [x] DB recovery/retry regressions (2026-10-20, L2/L4): epoch before recovery; failed activity flush remains queued. Test map: `test_unit.NodeSafetyTest`, `test_unit.ActivityRetryTest`. Local source checks; field recovery drill remains pending.
 
 - [x] Mailbox auto-connect, one mailbox per install (2026-10-19): fresh install registers itself; legacy `OFFICE_SECRET` and an existing `gateway.json` stay; paired PCs share the mailbox over LAN sync; training does not register. Test map: `gateway/test/gateway.test.js` (register, rate limit, isolation, legacy, caps, migration), `tests/test_gateway_client.py` (`AutoConnectTest`, `TenantClientTest`). Not deployed, not released.

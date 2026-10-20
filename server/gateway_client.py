@@ -342,7 +342,12 @@ class Client:
         return self.call('GET', f'/office/photo/{uid}', raw=True)
 
     def ack(self, events, photos):
-        return self.call('POST', '/office/ack', {'events': list(events), 'photos': list(photos)})
+        events, photos = list(events), list(photos)
+        result = None
+        # Old deployed workers bind tenant + every UUID in one ownership query.
+        for i in range(0, max(len(events), len(photos)), 80):
+            result = self.call('POST', '/office/ack', {'events': events[i:i + 80], 'photos': photos[i:i + 80]})
+        return result
 
 
 # --------------------------------------------------------------------------- cards and events
@@ -609,10 +614,12 @@ class GatewaySync:
                 self.removed.update(gone[i:i + 20])
         if cards:
             cl = self.client()
-            for i in range(0, len(cards), 100):
-                cl.put_cards(cards[i:i + 100])
-            self.pushed.update(sigs)
-            self.release -= {c['tokenHash'] for c in cards if c.get('releaseDevice')}
+            # <=40 also fits the deployed worker's one-statement-per-card path.
+            for i in range(0, len(cards), 40):
+                batch = cards[i:i + 40]
+                cl.put_cards(batch)
+                self.pushed.update({c['tokenHash']: sigs[c['tokenHash']] for c in batch})
+                self.release -= {c['tokenHash'] for c in batch if c.get('releaseDevice')}
 
     def pull(self):
         cl = self.client()

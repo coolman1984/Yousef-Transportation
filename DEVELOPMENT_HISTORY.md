@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## D1 batch compatibility and partial delivery (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689`. Split card lookups, acknowledgement ownership checks and phone receipt lookups below D1's 100 bound parameters; the local D1 stand-in now enforces that limit. Batch card upserts (14 rows, 98 parameters) with the existing tenant/revocation checks and deduplicate hashes for capacity accounting. Office card uploads use 40-card requests and acknowledgements use at most 80 UUIDs of each kind, so they also work with the deployed old worker. Remember each successful upload batch immediately; a later failure only retries unfinished cards. Checks: gateway 41/41 pass; `test_gateway_client.BatchCompatibilityTest` passes. Schema, signatures and request/response shapes unchanged. Full cross-version check follows. No deploy/push.
+
 ## Database recovery and activity retry (2026-10-20)
 
 Branch `perf/db-sync-codex`, based on `0333689` (v1.1.8). Launch gates L2/L4: switch journal epoch before recovering tables that are ahead of a restored journal, so recovery never reuses an old change number. Keep buffered activity when its journal write fails. Regression tests reproduce both failures on the original code; recovery now also accepts the original lost record from a peer. Checks: `test_unit.NodeSafetyTest`, `test_unit.ActivityRetryTest` pass. Full requested suites and benchmark comparison follow in this branch. Local only; no deployment, Windows recovery drill or pilot acceptance claimed. Lesson: recovery must obey the same unique-history rules as normal writes.

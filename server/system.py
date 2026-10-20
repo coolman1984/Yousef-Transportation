@@ -91,13 +91,15 @@ class System:
         have = self.journal.vv()
         lost = {r: c for r, c in written.items() if c > have.get(r, 0)}
         folded = replica_markers(self.store.conn)
-        if any(c > have.get(o, 0) for o, c in folded.items()):
-            self._recover_tables_ahead()
+        # Recovery itself writes a changeset. Change epoch BEFORE it can reuse a
+        # sequence whose original history may still exist on another PC.
         if lost.get(self.node.replica):
             self.node.new_epoch(f'journal rolled back (had {lost[self.node.replica]}, found {have.get(self.node.replica, 0)})')
             self.journal.alert('rollback', 'This PC\'s change history was older than expected (restored or damaged journal). It continues '
                                'with a new numbering; its missing changes come back from the other PCs if they received them.', self.node.id)
             self.log('Journal rollback detected - new epoch ' + self.node.replica)
+        if any(c > have.get(o, 0) for o, c in folded.items()):
+            self._recover_tables_ahead()
 
     def _recover_tables_ahead(self):
         """trips.db contains changes the (restored) journal no longer has. Rebuild the tables from the journal and save

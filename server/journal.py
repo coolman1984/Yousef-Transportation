@@ -347,7 +347,11 @@ class Journal:
             if not self._activity or not self.node.exists:
                 return
             events, self._activity = self._activity, []
-            self.write('log', events, actor=events[0]['user'], ip=events[0]['ip'], label=f'User activity ({len(events)})')
+            try:
+                self.write('log', events, actor=events[0]['user'], ip=events[0]['ip'], label=f'User activity ({len(events)})')
+            except Exception:
+                self._activity = events + self._activity
+                raise
 
     # ------------------------------------------------------------ appending (local and received)
     def _append(self, recs, via):

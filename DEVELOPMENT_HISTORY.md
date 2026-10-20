@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Database recovery and activity retry (2026-10-20)
+
+Branch `perf/db-sync-codex`, based on `0333689` (v1.1.8). Launch gates L2/L4: switch journal epoch before recovering tables that are ahead of a restored journal, so recovery never reuses an old change number. Keep buffered activity when its journal write fails. Regression tests reproduce both failures on the original code; recovery now also accepts the original lost record from a peer. Checks: `test_unit.NodeSafetyTest`, `test_unit.ActivityRetryTest` pass. Full requested suites and benchmark comparison follow in this branch. Local only; no deployment, Windows recovery drill or pilot acceptance claimed. Lesson: recovery must obey the same unique-history rules as normal writes.
+
 ## Photo copies between PCs stay the original bytes (2026-10-19)
 
 **What/why:** On main `e5d5ba3` the Test and build run failed once in `test_multinode.T00_DefinitionOfSuccess.test_acceptance_story`: the photo file on disk was the uploaded bytes plus extra bytes. The same commit's `v1.1.7` tag run passed. Driver odometer photos are evidence, so a longer file is a damaged photo.

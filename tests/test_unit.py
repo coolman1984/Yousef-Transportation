@@ -359,6 +359,14 @@ class NodeSafetyTest(unittest.TestCase):
             shutil.rmtree(d)
 
     def test_rolled_back_journal_gets_new_epoch(self):
+        self._assert_rolled_back_journal_gets_new_epoch()
+
+    def test_rolled_back_journal_gets_new_epoch_without_written_note(self):
+        from unittest.mock import patch
+        with patch.object(Node, 'record_written', side_effect=OSError('note unavailable')):
+            self._assert_rolled_back_journal_gets_new_epoch()
+
+    def _assert_rolled_back_journal_gets_new_epoch(self):
         from system import System
         d = tempfile.mkdtemp()
         try:

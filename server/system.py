@@ -89,8 +89,11 @@ class System:
         or lost writes: continue under a new epoch so no change number is ever used twice."""
         written = self.node.last_written()
         have = self.journal.vv()
-        lost = {r: c for r, c in written.items() if c > have.get(r, 0)}
         folded = replica_markers(self.store.conn)
+        # The best-effort note can fail even though trips.db committed the write.
+        # Its fold markers are independent evidence of sequences already used.
+        known = {r: max(written.get(r, 0), folded.get(r, 0)) for r in written.keys() | folded.keys()}
+        lost = {r: c for r, c in known.items() if c > have.get(r, 0)}
         # Recovery itself writes a changeset. Change epoch BEFORE it can reuse a
         # sequence whose original history may still exist on another PC.
         if lost.get(self.node.replica):

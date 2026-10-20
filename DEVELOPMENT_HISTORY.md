@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Recovery when the separate note file was unavailable (2026-10-20)
+
+Follow-up on `perf/db-sync-codex`: a note write is deliberately best effort, so an ahead-of-journal marker in trips.db must also trigger a new epoch. Reproduced with every note write failing, then restored the old journal. Startup now combines both durable sources of used sequence numbers before recovery. Test map: `NodeSafetyTest.test_rolled_back_journal_gets_new_epoch_without_written_note`; the original lost change can still be accepted from a peer. No schema/wire changes.
+
 ## Smaller database snapshots and idle gateway cycles (2026-10-20)
 
 Branch `perf/db-sync-codex`, baseline `0333689`. Read public columns by position, reuse already-read settings versions, and convert each bootstrap row once. Gateway snapshots omit history/photos and old trips; shared card lookups are built once. Idle cycles check only data version before polling the inbox, with cutoff, pending device releases, explicit cache clears and mailbox identity invalidating the snapshot. No HTTP polling interval change. `CardSnapshotTest` verifies public field/type/scope compatibility, lookup edits, mailbox changes and releases. Local intermediate benchmark: full state median 32.990 → 14.938 ms; steady idle ~64–77 → ~1–2 ms, SQLite statements 16 → 1. Card SQL batching reduces D1 initial publication 328 → 66 statements, with more smaller HTTP requests for old-worker compatibility. Durable card receipts across restart deliberately deferred: republishing preserves repair after gateway data loss. Full final measurements follow.

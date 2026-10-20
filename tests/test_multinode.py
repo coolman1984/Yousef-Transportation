@@ -6,10 +6,13 @@ import json
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
+from types import SimpleNamespace
 
 from harness import ADMIN, ApiError, Server, TcpProxy, make_authority, pair, wait_until
+import sync  # noqa: E402  harness puts server/ on the path first
 
 
 FIELD = {'name': 'no', 'description': 'notes', 'responsible': 'purpose', 'capacity': 'seq'}  # neutral names used by the tests below
@@ -200,9 +203,11 @@ class T00_DefinitionOfSuccess(Base):
             self.assertEqual((s1['description'], s1['capacity']), ('painted', 44))
             self.assertEqual(get_area(c, 'S2')['responsible'], 'Ali')
             self.assertEqual(s1['photos'][0]['src'], up['src'])
-        for s in self.servers:  # the photo reached every PC and matches
-            wait_until(lambda: os.path.exists(os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src']))), 60, what='photo copied')
-            self.assertEqual(open(os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src'])), 'rb').read(), img)
+        for s in self.servers:  # the photo reached every PC and matches; wait for the full length so a copy still arriving is not read early
+            path = os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src']))
+            wait_until(lambda path=path: os.path.isfile(path) and os.path.getsize(path) == len(img), 60, what='photo copied')
+            with open(path, 'rb') as fh:
+                self.assertEqual(fh.read(), img)
         perms = [json.dumps(sorted((u['username'], u['perms'], u['active']) for u in c.get('/api/users')['users']), sort_keys=True) for c in self.clients]
         self.assertEqual(len(set(perms)), 1, 'user permissions agree')
         nodes = {r['node_name'] for r in self.clients[0].get('/api/audit?limit=1000')['rows']}
@@ -569,8 +574,22 @@ class T19_Crashes(Base):
         logf = os.path.join(self.servers[1].data_dir, 'logs', time.strftime('sync-%Y-%m.jsonl'))
         start = os.path.getsize(logf) if os.path.exists(logf) else 0
         self.plug(0)
-        wait_until(lambda: self.clients[1].call('GET', up['src']) == data, 60, what='file copied')
-        self.assertEqual(hashlib.sha256(open(final, 'rb').read()).hexdigest(), sha)
+
+        def copied_and_logged():
+            if self.clients[1].call('GET', up['src']) != data:
+                return False
+            if not os.path.exists(logf):
+                return False
+            with open(logf, 'rb') as fh:
+                raw = fh.read()[start:]
+            logged = [json.loads(x) for x in raw.decode('utf-8').splitlines() if x.strip()]
+            # the file is visible before the sync round is written; wait for that line too
+            got_file = any(e.get('event') == 'file' and e.get('path') == up['src'] and e.get('result') == 'ok' for e in logged)
+            return got_file and any(e.get('files') for e in logged)
+
+        wait_until(copied_and_logged, 60, what='file copied')
+        with open(final, 'rb') as fh:
+            self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), sha)
         self.assertEqual(os.listdir(part_dir), [])
         with open(logf, 'rb') as f:  # the download continued: only the missing 600 kB travelled
             events = [json.loads(x) for x in f.read()[start:].decode('utf-8').splitlines() if x.strip()]
@@ -1292,6 +1311,267 @@ class T38_OpenJoin(unittest.TestCase):
         self.assertEqual((r1['request'], r1['secret']), (r2['request'], r2['secret']))
         st3, r3 = self._sync_post('/sync/join', {**ident, 'pub': '33' * 32})
         self.assertEqual(st3, 400, r3)
+
+
+class TPhotoIntegrity(unittest.TestCase):
+    """A photo copied from another PC must be the bytes that were uploaded, including when two PCs send it at once."""
+
+    def _service(self, root):
+        svc = sync.SyncService.__new__(sync.SyncService)
+        svc.uploads = os.path.join(root, 'uploads')
+        os.makedirs(svc.uploads)
+        svc.lock = threading.RLock()
+        svc.fetch_locks = {}
+        svc.missing = {}
+        svc.missing_checked = (None, 0)
+        svc.sync_logger = SimpleNamespace(write=lambda entry: None)
+        svc.journal = SimpleNamespace(alert=lambda *a, **k: None)
+        return svc
+
+    def _photo(self, n=4000):
+        data = b'\xff\xd8\xff\xe0' + os.urandom(n)
+        sha = hashlib.sha256(data).hexdigest()
+        return data, sha, f'/files/cas/{sha}.jpg'
+
+    def test_two_peers_cannot_append_extra_bytes(self):
+        """The failure seen on main: the stored photo started with the original and then had extra bytes.
+        Two copies used to share one temporary file; the slower one kept writing after the checksum had passed."""
+        root = tempfile.mkdtemp(prefix='photo-integrity-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        final = svc.file_path(src)
+        state = {'n': 0}
+        gate = threading.Lock()
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            with gate:
+                state['n'] += 1
+                mine = state['n']
+            if mine == 1:
+                deadline = time.time() + 2
+                while time.time() < deadline and state['n'] < 2:
+                    time.sleep(0.01)
+                if state['n'] >= 2:
+                    deadline = time.time() + 2
+                    while time.time() < deadline:
+                        if os.path.isfile(final) and os.path.getsize(final) >= len(data):
+                            sink.write(b'EXTRA-BYTES')
+                            sink.flush()
+                            os.fsync(sink.fileno())
+                            return SimpleNamespace(status=200), 11
+                        time.sleep(0.01)
+                sink.write(data)
+                sink.flush()
+                os.fsync(sink.fileno())
+                return SimpleNamespace(status=200), len(data)
+            sink.write(data)
+            sink.flush()
+            os.fsync(sink.fileno())
+            return SimpleNamespace(status=200), len(data)
+
+        conn = SimpleNamespace(request=request, close=lambda: None)
+        errors = []
+
+        def run():
+            try:
+                svc.fetch_file(conn, src, sha, len(data))
+            except Exception as e:  # the losing copy may notice the file was already renamed
+                errors.append(e)
+
+        threads = [threading.Thread(target=run) for _ in range(2)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        self.assertTrue(os.path.isfile(final), errors)
+        with open(final, 'rb') as f:
+            self.assertEqual(f.read(), data)
+        again = svc.fetch_file(conn, src, sha, len(data))  # a retry must not write the photo a second time
+        self.assertTrue(again)
+        with open(final, 'rb') as f:
+            self.assertEqual(f.read(), data)
+
+    def test_ignored_range_does_not_concatenate(self):
+        """A PC that answers with the whole photo instead of the missing tail must not stick that photo on the end."""
+        root = tempfile.mkdtemp(prefix='photo-range-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        part_dir = os.path.join(svc.uploads, '.incoming')
+        os.makedirs(part_dir)
+        with open(os.path.join(part_dir, sha + '.part'), 'wb') as f:
+            f.write(data[:1000])
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            self.assertEqual(headers.get('Range'), 'bytes=1000-')
+            sink.write(data)  # the whole photo, status 200: the range was ignored
+            sink.flush()
+            os.fsync(sink.fileno())
+            return SimpleNamespace(status=200), len(data)
+
+        self.assertTrue(svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, sha, len(data)))
+        with open(svc.file_path(src), 'rb') as f:
+            self.assertEqual(f.read(), data)
+
+    def test_resume_keeps_only_the_tail(self):
+        root = tempfile.mkdtemp(prefix='photo-tail-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        part_dir = os.path.join(svc.uploads, '.incoming')
+        os.makedirs(part_dir)
+        with open(os.path.join(part_dir, sha + '.part'), 'wb') as f:
+            f.write(data[:1000])
+        seen = {}
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            seen['range'] = headers.get('Range')
+            tail = data[1000:]
+            sink.write(tail)
+            sink.flush()
+            os.fsync(sink.fileno())
+            return SimpleNamespace(status=206), len(tail)
+
+        self.assertTrue(svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, sha, len(data)))
+        self.assertEqual(seen['range'], 'bytes=1000-')
+        with open(svc.file_path(src), 'rb') as f:
+            self.assertEqual(f.read(), data)
+
+    def test_damaged_copy_is_fetched_again(self):
+        root = tempfile.mkdtemp(prefix='photo-heal-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        final = svc.file_path(src)
+        os.makedirs(os.path.dirname(final))
+        with open(final, 'wb') as f:
+            f.write(data + b'EXTRA')
+        svc.store = SimpleNamespace(version=lambda: 1, referenced_files=lambda: [src],
+                                    file_info=lambda path: {'sha256': sha, 'size': len(data)})
+        self.assertEqual(svc.missing_files(), [src])
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            self.assertFalse(headers)  # the damaged copy is not a place to resume from
+            sink.write(data)
+            sink.flush()
+            os.fsync(sink.fileno())
+            return SimpleNamespace(status=200), len(data)
+
+        self.assertTrue(svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, sha, len(data)))
+        with open(final, 'rb') as f:
+            self.assertEqual(f.read(), data)
+        svc.missing_checked = (None, 0)
+        self.assertEqual(svc.missing_files(), [])
+
+    def test_damaged_photo_is_not_shown(self):
+        """What the office opens must not be the photo plus whatever was appended after it."""
+        s = Server('solo').start()
+        self.addCleanup(s.cleanup)
+        c = make_authority(s)
+        img = b'\xff\xd8\xff\xe0' + b'odometer' * 500
+        up = c.call('POST', '/api/upload?name=odo.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
+        path = os.path.join(s.data_dir, 'uploads', 'cas', os.path.basename(up['src']))
+        with open(path, 'ab') as f:
+            f.write(b'EXTRA')
+        body = c.call('GET', up['src'])
+        self.assertIn(b'<svg', body)
+        self.assertNotIn(b'EXTRA', body)
+        self.assertNotEqual(body, img + b'EXTRA')
+
+    def test_upload_address_cannot_escape_the_folder(self):
+        """A photo address is only cas/<64 hex><extension>. Anything else is refused before a file is opened."""
+        import http.client
+        s = Server('solo').start()
+        self.addCleanup(s.cleanup)
+        c = make_authority(s)
+        img = b'\xff\xd8\xff\xe0' + b'odometer-ok'
+        up = c.call('POST', '/api/upload?name=odo.jpg', raw=img, headers={'Content-Type': 'application/octet-stream'})
+        self.assertRegex(up['src'], r'^/files/cas/[0-9a-f]{64}\.jpg$')
+        self.assertEqual(c.call('GET', up['src']), img)
+
+        marker = b'OUTSIDE-UPLOADS-MARKER'
+        for folder in (s.root, s.data_dir, os.path.join(s.data_dir, 'uploads')):
+            with open(os.path.join(folder, 'secret.txt'), 'wb') as f:
+                f.write(marker)
+        secret = os.path.join(s.root, 'secret.txt')
+        cookie = '; '.join(f'{ck.name}={ck.value}' for ck in c.jar)
+        sha = 'ab' * 32
+
+        def raw(path):
+            conn = http.client.HTTPConnection('127.0.0.1', s.port, timeout=20)
+            try:
+                conn.putrequest('GET', path)
+                conn.putheader('Cookie', cookie)
+                conn.endheaders()
+                response = conn.getresponse()
+                return response.status, response.read()
+            finally:
+                conn.close()
+
+        self.assertEqual(raw(up['src']), (200, img))
+        missing, missing_body = raw(f'/files/cas/{sha}.jpg')
+        self.assertEqual(missing, 404)
+        self.assertNotIn(marker, missing_body)
+
+        attacks = [
+            '/files/../secret.txt',
+            '/files/../../secret.txt',
+            '/files/..%2fsecret.txt',
+            '/files/%2e%2e/secret.txt',
+            '/files/%2e%2e%2fsecret.txt',
+            '/files/%2e%2e%5csecret.txt',
+            '/files/cas/../secret.txt',
+            '/files/cas/../../secret.txt',
+            '/files/cas/%2e%2e/%2e%2e/secret.txt',
+            '/files/cas/%2e%2e%2f%2e%2e%2fsecret.txt',
+            '/files/cas/%2e%2e%2fsecret.txt',
+            '/files/' + secret,
+            f'/files/cas/{sha}.jpg/../../secret.txt',
+            f'/files/cas/{sha}.jpg%00.png',
+            f'/files/cas/{sha}.jpg%2f..%2fsecret.txt',
+            f'/files/cas/{sha}%2f..%2fsecret.txt',
+            '/files/%252e%252e%252fsecret.txt',
+            '/files/cas/' + ('A' * 64) + '.jpg',
+            '/files/cas/not-a-hash.jpg',
+            f'/files/cas/{sha}.exe',
+            f'/files/cas/{sha}.jpg%5c..%5csecret.txt',
+            '/files/\\..\\secret.txt',
+            '/files/cas/..\\..\\secret.txt',
+            '/files/cas/' + ('g' * 64) + '.jpg',
+            '/files//etc/passwd',
+            f'/files/cas/{sha}.JPG',
+            up['src'] + '/../../secret.txt',
+            up['src'].replace('/files/cas/', '/files/cas/%2e%2e/'),
+        ]
+        for path in attacks:
+            code, body = raw(path)
+            self.assertEqual(code, 400, path)
+            self.assertNotIn(marker, body, path)
+            self.assertNotIn(img, body, path)
+
+    def test_checksum_name_cannot_escape_the_folder(self):
+        """The temporary copy is named with the checksum. A checksum that is not 64 hex digits is not a path."""
+        root = tempfile.mkdtemp(prefix='photo-sha-')
+        self.addCleanup(lambda: shutil.rmtree(root, ignore_errors=True))
+        svc = self._service(root)
+        data, sha, src = self._photo()
+        bad = '../' + ('ab' * 30) + 'a'  # 64 characters, but it leaves the folder if used as a name
+        self.assertEqual(len(bad), 64)
+
+        def request(method, path, body=None, raw=False, headers=None, sink=None):
+            sink.write(data)
+            sink.flush()
+            return SimpleNamespace(status=200), len(data)
+
+        with self.assertRaises(sync.SyncError):
+            svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, bad, len(data))
+        written = [os.path.join(dirpath, name) for dirpath, _, names in os.walk(root) for name in names]
+        self.assertEqual(written, [])
+        # a real checksum still copies
+        self.assertTrue(svc.fetch_file(SimpleNamespace(request=request, close=lambda: None), src, sha, len(data)))
+        with open(svc.file_path(src), 'rb') as f:
+            self.assertEqual(f.read(), data)
 
 
 if __name__ == '__main__':

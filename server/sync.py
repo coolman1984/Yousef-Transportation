@@ -29,6 +29,7 @@ import http.client
 import json
 import os
 import secrets
+import shutil
 import socket
 import ssl
 import threading
@@ -103,6 +104,36 @@ def local_ips():
     except OSError:
         pass
     return sorted(ip for ip in ips if not ip.startswith('127.'))
+
+
+def _hash_file(path):
+    """SHA-256 and length of a file. The length is part of the result so a byte appended during the read cannot pass."""
+    h = hashlib.sha256()
+    n = 0
+    with open(path, 'rb') as f:
+        for block in iter(lambda: f.read(1 << 20), b''):
+            h.update(block)
+            n += len(block)
+    return h.hexdigest(), n
+
+
+def _photo_sha(sha):
+    """A checksum used as a file name: 64 lowercase hex digits, nothing else (no slash, no ..)."""
+    if isinstance(sha, str) and len(sha) == 64 and all(c in '0123456789abcdef' for c in sha):
+        return sha
+    raise SyncError('A photo checksum was not a valid name, so it was not saved.')
+
+
+def _file_ok(path, sha, size):
+    """True when the file is exactly the photo we expect (name's checksum, and the recorded length when we have one)."""
+    if not sha or not os.path.isfile(path):
+        return False
+    if size is not None and os.path.getsize(path) != size:
+        return False
+    digest, n = _hash_file(path)
+    if digest != sha:
+        return False
+    return size is None or n == size
 
 
 def mac(key, seq, method, path, body):
@@ -330,6 +361,7 @@ class SyncService:
         self.stop = False
         self.missing = {}  # attachment path -> {'tries', 'last_error'}
         self.missing_checked = (None, 0)
+        self.fetch_locks = {}  # sha256 -> lock; two peers must not write the same photo at once
         self.journal.listeners.append(lambda recs: self.kick())
         self.sync_logger = SyncLog(os.path.join(system.data_dir, 'logs'))
 
@@ -612,10 +644,20 @@ class SyncService:
         found = []
         for p in sorted(self.store.referenced_files()):
             try:
-                if not os.path.isfile(self.file_path(p)):
-                    found.append(p)
+                fp = self.file_path(p)
             except ValueError:  # a record that points outside the uploads folder: never fetched, never stops the others
                 continue
+            if not os.path.isfile(fp):
+                found.append(p)
+                continue
+            size = self.expected_hash(p)[1]
+            # A photo that gained or lost bytes (two PCs copied it at the same time) is not evidence: copy it again.
+            try:
+                wrong_length = size is not None and os.path.getsize(fp) != size
+            except OSError:
+                wrong_length = True
+            if wrong_length:
+                found.append(p)
         with self.lock:
             self.missing = {p: self.missing.get(p, {'tries': 0}) for p in found}
             self.missing_checked = (v, time.time())
@@ -659,51 +701,127 @@ class SyncService:
                     break  # the connection is gone; what was received stays in the .part file
         return done
 
+    def _fetch_lock(self, sha):
+        with self.lock:
+            return self.fetch_locks.setdefault(sha, threading.Lock())
+
     def fetch_file(self, c, src, sha, size):
-        """Downloads one file into uploads/.incoming/<sha>.part (resuming), verifies it and moves it into place."""
+        """Copy one photo into the uploads folder.
+
+        Two connections (this PC talks to every other PC at once) used to append into the same
+        temporary file. One of them checked the checksum and renamed that file into place while the
+        other still had it open, so the extra bytes landed on the photo everyone then opened.
+        This PC now copies a photo on one connection at a time, into its own temporary file, and
+        only renames it into place after the checksum matches and every write to it is finished.
+        """
+        sha = _photo_sha(sha)  # the temporary file name is this checksum; refuse anything that is not 64 hex digits
         final = self.file_path(src)
+        with self._fetch_lock(sha):
+            if _file_ok(final, sha, size):
+                part = os.path.join(self.uploads, '.incoming', sha + '.part')
+                if os.path.isfile(part):  # a finished photo does not need a leftover piece
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+                return True  # already stored, including a retry of the same photo
+            return self._fetch_file_locked(c, src, sha, size, final)
+
+    def _fetch_file_locked(self, c, src, sha, size, final):
         inc = os.path.join(self.uploads, '.incoming')
         os.makedirs(inc, exist_ok=True)
         part = os.path.join(inc, sha + '.part')
-        have = os.path.getsize(part) if os.path.exists(part) else 0
-        if size is not None and have > size:
+        have = os.path.getsize(part) if os.path.isfile(part) else 0
+        if have and size is not None and have > size:
             os.remove(part)
             have = 0
+        if have and _file_ok(part, sha, size):
+            self._publish_photo(part, final, sha, size)
+            self.sync_logger.write({'event': 'file', 'path': src, 'bytes': size or have, 'result': 'ok'})
+            return True
+        if have and size is not None and have == size:
+            os.remove(part)  # the right length, but not this photo
+            have = 0
+        tmp = os.path.join(inc, sha + '.' + secrets.token_hex(8) + '.tmp')
         headers = {'Range': f'bytes={have}-'} if have else {}
-        with open(part, 'ab') as f:
-            try:
-                resp, _ = c.request('GET', '/sync/file?path=' + quote(src), raw=True, headers=headers, sink=f)
-            except Offline:
-                c.close()
-                raise
+        try:
+            with open(tmp, 'wb') as f:
+                try:
+                    resp, _ = c.request('GET', '/sync/file?path=' + quote(src), raw=True, headers=headers, sink=f)
+                except Offline:
+                    c.close()
+                    raise
             if resp.status == 204:
                 return False  # that PC does not have it either
-            if have and resp.status == 200:  # the other PC ignored the range: start again
-                f.close()
-                with open(part, 'rb') as g:
-                    g.seek(have)
-                    rest = g.read()
-                with open(part, 'wb') as g:
-                    g.write(rest)
-                    g.flush()
-                    os.fsync(g.fileno())
+            if resp.status not in (200, 206):
+                raise SyncError(f'{src}: unexpected answer {resp.status}')
+            if have and resp.status == 206:
+                self._splice_resume(part, tmp)  # the other PC sent only the missing tail
+            else:
+                # a full copy (the first attempt, or the other PC ignored the range and sent the whole photo)
+                os.replace(tmp, part)
+        finally:
+            if os.path.isfile(tmp):
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+        if not os.path.isfile(part):
+            return False
         total = os.path.getsize(part)
         if size is not None and total < size:
             self.sync_logger.write({'event': 'file', 'path': src, 'result': 'interrupted', 'bytes': total, 'size': size})
             return False  # interrupted - continue next time
-        h = hashlib.sha256()
-        with open(part, 'rb') as f:
-            for block in iter(lambda: f.read(1 << 20), b''):
-                h.update(block)
-        if h.hexdigest() != sha:
-            os.remove(part)
+        if not _file_ok(part, sha, size):
+            try:
+                os.remove(part)
+            except OSError:
+                pass
             self.journal.alert('file', f'A copy of {src} received from another PC was damaged and was thrown away. It will be copied again.',
                                '', 'warning', key=f'file|{src}')
             raise SyncError(f'{src}: checksum mismatch')
-        os.makedirs(os.path.dirname(final), exist_ok=True)
-        os.replace(part, final)
+        self._publish_photo(part, final, sha, size)
         self.sync_logger.write({'event': 'file', 'path': src, 'bytes': total, 'result': 'ok'})
         return True
+
+    def _splice_resume(self, part, addition):
+        """Join the bytes already stored and the new tail into one file, then put that file in place of the part.
+        Neither input is appended to, so a later rename cannot keep a write going on the published photo."""
+        out = part + '.' + secrets.token_hex(4) + '.out'
+        try:
+            with open(part, 'rb') as src, open(addition, 'rb') as add, open(out, 'wb') as dst:
+                shutil.copyfileobj(src, dst)
+                shutil.copyfileobj(add, dst)
+                dst.flush()
+                os.fsync(dst.fileno())
+            os.replace(out, part)
+        finally:
+            if os.path.isfile(out):
+                try:
+                    os.remove(out)
+                except OSError:
+                    pass
+
+    def _publish_photo(self, part, final, sha, size):
+        """Make the checked file the one the office opens. The temporary name is gone before this returns,
+        and the check is repeated after the rename so a damaged photo is not left in its place."""
+        os.makedirs(os.path.dirname(final), exist_ok=True)
+        if _file_ok(final, sha, size):
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return
+        try:
+            os.replace(part, final)
+        except OSError as e:
+            raise SyncError('A photo could not be replaced because the file is in use. It will be copied again.') from e
+        if not _file_ok(final, sha, size):
+            try:
+                os.remove(final)
+            except OSError:
+                pass
+            raise SyncError('A photo changed while it was being stored. It will be copied again.')
 
     # ------------------------------------------------------------ server side
     def handle(self, method, path, headers, body, ip):

@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+# Next (not released)
+
+- A photo copied from another office PC is kept only when it is the same length and the same checksum as the original. If two PCs send that photo at the same time, the saved file does not grow extra bytes. A damaged copy is not shown; the screen says the photo is still being copied, and the PC copies it again.
+
 # Trip Orders 1.1.7
 
 - **Mailbox connects by itself.** A new install reaches the internet mailbox the first time it runs. Nothing to type. Each install gets its own mailbox, so one office cannot read another office's driver messages or photos.

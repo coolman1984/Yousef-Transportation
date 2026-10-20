@@ -471,8 +471,6 @@ class ToolsTest(unittest.TestCase):
             nodectl.unseal(box, 'a long passphrase 1')
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class Review231Test(unittest.TestCase):
@@ -799,3 +797,7 @@ class ActivityRetryTest(unittest.TestCase):
         journal.flush_activity()
         self.assertEqual(journal._activity, [])
         self.assertEqual(journal.conn.execute("SELECT COUNT(*) FROM activity WHERE target='synthetic'").fetchone()[0], 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

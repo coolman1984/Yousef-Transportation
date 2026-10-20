@@ -777,8 +777,6 @@ class AutoReopenTest(unittest.TestCase):
         raise AssertionError('could not update the mailbox database: ' + last)
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class BatchCompatibilityTest(unittest.TestCase):
@@ -888,6 +886,23 @@ class CardSnapshotTest(unittest.TestCase):
         self.sync.push_cards()
         self.client.put_cards.assert_called_once()
 
+    def test_card_receipts_drop_retired_hashes_and_aged_trips(self):
+        self.sync.push_cards()
+        trip = next(t for t in self.store.state()['trips'] if t['id'] == 'current')
+        new_hash = hashlib.sha256(b'new-synthetic-card').hexdigest()
+        self.store.commit('bench', 'local', 'replace link', [
+            {'e': 'trips', 'id': trip['id'], 'op': 'put', 'ver': trip['ver'],
+             'row': {**trip, 'linkHash': new_hash, 'oldLinks': [self.hash]}}])
+        self.sync.push_cards()
+        self.assertEqual(set(self.sync.pushed), {new_hash})
+        self.assertEqual(self.sync.removed, {self.hash})
+        trip = next(t for t in self.store.state()['trips'] if t['id'] == 'current')
+        self.store.commit('bench', 'local', 'age fixture', [
+            {'e': 'trips', 'id': trip['id'], 'op': 'put', 'ver': trip['ver'], 'row': {**trip, 'date': '2000-01-01'}}])
+        self.sync.push_cards()
+        self.assertEqual(self.sync.pushed, {})
+        self.assertEqual(self.sync.removed, set())
+
     def test_public_rows_keep_types_versions_and_scope_filtering(self):
         from store import ENTITIES
         full = self.store.state()
@@ -905,3 +920,7 @@ class CardSnapshotTest(unittest.TestCase):
         self.assertEqual([t['id'] for t in cards['trips']], ['current'])
         self.assertEqual([p['id'] for p in cards['tripPassengers']], ['pax1', 'pax2'])
         self.assertNotIn('tripEvents', cards)
+
+
+if __name__ == '__main__':
+    unittest.main()

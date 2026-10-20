@@ -647,6 +647,14 @@ class GatewaySync:
                 cl.put_cards(batch)
                 self.pushed.update({c['tokenHash']: sigs[c['tokenHash']] for c in batch})
                 self.release -= {c['tokenHash'] for c in batch if c.get('releaseDevice')}
+        # Receipt caches only cover the current publication window. The trip
+        # keeps its revocations, so an old window can be revisited safely.
+        active = {t.get('linkHash') for t in st.get('trips', []) if t.get('linkHash')}
+        retired = {h for t in st.get('trips', []) for h in (t.get('oldLinks') or []) if isinstance(h, str)}
+        for h in list(self.pushed):
+            if h not in active:
+                self.pushed.pop(h, None)
+        self.removed.intersection_update(retired)
         self._card_snapshot = snapshot(st['version'])
         self._card_checked = time.monotonic()
 

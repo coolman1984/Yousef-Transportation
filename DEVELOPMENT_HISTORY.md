@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Retire gateway receipt-cache entries (2026-10-20)
+
+Branch `perf/db-sync-codex`: discard in-memory publication/removal receipts when links leave the current card window. Durable trip revocation history is retained. This bounds cache growth across repeated relinking and long-running office sessions. `CardSnapshotTest.test_card_receipts_drop_retired_hashes_and_aged_trips` passes. Moved the test entrypoint below appended regressions so direct-file execution includes them too. No new persistence or protocol state.
+
 ## Recovery when the separate note file was unavailable (2026-10-20)
 
 Follow-up on `perf/db-sync-codex`: a note write is deliberately best effort, so an ahead-of-journal marker in trips.db must also trigger a new epoch. Reproduced with every note write failing, then restored the old journal. Startup now combines both durable sources of used sequence numbers before recovery. Test map: `NodeSafetyTest.test_rolled_back_journal_gets_new_epoch_without_written_note`; the original lost change can still be accepted from a peer. No schema/wire changes.

@@ -1,6 +1,14 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+# Trip Orders 1.1.9
+
+- **صندوق السواقين ما بيقفش لما الشغل يكتر:** لما يبقى عندك رحلات ورسائل سواقين كتير مرة واحدة، البرنامج بيبعتها ويستلمها على دفعات صغيرة، فالمزامنة ما بتقفش ولا بتعلّق.
+- **مزامنة أجهزة المكتب أمتن:** لو جهاز مكتب رجع بعد انقطاع أو اتشال من المكتب، التعديلات اللي بتوصل في نفس اللحظة ما بتضيعش وما بتتكررش، وسجل النشاط ما بيفقدش سطور.
+- **إيصالات السواق مضبوطة:** بعد تغيير صندوق البريد، الموبايل ما بيشوفش تأكيد استلام قديم غلط.
+- **أسرع:** فتح البيانات بقى أسرع بأكتر من الضعف، ودورة المزامنة وهي فاضية بقت أخف بكتير (حوالي 1.5 ملّي ثانية بدل 60).
+- Sync with the internet mailbox sends and acknowledges in small batches, so a busy office no longer gets stuck. Office PCs that come back after a break, or are removed, no longer lose or fork changes. Idle sync and data loading are much faster.
+
 # Trip Orders 1.1.8
 
 - **صور العداد بين أجهزة المكتب:** لما يكون عندك 3 أجهزة مكتب أو أكتر، نسخة صورة العداد اللي بتتنقل من جهاز لجهاز ما بقتش بتبوظ. الصورة بتتحفظ بس لو حجمها وبصمتها زي الأصل بالظبط، ولو جهازين بعتوها في نفس الوقت مفيش بايتات زيادة بتتلزق فيها. النسخة البايظة مش بتظهر، وبتتنسخ تاني لوحدها.

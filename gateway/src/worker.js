@@ -182,14 +182,18 @@ async function driver(request, env, url, parts) {
     const ids = [...new Set((Array.isArray(data && data.uuids) ? data.uuids : []).map(String).filter((u) => UUID_RE.test(u)))].slice(0, 100);
     if (!ids.length) return reply(200, { office: [], mailbox: [] });
     await ensureReceipts(env);
-    const q = ids.map(() => '?').join(',');
-    const [rc, ev, ph] = await Promise.all([
-      env.DB.prepare(`SELECT uuid FROM receipts WHERE uuid IN (${q})`).bind(...ids).all(),
-      env.DB.prepare(`SELECT uuid FROM events WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...ids).all(),
-      env.DB.prepare(`SELECT uuid FROM photos WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...ids).all(),
-    ]);
-    const office = new Set((rc.results || []).map((r) => r.uuid));
-    const mailbox = [...(ev.results || []), ...(ph.results || [])].map((r) => r.uuid).filter((u) => !office.has(u));
+    const office = new Set(), queued = new Set();
+    for (const group of chunks(ids, 80)) {
+      const q = group.map(() => '?').join(',');
+      const [rc, ev, ph] = await Promise.all([
+        env.DB.prepare(`SELECT uuid FROM receipts WHERE uuid IN (${q})`).bind(...group).all(),
+        env.DB.prepare(`SELECT uuid FROM events WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...group).all(),
+        env.DB.prepare(`SELECT uuid FROM photos WHERE token_hash = ? AND uuid IN (${q})`).bind(th, ...group).all(),
+      ]);
+      for (const r of rc.results || []) office.add(r.uuid);
+      for (const r of [...(ev.results || []), ...(ph.results || [])]) queued.add(r.uuid);
+    }
+    const mailbox = [...queued].filter((u) => !office.has(u));
     return reply(200, { office: [...office], mailbox });
   }
 
@@ -474,21 +478,33 @@ async function office(request, env, url, parts) {
       freshHashes.push(c.tokenHash);
     }
     if (freshHashes.length) {
-      const have = await env.DB.prepare(`SELECT token_hash FROM cards WHERE tenant = ? AND token_hash IN (${freshHashes.map(() => '?').join(',')})`).bind(tenant, ...freshHashes).all();
-      const known = new Set((have.results || []).map((r) => r.token_hash));
-      const adding = freshHashes.filter((h) => !known.has(h)).length;
+      const known = new Set();
+      for (const group of chunks([...new Set(freshHashes)], 80)) {
+        const have = await env.DB.prepare(`SELECT token_hash FROM cards WHERE tenant = ? AND token_hash IN (${group.map(() => '?').join(',')})`).bind(tenant, ...group).all();
+        for (const r of have.results || []) known.add(r.token_hash);
+      }
+      const adding = [...new Set(freshHashes)].filter((h) => !known.has(h)).length;
       const count = await env.DB.prepare('SELECT COUNT(*) n FROM cards WHERE tenant = ?').bind(tenant).first();
       if ((count ? count.n : 0) + adding > capNumber(env.MAX_CARDS, DEFAULT_MAX_CARDS)) throw new Fail(429, 'Too many trips in the mailbox');
     }
+    const rows = [];
     for (const c of incoming) {
       const body = JSON.stringify(c.body || {});
       if (body.length > 8192) throw new Fail(400, 'Card too large');
-      // a revoked link of THIS mailbox is never published again. Another install's card with the same hash is left alone.
-      // A live mailbox is never overwritten. A card whose mailbox row is already gone (the 90-day cleanup
-      // deletes the row last) can be claimed again by the office that still holds the link, so the link works.
-      stmts.push(env.DB.prepare('INSERT INTO cards(token_hash, trip_id, body, cancelled, expires_at, updated_at, tenant) SELECT ?,?,?,?,?,?,? WHERE NOT EXISTS (SELECT 1 FROM revoked WHERE token_hash = ? AND tenant = ?) ON CONFLICT(token_hash) DO UPDATE SET body = excluded.body, cancelled = excluded.cancelled, expires_at = excluded.expires_at, updated_at = excluded.updated_at, tenant = excluded.tenant WHERE cards.tenant = excluded.tenant OR (cards.tenant != \'legacy\' AND NOT EXISTS (SELECT 1 FROM tenants WHERE id = cards.tenant))')
-        .bind(c.tokenHash, c.tripId, body, c.cancelled ? 1 : 0, c.expiresAt || null, now(), tenant, c.tokenHash, tenant));
-      if (c.releaseDevice) stmts.push(env.DB.prepare('UPDATE cards SET bound_device = NULL WHERE token_hash = ? AND tenant = ?').bind(c.tokenHash, tenant));
+      rows.push([c.tokenHash, c.tripId, body, c.cancelled ? 1 : 0, c.expiresAt || null, now(), tenant]);
+    }
+    // Seven parameters per row; 14 rows stay below D1's 100-parameter ceiling.
+    // Keep ownership/revocation checks inside the write, including old clients' batches.
+    for (const group of chunks(rows, 14)) {
+      stmts.push(env.DB.prepare(`WITH incoming(token_hash, trip_id, body, cancelled, expires_at, updated_at, tenant) AS (VALUES ${marks(group.length, 7)})
+        INSERT INTO cards(token_hash, trip_id, body, cancelled, expires_at, updated_at, tenant)
+        SELECT * FROM incoming WHERE NOT EXISTS (SELECT 1 FROM revoked WHERE revoked.token_hash = incoming.token_hash AND revoked.tenant = incoming.tenant)
+        ON CONFLICT(token_hash) DO UPDATE SET body = excluded.body, cancelled = excluded.cancelled, expires_at = excluded.expires_at, updated_at = excluded.updated_at, tenant = excluded.tenant
+        WHERE cards.tenant = excluded.tenant OR (cards.tenant != 'legacy' AND NOT EXISTS (SELECT 1 FROM tenants WHERE id = cards.tenant))`)
+        .bind(...group.flat()));
+    }
+    for (const group of chunks(incoming.filter((c) => c.releaseDevice).map((c) => c.tokenHash), 80)) {
+      stmts.push(env.DB.prepare(`UPDATE cards SET bound_device = NULL WHERE tenant = ? AND token_hash IN (${group.map(() => '?').join(',')})`).bind(tenant, ...group));
     }
     for (const h of (d.remove || []).slice(0, 500)) {
       if (!/^[0-9a-f]{64}$/.test(String(h))) continue;
@@ -520,8 +536,12 @@ async function office(request, env, url, parts) {
     const askedE = (d.events || []).slice(0, 500).filter((u) => UUID_RE.test(u)), askedP = (d.photos || []).slice(0, 500).filter((u) => UUID_RE.test(u)), t = now();
     const owned = async (table, ids) => {
       if (!ids.length) return [];
-      const r = await env.DB.prepare(`SELECT uuid FROM ${table} WHERE tenant = ? AND uuid IN (${ids.map(() => '?').join(',')})`).bind(tenant, ...ids).all();
-      return (r.results || []).map((row) => row.uuid);
+      const ownedIds = new Set();
+      for (const group of chunks(ids, 80)) {
+        const r = await env.DB.prepare(`SELECT uuid FROM ${table} WHERE tenant = ? AND uuid IN (${group.map(() => '?').join(',')})`).bind(tenant, ...group).all();
+        for (const row of r.results || []) ownedIds.add(row.uuid);
+      }
+      return [...ownedIds];
     };
     const ev = await owned('events', askedE), ph = await owned('photos', askedP);
     for (const c of chunks([...ev, ...ph], 40)) stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO receipts(uuid, at) VALUES ${marks(c.length, 2)}`).bind(...c.flatMap((u) => [u, t])));

@@ -1574,5 +1574,82 @@ class TPhotoIntegrity(unittest.TestCase):
             self.assertEqual(f.read(), data)
 
 
+
+
+class FinalPullTest(unittest.TestCase):
+    def test_change_created_during_round_is_applied_from_final_pull(self):
+        from unittest.mock import Mock, patch
+        from cluster import Cluster
+        cluster = Cluster(2)
+        self.addCleanup(cluster.close)
+        local, remote = cluster.peers
+        service = sync.SyncService(SimpleNamespace(node=local.node, journal=local.journal,
+                                                   store=local.store, auth=Mock(), data_dir=local.dir),
+                                   {}, local.dir, log=lambda *a: None)
+        service.fetch_files = Mock(return_value=0)
+        service._collect_backup_key = Mock()
+        service._exchange_mailbox = Mock()
+        connection = Mock()
+        connection.session = 'synthetic-session'
+        connection.bytes_in = connection.bytes_out = 0
+        connection.login.return_value = {}
+        pulls = []
+        def request(method, path, body):
+            self.assertEqual(path, '/sync/pull')
+            if pulls:
+                remote.commit('concurrent change', [area_op('during-round', 'During round')])
+            pulls.append(path)
+            records, more = remote.journal.changes_since(body['have'])
+            return {'changes': records, 'more': more, 'vv': remote.journal.vv_hashes()}
+        connection.request.side_effect = request
+        with patch.object(sync, 'Connection', return_value=connection):
+            report = service.sync_with({'id': remote.node.id, 'name': 'remote',
+                                        'address': '127.0.0.1:1', 'fp': remote.node.cert_fp})
+        self.assertEqual(report['result'], 'ok')
+        self.assertEqual(report['pulled'], 1)
+        self.assertEqual(local.store.conn.execute("SELECT no FROM trips WHERE id='during-round'").fetchone()[0], 'During round')
+        self.assertEqual(service.peer_status(remote.node.id)['pending_in'], 0)
+
+
+class RevokedInFlightTest(unittest.TestCase):
+    def test_removal_during_pull_blocks_late_direct_delivery(self):
+        from unittest.mock import Mock, patch
+        from cluster import Cluster
+        cluster = Cluster(2)
+        self.addCleanup(cluster.close)
+        local, remote = cluster.peers
+        remote.commit('earlier work', [area_op('earlier-work', 'Earlier work')])
+        service = sync.SyncService(SimpleNamespace(node=local.node, journal=local.journal,
+                                                   store=local.store, auth=Mock(), data_dir=local.dir),
+                                   {}, local.dir, log=lambda *a: None)
+        service.fetch_files = Mock(return_value=0)
+        service._collect_backup_key = Mock()
+        service._exchange_mailbox = Mock()
+        connection = Mock()
+        connection.session = 'synthetic-session'
+        connection.bytes_in = connection.bytes_out = 0
+        connection.login.return_value = {}
+        pulls = []
+        def request(method, path, body):
+            self.assertEqual(path, '/sync/pull')
+            if pulls:
+                local.journal.write('admin', [{'e': 'nodes', 'id': remote.node.id, 'op': 'update',
+                                              's': {'status': 'revoked'}}], authority=True)
+                # The removed PC did not receive the revocation and still has a
+                # valid old session with us. Its late write must not be pulled.
+                remote.commit('late work', [area_op('late-work', 'Late work')])
+            pulls.append(path)
+            records, more = remote.journal.changes_since(body['have'])
+            return {'changes': records, 'more': more, 'vv': remote.journal.vv_hashes()}
+        connection.request.side_effect = request
+        with patch.object(sync, 'Connection', return_value=connection):
+            report = service.sync_with({'id': remote.node.id, 'name': 'remote',
+                                        'address': '127.0.0.1:1', 'fp': remote.node.cert_fp})
+        self.assertEqual(report['result'], 'error')
+        self.assertIsNotNone(local.store.conn.execute("SELECT id FROM trips WHERE id='earlier-work'").fetchone())
+        self.assertIsNone(local.store.conn.execute("SELECT id FROM trips WHERE id='late-work'").fetchone())
+        self.assertEqual(local.journal.vv()[remote.node.replica], 1)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -89,15 +89,20 @@ class System:
         or lost writes: continue under a new epoch so no change number is ever used twice."""
         written = self.node.last_written()
         have = self.journal.vv()
-        lost = {r: c for r, c in written.items() if c > have.get(r, 0)}
         folded = replica_markers(self.store.conn)
-        if any(c > have.get(o, 0) for o, c in folded.items()):
-            self._recover_tables_ahead()
+        # The best-effort note can fail even though trips.db committed the write.
+        # Its fold markers are independent evidence of sequences already used.
+        known = {r: max(written.get(r, 0), folded.get(r, 0)) for r in written.keys() | folded.keys()}
+        lost = {r: c for r, c in known.items() if c > have.get(r, 0)}
+        # Recovery itself writes a changeset. Change epoch BEFORE it can reuse a
+        # sequence whose original history may still exist on another PC.
         if lost.get(self.node.replica):
             self.node.new_epoch(f'journal rolled back (had {lost[self.node.replica]}, found {have.get(self.node.replica, 0)})')
             self.journal.alert('rollback', 'This PC\'s change history was older than expected (restored or damaged journal). It continues '
                                'with a new numbering; its missing changes come back from the other PCs if they received them.', self.node.id)
             self.log('Journal rollback detected - new epoch ' + self.node.replica)
+        if any(c > have.get(o, 0) for o, c in folded.items()):
+            self._recover_tables_ahead()
 
     def _recover_tables_ahead(self):
         """trips.db contains changes the (restored) journal no longer has. Rebuild the tables from the journal and save
@@ -184,8 +189,9 @@ class System:
         for e, (table, _, fields) in ENTITIES.items():
             for r in self.store.conn.execute(f'SELECT * FROM {table} ORDER BY rowid'):
                 s, n = {}, {}
+                row = self.store._row_js(e, r)
                 for js, col, kind, _ in fields:
-                    v = self.store._row_js(e, r).get(js)
+                    v = row.get(js)
                     if v is not None:
                         s[js] = v
                 op = {'e': e, 'id': r['id'], 'op': 'insert', 's': s, 'x': bool(r['deleted']), 'noaudit': True,

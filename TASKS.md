@@ -3,6 +3,18 @@
 
 ## Current work queue — first sale
 
+- [x] DB/sync local verification (2026-10-20, `perf/db-sync-codex` from `0333689`): gateway 41/41; requested Python suites 136 run, one Windows skip, OK; unchanged before/after benchmark; 1.1.7/1.1.8 mixed gateway/LAN and SQLite reopen matrices pass. Test map: `test_unit.NodeSafetyTest`, `ActivityRetryTest`, `test_gateway_client.BatchCompatibilityTest`, `CardSnapshotTest`, `test_multinode.FinalPullTest`, `RevokedInFlightTest`, `gateway/test/gateway.test.js`, `tools/bench_db_sync.py`. Evidence: `/workspace/codex-dbsync-REPORT.md`. No deployment/field acceptance claimed.
+
+- [x] LAN removal during an in-flight round (2026-10-20): reject a no-longer-active direct sender under the journal append lock; earlier work stays. Test map: `test_multinode.RevokedInFlightTest`, `test_multinode.T03_Cluster`.
+
+- [x] DB/sync read performance (2026-10-20): positional public-row decoding, focused card snapshot, shared lookups, skip idle card rebuild, mailbox-aware cache invalidation. Test map: `test_gateway_client.CardSnapshotTest`, `tools/bench_db_sync.py`. No poll interval/schema/version changes.
+
+- [x] LAN final-pull race (2026-10-20, L2): apply concurrent changes returned by the last pull. Test map: `test_multinode.FinalPullTest`. Existing protocol preserved.
+
+- [x] D1 batch compatibility (2026-10-20): 100-parameter limit, batched card writes, duplicate capacity accounting, office batches safe against deployed worker, partial-upload retry. Test map: `gateway/test/gateway.test.js`, `test_gateway_client.BatchCompatibilityTest`. Not deployed.
+
+- [x] DB recovery/retry regressions (2026-10-20, L2/L4): epoch before recovery; failed activity flush remains queued. Test map: `test_unit.NodeSafetyTest`, `test_unit.ActivityRetryTest`. Local source checks; field recovery drill remains pending.
+
 - [x] Mailbox auto-connect, one mailbox per install (2026-10-19): fresh install registers itself; legacy `OFFICE_SECRET` and an existing `gateway.json` stay; paired PCs share the mailbox over LAN sync; training does not register. Test map: `gateway/test/gateway.test.js` (register, rate limit, isolation, legacy, caps, migration), `tests/test_gateway_client.py` (`AutoConnectTest`, `TenantClientTest`). Not deployed, not released.
 - [x] Second review of that mailbox (2026-10-19): per-mailbox revocation, idempotent registration, global registration ceiling, fail-closed `MASTER_KEY`, old-database `schema.sql`, reconnect after the idle cleanup, Arabic setup-code wording. Test map: `gateway/test/gateway.test.js`, `tests/test_gateway_client.py` (`AutoReplayTest`, `AutoReopenTest`). Not deployed, not released.
 

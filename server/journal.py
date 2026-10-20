@@ -347,7 +347,11 @@ class Journal:
             if not self._activity or not self.node.exists:
                 return
             events, self._activity = self._activity, []
-            self.write('log', events, actor=events[0]['user'], ip=events[0]['ip'], label=f'User activity ({len(events)})')
+            try:
+                self.write('log', events, actor=events[0]['user'], ip=events[0]['ip'], label=f'User activity ({len(events)})')
+            except Exception:
+                self._activity = events + self._activity
+                raise
 
     # ------------------------------------------------------------ appending (local and received)
     def _append(self, recs, via):
@@ -450,12 +454,18 @@ class Journal:
         return out
 
     # ------------------------------------------------------------ receiving from other PCs
-    def receive(self, records, via=''):
+    def receive(self, records, via='', direct_peer=None):
         """Validates and stores changesets from another PC. Returns (accepted records, deferred count, problems)."""
         accepted, problems = [], []
         with self.lock:
             heads = {o: (h[0], h[1]) for o, h in self.heads.items()}
             roster = {n['id']: n for n in self.roster().values()}
+            # A session can outlive its peer's removal while a response is in
+            # flight. Check under the SAME lock as validation/append. Unknown
+            # peers still bootstrap from signed enrollment as before.
+            sender = roster.get(direct_peer)
+            if sender and sender.get('status') != 'active':
+                return [], 0, ['The source PC is no longer active.']
             batch_hash = {}
             blocked = set()
             pending = []

@@ -777,5 +777,152 @@ class AutoReopenTest(unittest.TestCase):
         raise AssertionError('could not update the mailbox database: ' + last)
 
 
+
+
+class BatchCompatibilityTest(unittest.TestCase):
+    def test_ack_splits_uuids_for_the_deployed_worker(self):
+        from unittest.mock import Mock
+        client = G.Client('http://127.0.0.1:1', 'synthetic')
+        client.call = Mock(return_value={'ok': True})
+        events = [str(uuid.UUID(int=i + 1, version=4)) for i in range(200)]
+        photos = [str(uuid.UUID(int=i + 1001, version=4)) for i in range(100)]
+        client.ack(events, photos)
+        sent_e, sent_p = [], []
+        for args in client.call.call_args_list:
+            body = args.args[2]
+            self.assertLessEqual(len(body['events']), 80)
+            self.assertLessEqual(len(body['photos']), 80)
+            sent_e.extend(body['events'])
+            sent_p.extend(body['photos'])
+        self.assertEqual(sent_e, events)
+        self.assertEqual(sent_p, photos)
+
+    def test_partial_card_upload_keeps_successful_batches(self):
+        from unittest.mock import Mock
+        from types import SimpleNamespace
+        today = G.domain.business_now().date().isoformat()
+        trips = [{'id': str(i), 'date': today, 'linkHash': hashlib.sha256(str(i).encode()).hexdigest(),
+                  'linkExpiry': '2099-01-01T00:00:00Z'} for i in range(90)]
+        store = Mock()
+        store.gateway_state.return_value = {'trips': trips, 'version': 1}
+        store.version.return_value = 1
+        journal = Mock()
+        journal.meta.return_value = None
+        sync = G.GatewaySync(store, journal, 'test', SimpleNamespace(configured=True, url='http://127.0.0.1:1', data={}), Mock())
+        cl = Mock()
+        cl.put_cards.side_effect = [None, G.GatewayError('offline')]
+        sync.client = lambda: cl
+        with self.assertRaises(G.GatewayError):
+            sync.push_cards()
+        successful = cl.put_cards.call_args_list[0].args[0]
+        self.assertLessEqual(len(successful), 40, 'works within old worker D1 query/parameter limits')
+        self.assertEqual(set(sync.pushed), {c['tokenHash'] for c in successful})
+        cl.put_cards.reset_mock(side_effect=True)
+        sync.push_cards()
+        resent = [c['tokenHash'] for args in cl.put_cards.call_args_list for c in args.args[0]]
+        self.assertFalse(set(resent) & set(sync.pushed.keys() & {c['tokenHash'] for c in successful}))
+
+
+class CardSnapshotTest(unittest.TestCase):
+    def setUp(self):
+        from unittest.mock import Mock
+        from system import System
+        self.tmp = tempfile.TemporaryDirectory(prefix='to-card-snapshot-')
+        self.addCleanup(self.tmp.cleanup)
+        self.system = System(self.tmp.name, {}, os.path.join(self.tmp.name, 'uploads'),
+                             os.path.join(self.tmp.name, 'backup'), log=lambda *a: None)
+        self.addCleanup(self.system.close)
+        self.store = self.system.store
+        self.secrets = G.Secrets(os.path.join(self.tmp.name, 'synthetic.json'))
+        self.secrets.data = {'url': 'http://127.0.0.1:1', 'officeSecret': 'synthetic', 'linkSecret': 'synthetic'}
+        self.sync = G.GatewaySync(self.store, self.system.journal, self.system.node.id, self.secrets, Mock())
+        self.client = Mock()
+        self.sync.client = lambda: self.client
+        self.hash = hashlib.sha256(b'synthetic-card').hexdigest()
+        self.store.commit('bench', 'local', 'fixtures', [
+            put('vehicles', 'v', plate='BENCH', active=True),
+            put('people', 'requester', name='Requester'),
+            put('people', 'pax', name='Passenger'),
+            put('trips', 'current', no='CURRENT', date=G.domain.business_now().date().isoformat(),
+                status='sent', vehicleId='v', requesterId='requester', linkHash=self.hash,
+                linkExpiry='2099-01-01T00:00:00Z', stops=['A', 'B'], locked=False),
+            put('trips', 'historic', no='HISTORIC', date='2000-01-01', linkHash='a' * 64),
+            put('tripPassengers', 'pax1', tripId='current', personId='pax'),
+            put('tripPassengers', 'pax2', tripId='current', freeText='Visitor'),
+            put('tripPassengers', 'pax3', tripId='historic', freeText='Historic passenger'),
+            put('settings', 'synthetic-setting', value={'nested': [1, True, None]})])
+
+    def test_idle_round_does_not_load_rows_and_lookup_edit_updates_card(self):
+        from unittest.mock import patch
+        with patch.object(self.store, 'gateway_state', wraps=self.store.gateway_state) as read:
+            self.sync.push_cards()
+            body = self.client.put_cards.call_args.args[0][0]['body']
+            self.assertEqual(body['passengers'], ['Requester', 'Passenger', 'Visitor'])
+            self.assertEqual(body['stops'], ['A', 'B'])
+            self.client.put_cards.reset_mock()
+            self.sync.push_cards()
+            self.assertEqual(read.call_count, 1)
+            self.client.put_cards.assert_not_called()
+            vehicle = self.store.state()['vehicles'][0]
+            self.store.commit('bench', 'local', 'edit lookup', [
+                {'e': 'vehicles', 'id': 'v', 'op': 'put', 'ver': vehicle['ver'], 'row': {**vehicle, 'plate': 'EDITED'}}])
+            self.sync.push_cards()
+            self.assertEqual(read.call_count, 2)
+            self.assertEqual(self.client.put_cards.call_args.args[0][0]['body']['plate'], 'EDITED')
+
+    def test_mailbox_change_and_phone_release_invalidate_card_receipts(self):
+        self.sync.push_cards()
+        self.client.put_cards.reset_mock()
+        self.secrets.data['url'] = 'http://127.0.0.1:2'
+        self.sync.push_cards()
+        self.client.put_cards.assert_called_once()
+        self.client.put_cards.reset_mock()
+        self.sync.release.add(self.hash)
+        self.sync.push_cards()
+        self.assertTrue(self.client.put_cards.call_args.args[0][0]['releaseDevice'])
+        self.assertFalse(self.sync.release)
+        self.client.put_cards.reset_mock()
+        self.sync.pushed.clear()  # existing settings handlers explicitly invalidate this
+        self.sync.push_cards()
+        self.client.put_cards.assert_called_once()
+
+    def test_card_receipts_drop_retired_hashes_and_aged_trips(self):
+        self.sync.push_cards()
+        trip = next(t for t in self.store.state()['trips'] if t['id'] == 'current')
+        new_hash = hashlib.sha256(b'new-synthetic-card').hexdigest()
+        self.store.commit('bench', 'local', 'replace link', [
+            {'e': 'trips', 'id': trip['id'], 'op': 'put', 'ver': trip['ver'],
+             'row': {**trip, 'linkHash': new_hash, 'oldLinks': [self.hash]}}])
+        self.sync.push_cards()
+        self.assertEqual(set(self.sync.pushed), {new_hash})
+        self.assertEqual(self.sync.removed, {self.hash})
+        trip = next(t for t in self.store.state()['trips'] if t['id'] == 'current')
+        self.store.commit('bench', 'local', 'age fixture', [
+            {'e': 'trips', 'id': trip['id'], 'op': 'put', 'ver': trip['ver'], 'row': {**trip, 'date': '2000-01-01'}}])
+        self.sync.push_cards()
+        self.assertEqual(self.sync.pushed, {})
+        self.assertEqual(self.sync.removed, set())
+
+    def test_public_rows_keep_types_versions_and_scope_filtering(self):
+        from store import ENTITIES
+        # A legacy SQLite JSON column may contain the JSON literal null.
+        self.store.conn.execute("UPDATE trips SET stops='null' WHERE id='historic'")
+        full = self.store.state()
+        for entity, (table, _, _) in ENTITIES.items():
+            if entity == 'settings':
+                continue
+            expected = [self.store._row_js(entity, r) for r in self.store.conn.execute(
+                f'SELECT * FROM {table} WHERE deleted=0 ORDER BY rowid')]
+            self.assertEqual(full[entity], expected)
+        self.assertEqual(full['settings']['synthetic-setting'], {'nested': [1, True, None]})
+        self.assertGreater(full['settingsVer']['synthetic-setting'], 0)
+        self.assertEqual(self.store.state([])['trips'], [])
+        cutoff = (G.domain.business_now() - timedelta(days=45)).date().isoformat()
+        cards = self.store.gateway_state(cutoff)
+        self.assertEqual([t['id'] for t in cards['trips']], ['current'])
+        self.assertEqual([p['id'] for p in cards['tripPassengers']], ['pax1', 'pax2'])
+        self.assertNotIn('tripEvents', cards)
+
+
 if __name__ == '__main__':
     unittest.main()

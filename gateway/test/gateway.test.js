@@ -664,3 +664,36 @@ test('stopping the idle cleanup between batches does not leave a card without it
   const cards = await env.DB.prepare('SELECT COUNT(*) n FROM cards').first();
   assert.equal(cards.n, left.n);
 });
+
+test('office batches and phone receipts respect D1 bound-parameter limits', async () => {
+  const env = newEnv();
+  try {
+    const cards = Array.from({ length: 100 }, (_, i) => ({
+      tokenHash: i.toString(16).padStart(64, '0'), tripId: 'batch-' + i,
+      body: { no: 'B-' + i }, expiresAt: Math.floor(Date.now() / 1000) + 3600,
+    }));
+    assert.equal((await office(env, 'PUT', '/office/cards', { cards })).status, 200);
+    const th = await putCard(env);
+    const ids = Array.from({ length: 100 }, () => randomUUID());
+    for (const id of ids) {
+      await env.DB.prepare("INSERT INTO events(uuid,token_hash,trip_id,type,body,device_id,phone_at,recv_at,tenant) VALUES(?,?,?,'note','{}','bench-device','2026-10-20T10:00:00Z',?,'legacy')")
+        .bind(id, th, 'tr1', Math.floor(Date.now() / 1000)).run();
+    }
+    const receipt = await call(env, 'POST', '/api/receipts/' + TOKEN, { body: JSON.stringify({ uuids: ids }) });
+    assert.equal(receipt.status, 200);
+    assert.deepEqual(new Set((await receipt.json()).mailbox), new Set(ids));
+    assert.equal((await office(env, 'POST', '/office/ack', { events: ids, photos: [] })).status, 200);
+    assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM events').first()).n, 0);
+    assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM receipts').first()).n, 100);
+  } finally { env.DB.close(); }
+});
+
+test('duplicate hashes in a card batch do not consume extra mailbox capacity', async () => {
+  const env = newEnv();
+  env.MAX_CARDS = '1';
+  try {
+    const c = { tokenHash: await sha256Hex(TOKEN), tripId: 'tr1', body: { no: 'same' } };
+    assert.equal((await office(env, 'PUT', '/office/cards', { cards: [c, c] })).status, 200);
+    assert.equal((await env.DB.prepare('SELECT COUNT(*) n FROM cards').first()).n, 1);
+  } finally { env.DB.close(); }
+});

@@ -6,7 +6,11 @@ import { dirname, join } from 'node:path';
 
 class Statement {
   constructor(db, sql, args = []) { this.db = db; this.sql = sql; this.args = args; }
-  bind(...args) { return new Statement(this.db, this.sql, args.map((a) => (a === undefined ? null : a))); }
+  bind(...args) {
+    // Match D1 rather than silently accepting node:sqlite's much larger limit.
+    if (args.length > 100) throw new Error('D1 supports at most 100 bound parameters per query');
+    return new Statement(this.db, this.sql, args.map((a) => (a === undefined ? null : a)));
+  }
   _stmt() { return this.db.prepare(this.sql); }
   async run() {
     const r = this._stmt().run(...this.args);

@@ -359,6 +359,14 @@ class NodeSafetyTest(unittest.TestCase):
             shutil.rmtree(d)
 
     def test_rolled_back_journal_gets_new_epoch(self):
+        self._assert_rolled_back_journal_gets_new_epoch()
+
+    def test_rolled_back_journal_gets_new_epoch_without_written_note(self):
+        from unittest.mock import patch
+        with patch.object(Node, 'record_written', side_effect=OSError('note unavailable')):
+            self._assert_rolled_back_journal_gets_new_epoch()
+
+    def _assert_rolled_back_journal_gets_new_epoch(self):
         from system import System
         d = tempfile.mkdtemp()
         try:
@@ -368,6 +376,8 @@ class NodeSafetyTest(unittest.TestCase):
             name = s.backups.create('manual')
             replica = s.node.replica
             s.store.commit('u', 'ip', 'b', [{'e': 'areas', 'id': 'b', 'op': 'put', 'row': {'name': 'b'}}])
+            lost_head = s.journal.vv()[replica]
+            lost_records, _ = s.journal.changes_since({replica: lost_head - 1})
             s.close()
             shutil.copy(os.path.join(d, 'bk', 'db', 'journal' + name[2:]), os.path.join(d, 'journal.db'))
             for suffix in ('-wal', '-shm'):
@@ -375,6 +385,11 @@ class NodeSafetyTest(unittest.TestCase):
                     os.remove(os.path.join(d, 'journal.db' + suffix))
             s = System(d, {}, os.path.join(d, 'uploads'), os.path.join(d, 'bk'), log=lambda m: None)
             self.assertNotEqual(s.node.replica, replica)
+            self.assertLess(s.journal.vv().get(replica, 0), lost_head, 'recovery must not reuse the lost sequence')
+            accepted, deferred, problems = s.journal.receive(lost_records, 'old-peer')
+            self.assertEqual(problems, [])
+            self.assertTrue(accepted)
+            s.store.fold_pending()
             self.assertTrue(any(a['kind'] == 'rollback' for a in s.journal.alerts()))
             # 'b' was only in the tables, not in the restored journal: it is kept and saved again as a new change
             self.assertIn('b', {a['id'] for a in engine_domain.nested_state(s.store)['areas']})
@@ -456,8 +471,6 @@ class ToolsTest(unittest.TestCase):
             nodectl.unseal(box, 'a long passphrase 1')
 
 
-if __name__ == '__main__':
-    unittest.main()
 
 
 class Review231Test(unittest.TestCase):
@@ -768,3 +781,23 @@ class AuditListColumnsTest(unittest.TestCase):
         self.assertEqual(self.j.query('audit', business_only=True)['total'], business['total'])
         self.assertEqual(self.j.query('audit', scopes=['cat1'])['total'], scoped['total'])
         self.assertTrue(any(row['entity'] == 'users' for row in admin['rows']))
+
+
+class ActivityRetryTest(unittest.TestCase):
+    def test_failed_activity_flush_keeps_events_for_retry(self):
+        from unittest.mock import patch
+        c = Cluster(1)
+        self.addCleanup(c.close)
+        journal = c.peers[0].journal
+        journal.log_activity('bench', 'local', [{'type': 'view', 'target': 'synthetic'}])
+        with patch.object(journal, 'write', side_effect=sqlite3.OperationalError('disk full')):
+            with self.assertRaises(sqlite3.OperationalError):
+                journal.flush_activity()
+        self.assertEqual(len(journal._activity), 1)
+        journal.flush_activity()
+        self.assertEqual(journal._activity, [])
+        self.assertEqual(journal.conn.execute("SELECT COUNT(*) FROM activity WHERE target='synthetic'").fetchone()[0], 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

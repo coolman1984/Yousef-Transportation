@@ -1,6 +1,46 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## DB/sync verification and final measurements (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689` (1.1.8), implementation head `9a8f4e7`. All requested local checks completed: gateway 41/41; exact requested Python modules 136 ran, OK, one Windows-only skip (198.683 s). Final benchmark, unchanged since its baseline commit: full state median 32.990 → 15.307 ms; steady idle median 67.978 → 1.601 ms; idle SQLite statements 16 → 1; initial D1 statements 328 → 66; restart 312 → 50. Initial/restart HTTP requests 4 → 9, deliberately smaller for the deployed old worker. Commit median 25.329 → 26.112 ms, event/photo cycle 437.297 → 469.496 ms, LAN 470.367 → 570.169 ms: no speedup claimed for these single-run timings or commit query count.
+
+Final isolated matrices pass with exact 1.1.8 `0333689` and 1.1.7 `e5d5ba3`: both gateway client/worker directions, both mixed-LAN authority arrangements, matching data fingerprints, and reopening actual old SQLite files with new code then old code again. An earlier parallel matrix attempt timed out restarting a process; isolated final repeats passed with empty stderr. One earlier full Python run exposed the in-flight revocation race and prompted its deterministic fix, rather than being dismissed as flaky. No production traffic, secrets read from installed configuration, schema/wire/version changes, push, deploy, or Windows acceptance claim.
+
+Evidence requested by owner: `/workspace/codex-dbsync-REPORT.md`, `/workspace/codex-bench-before.txt`, `/workspace/codex-bench-after.txt`, `/workspace/codex-dbsync-progress.md`. Reusable benchmark: `tools/bench_db_sync.py`. Detailed test/compatibility outputs and runner also remain in `/workspace`. Durable card receipts across restart and changes to idle/offline polling policy are deferred; history/durability semantics stay. L1/L3/L4/L5 field acceptance remains pending; this verifies the local code slice only.
+
+## Preserve legacy JSON null response behavior (2026-10-20)
+
+Review of the faster public-row reader found a subtle representation difference: a JSON column containing the literal `null` must be omitted just like SQL NULL. Added a legacy-row fixture and kept the original decoded-value check. The focused compatibility regression fails without the check and passes with it. Latest complete requested Python run: 136 tests, OK, one platform skip; gateway 41/41. A final run after this small compatibility correction is still required.
+
+## Reject an in-flight response from a newly removed PC (2026-10-20)
+
+The first full requested run had 133 successful/skip outcomes and one failed existing revocation scenario: a late record arrived through a round already in progress. Applying the final pull promptly makes this latent transport race easier to reach. Focused baseline/current reruns passed, so added a deterministic concurrent-removal regression. `Journal.receive` now checks the authenticated direct source under its validation/append lock, preventing a removal between the network check and durability. Signed bootstrap remains possible; historical relay rules and wire format stay unchanged. Earlier work stays. `RevokedInFlightTest`, `FinalPullTest` and all nine `T03_Cluster` tests pass (11 total). Full suites and compatibility checks will be repeated for the changed receive boundary.
+
+## Retire gateway receipt-cache entries (2026-10-20)
+
+Branch `perf/db-sync-codex`: discard in-memory publication/removal receipts when links leave the current card window. Durable trip revocation history is retained. This bounds cache growth across repeated relinking and long-running office sessions. `CardSnapshotTest.test_card_receipts_drop_retired_hashes_and_aged_trips` passes. Moved the test entrypoint below appended regressions so direct-file execution includes them too. No new persistence or protocol state.
+
+## Recovery when the separate note file was unavailable (2026-10-20)
+
+Follow-up on `perf/db-sync-codex`: a note write is deliberately best effort, so an ahead-of-journal marker in trips.db must also trigger a new epoch. Reproduced with every note write failing, then restored the old journal. Startup now combines both durable sources of used sequence numbers before recovery. Test map: `NodeSafetyTest.test_rolled_back_journal_gets_new_epoch_without_written_note`; the original lost change can still be accepted from a peer. No schema/wire changes.
+
+## Smaller database snapshots and idle gateway cycles (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689`. Read public columns by position, reuse already-read settings versions, and convert each bootstrap row once. Gateway snapshots omit history/photos and old trips; shared card lookups are built once. Idle cycles check only data version before polling the inbox, with cutoff, pending device releases, explicit cache clears and mailbox identity invalidating the snapshot. No HTTP polling interval change. `CardSnapshotTest` verifies public field/type/scope compatibility, lookup edits, mailbox changes and releases. Local intermediate benchmark: full state median 32.990 → 14.938 ms; steady idle ~64–77 → ~1–2 ms, SQLite statements 16 → 1. Card SQL batching reduces D1 initial publication 328 → 66 statements, with more smaller HTTP requests for old-worker compatibility. Durable card receipts across restart deliberately deferred: republishing preserves repair after gateway data loss. Full final measurements follow.
+
+## Apply the final LAN pull (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689`, L2 retry/convergence. The final pull was using the peer's heads but discarding changes created during the current round. Apply that response and account for accepted/deferred changes and errors; check its head hashes too. Regression `test_multinode.FinalPullTest` fails on the original implementation and passes after the fix using real signed journals with an injected concurrent peer write. No LAN wire/signature changes. Full multinode/convergence suites follow; mixed-version LAN check remains required before field use.
+
+## D1 batch compatibility and partial delivery (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689`. Split card lookups, acknowledgement ownership checks and phone receipt lookups below D1's 100 bound parameters; the local D1 stand-in now enforces that limit. Batch card upserts (14 rows, 98 parameters) with the existing tenant/revocation checks and deduplicate hashes for capacity accounting. Office card uploads use 40-card requests and acknowledgements use at most 80 UUIDs of each kind, so they also work with the deployed old worker. Remember each successful upload batch immediately; a later failure only retries unfinished cards. Checks: gateway 41/41 pass; `test_gateway_client.BatchCompatibilityTest` passes. Schema, signatures and request/response shapes unchanged. Full cross-version check follows. No deploy/push.
+
+## Database recovery and activity retry (2026-10-20)
+
+Branch `perf/db-sync-codex`, based on `0333689` (v1.1.8). Launch gates L2/L4: switch journal epoch before recovering tables that are ahead of a restored journal, so recovery never reuses an old change number. Keep buffered activity when its journal write fails. Regression tests reproduce both failures on the original code; recovery now also accepts the original lost record from a peer. Checks: `test_unit.NodeSafetyTest`, `test_unit.ActivityRetryTest` pass. Full requested suites and benchmark comparison follow in this branch. Local only; no deployment, Windows recovery drill or pilot acceptance claimed. Lesson: recovery must obey the same unique-history rules as normal writes.
+
 ## Photo copies between PCs stay the original bytes (2026-10-19)
 
 **What/why:** On main `e5d5ba3` the Test and build run failed once in `test_multinode.T00_DefinitionOfSuccess.test_acceptance_story`: the photo file on disk was the uploaded bytes plus extra bytes. The same commit's `v1.1.7` tag run passed. Driver odometer photos are evidence, so a longer file is a damaged photo.

@@ -1,8 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
-# Next (not released)
+# Trip Orders 1.1.8
 
+- **صور العداد بين أجهزة المكتب:** لما يكون عندك 3 أجهزة مكتب أو أكتر، نسخة صورة العداد اللي بتتنقل من جهاز لجهاز ما بقتش بتبوظ. الصورة بتتحفظ بس لو حجمها وبصمتها زي الأصل بالظبط، ولو جهازين بعتوها في نفس الوقت مفيش بايتات زيادة بتتلزق فيها. النسخة البايظة مش بتظهر، وبتتنسخ تاني لوحدها.
+- **حماية مسارات ملفات الصور:** البرنامج بيرفض أي عنوان صورة بيحاول يطلع برّه فولدر الصور (زي `..` أو الشرطة المائلة أو الحروف المشفّرة)، فمحدش يقدر يفتح ملفات تانية على الجهاز من خلاله.
 - A photo copied from another office PC is kept only when it is the same length and the same checksum as the original. If two PCs send that photo at the same time, the saved file does not grow extra bytes. A damaged copy is not shown; the screen says the photo is still being copied, and the PC copies it again.
 
 # Trip Orders 1.1.7

@@ -498,7 +498,18 @@ class SyncService:
                 if not r.get('accepted'):
                     break
             r = c.request('POST', '/sync/pull', {'have': self.journal.vv()})
+            # A peer may create/receive changes while we are pushing. This final
+            # response carries real changes too, not just its updated heads.
+            if r.get('changes'):
+                acc, deferred, problems = self.ingest(r['changes'], peer['id'])
+                rep['pulled'] += len(acc)
+                rep['deferred'] += deferred
+                if problems:
+                    pull_problem = pull_problem or 'Changes from this PC were refused: ' + '; '.join(problems[:3])
             server_vv = r.get('vv') or server_vv
+            forks = self.journal.check_heads(server_vv)
+            if forks:
+                raise SyncError('The history of some PCs differs between this PC and ' + peer['name'] + ': ' + ', '.join(forks))
             other = {o: v[0] for o, v in server_vv.items()}
             mine = self.journal.vv()
             st['pending_out'] = self.journal.pending_for(other)

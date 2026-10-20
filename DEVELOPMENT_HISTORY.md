@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Apply the final LAN pull (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689`, L2 retry/convergence. The final pull was using the peer's heads but discarding changes created during the current round. Apply that response and account for accepted/deferred changes and errors; check its head hashes too. Regression `test_multinode.FinalPullTest` fails on the original implementation and passes after the fix using real signed journals with an injected concurrent peer write. No LAN wire/signature changes. Full multinode/convergence suites follow; mixed-version LAN check remains required before field use.
+
 ## D1 batch compatibility and partial delivery (2026-10-20)
 
 Branch `perf/db-sync-codex`, baseline `0333689`. Split card lookups, acknowledgement ownership checks and phone receipt lookups below D1's 100 bound parameters; the local D1 stand-in now enforces that limit. Batch card upserts (14 rows, 98 parameters) with the existing tenant/revocation checks and deduplicate hashes for capacity accounting. Office card uploads use 40-card requests and acknowledgements use at most 80 UUIDs of each kind, so they also work with the deployed old worker. Remember each successful upload batch immediately; a later failure only retries unfinished cards. Checks: gateway 41/41 pass; `test_gateway_client.BatchCompatibilityTest` passes. Schema, signatures and request/response shapes unchanged. Full cross-version check follows. No deploy/push.

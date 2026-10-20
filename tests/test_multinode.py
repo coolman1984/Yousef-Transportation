@@ -1576,3 +1576,38 @@ class TPhotoIntegrity(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class FinalPullTest(unittest.TestCase):
+    def test_change_created_during_round_is_applied_from_final_pull(self):
+        from unittest.mock import Mock, patch
+        from cluster import Cluster
+        cluster = Cluster(2)
+        self.addCleanup(cluster.close)
+        local, remote = cluster.peers
+        service = sync.SyncService(SimpleNamespace(node=local.node, journal=local.journal,
+                                                   store=local.store, auth=Mock(), data_dir=local.dir),
+                                   {}, local.dir, log=lambda *a: None)
+        service.fetch_files = Mock(return_value=0)
+        service._collect_backup_key = Mock()
+        service._exchange_mailbox = Mock()
+        connection = Mock()
+        connection.session = 'synthetic-session'
+        connection.bytes_in = connection.bytes_out = 0
+        connection.login.return_value = {}
+        pulls = []
+        def request(method, path, body):
+            self.assertEqual(path, '/sync/pull')
+            if pulls:
+                remote.commit('concurrent change', [area_op('during-round', 'During round')])
+            pulls.append(path)
+            records, more = remote.journal.changes_since(body['have'])
+            return {'changes': records, 'more': more, 'vv': remote.journal.vv_hashes()}
+        connection.request.side_effect = request
+        with patch.object(sync, 'Connection', return_value=connection):
+            report = service.sync_with({'id': remote.node.id, 'name': 'remote',
+                                        'address': '127.0.0.1:1', 'fp': remote.node.cert_fp})
+        self.assertEqual(report['result'], 'ok')
+        self.assertEqual(report['pulled'], 1)
+        self.assertEqual(local.store.conn.execute("SELECT no FROM trips WHERE id='during-round'").fetchone()[0], 'During round')
+        self.assertEqual(service.peer_status(remote.node.id)['pending_in'], 0)

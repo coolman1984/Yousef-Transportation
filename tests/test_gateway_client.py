@@ -905,6 +905,8 @@ class CardSnapshotTest(unittest.TestCase):
 
     def test_public_rows_keep_types_versions_and_scope_filtering(self):
         from store import ENTITIES
+        # A legacy SQLite JSON column may contain the JSON literal null.
+        self.store.conn.execute("UPDATE trips SET stops='null' WHERE id='historic'")
         full = self.store.state()
         for entity, (table, _, _) in ENTITIES.items():
             if entity == 'settings':

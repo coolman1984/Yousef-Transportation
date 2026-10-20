@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Preserve legacy JSON null response behavior (2026-10-20)
+
+Review of the faster public-row reader found a subtle representation difference: a JSON column containing the literal `null` must be omitted just like SQL NULL. Added a legacy-row fixture and kept the original decoded-value check. The focused compatibility regression fails without the check and passes with it. Latest complete requested Python run: 136 tests, OK, one platform skip; gateway 41/41. A final run after this small compatibility correction is still required.
+
 ## Reject an in-flight response from a newly removed PC (2026-10-20)
 
 The first full requested run had 133 successful/skip outcomes and one failed existing revocation scenario: a late record arrived through a round already in progress. Applying the final pull promptly makes this latent transport race easier to reach. Focused baseline/current reruns passed, so added a deterministic concurrent-removal regression. `Journal.receive` now checks the authenticated direct source under its validation/append lock, preventing a removal between the network check and durability. Signed bootstrap remains possible; historical relay rules and wire format stay unchanged. Earlier work stays. `RevokedInFlightTest`, `FinalPullTest` and all nine `T03_Cluster` tests pass (11 total). Full suites and compatibility checks will be repeated for the changed receive boundary.

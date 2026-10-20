@@ -265,7 +265,9 @@ class Store:
             item = {'id': values[0], 'ver': values[1]}
             for (js, _, kind, _), value in zip(fields, values[2:]):
                 if value is not None:
-                    item[js] = _out(kind, value)
+                    value = _out(kind, value)
+                    if value is not None:  # JSON literal null follows SQL NULL's public representation
+                        item[js] = value
             out.append(item)
         return out
 

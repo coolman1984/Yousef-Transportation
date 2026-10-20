@@ -3,6 +3,8 @@
 
 ## Current work queue — first sale
 
+- [x] LAN removal during an in-flight round (2026-10-20): reject a no-longer-active direct sender under the journal append lock; earlier work stays. Test map: `test_multinode.RevokedInFlightTest`, `test_multinode.T03_Cluster`.
+
 - [x] DB/sync read performance (2026-10-20): positional public-row decoding, focused card snapshot, shared lookups, skip idle card rebuild, mailbox-aware cache invalidation. Test map: `test_gateway_client.CardSnapshotTest`, `tools/bench_db_sync.py`. No poll interval/schema/version changes.
 
 - [x] LAN final-pull race (2026-10-20, L2): apply concurrent changes returned by the last pull. Test map: `test_multinode.FinalPullTest`. Existing protocol preserved.

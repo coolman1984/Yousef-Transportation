@@ -564,7 +564,7 @@ class SyncService:
 
     def ingest(self, records, via):
         """Store and fold changesets that arrived from another PC (pull or push)."""
-        acc, deferred, problems = self.journal.receive(records, via)
+        acc, deferred, problems = self.journal.receive(records, via, direct_peer=via)
         if acc:
             self.fold_all()
             self._after_roster_change(acc)

@@ -1,6 +1,10 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## Reject an in-flight response from a newly removed PC (2026-10-20)
+
+The first full requested run had 133 successful/skip outcomes and one failed existing revocation scenario: a late record arrived through a round already in progress. Applying the final pull promptly makes this latent transport race easier to reach. Focused baseline/current reruns passed, so added a deterministic concurrent-removal regression. `Journal.receive` now checks the authenticated direct source under its validation/append lock, preventing a removal between the network check and durability. Signed bootstrap remains possible; historical relay rules and wire format stay unchanged. Earlier work stays. `RevokedInFlightTest`, `FinalPullTest` and all nine `T03_Cluster` tests pass (11 total). Full suites and compatibility checks will be repeated for the changed receive boundary.
+
 ## Retire gateway receipt-cache entries (2026-10-20)
 
 Branch `perf/db-sync-codex`: discard in-memory publication/removal receipts when links leave the current card window. Durable trip revocation history is retained. This bounds cache growth across repeated relinking and long-running office sessions. `CardSnapshotTest.test_card_receipts_drop_retired_hashes_and_aged_trips` passes. Moved the test entrypoint below appended regressions so direct-file execution includes them too. No new persistence or protocol state.

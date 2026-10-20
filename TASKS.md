@@ -3,6 +3,8 @@
 
 ## Current work queue — first sale
 
+- [x] DB/sync local verification (2026-10-20, `perf/db-sync-codex` from `0333689`): gateway 41/41; requested Python suites 136 run, one Windows skip, OK; unchanged before/after benchmark; 1.1.7/1.1.8 mixed gateway/LAN and SQLite reopen matrices pass. Test map: `test_unit.NodeSafetyTest`, `ActivityRetryTest`, `test_gateway_client.BatchCompatibilityTest`, `CardSnapshotTest`, `test_multinode.FinalPullTest`, `RevokedInFlightTest`, `gateway/test/gateway.test.js`, `tools/bench_db_sync.py`. Evidence: `/workspace/codex-dbsync-REPORT.md`. No deployment/field acceptance claimed.
+
 - [x] LAN removal during an in-flight round (2026-10-20): reject a no-longer-active direct sender under the journal append lock; earlier work stays. Test map: `test_multinode.RevokedInFlightTest`, `test_multinode.T03_Cluster`.
 
 - [x] DB/sync read performance (2026-10-20): positional public-row decoding, focused card snapshot, shared lookups, skip idle card rebuild, mailbox-aware cache invalidation. Test map: `test_gateway_client.CardSnapshotTest`, `tools/bench_db_sync.py`. No poll interval/schema/version changes.

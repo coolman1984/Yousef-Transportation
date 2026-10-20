@@ -1,6 +1,14 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+## DB/sync verification and final measurements (2026-10-20)
+
+Branch `perf/db-sync-codex`, baseline `0333689` (1.1.8), implementation head `9a8f4e7`. All requested local checks completed: gateway 41/41; exact requested Python modules 136 ran, OK, one Windows-only skip (198.683 s). Final benchmark, unchanged since its baseline commit: full state median 32.990 → 15.307 ms; steady idle median 67.978 → 1.601 ms; idle SQLite statements 16 → 1; initial D1 statements 328 → 66; restart 312 → 50. Initial/restart HTTP requests 4 → 9, deliberately smaller for the deployed old worker. Commit median 25.329 → 26.112 ms, event/photo cycle 437.297 → 469.496 ms, LAN 470.367 → 570.169 ms: no speedup claimed for these single-run timings or commit query count.
+
+Final isolated matrices pass with exact 1.1.8 `0333689` and 1.1.7 `e5d5ba3`: both gateway client/worker directions, both mixed-LAN authority arrangements, matching data fingerprints, and reopening actual old SQLite files with new code then old code again. An earlier parallel matrix attempt timed out restarting a process; isolated final repeats passed with empty stderr. One earlier full Python run exposed the in-flight revocation race and prompted its deterministic fix, rather than being dismissed as flaky. No production traffic, secrets read from installed configuration, schema/wire/version changes, push, deploy, or Windows acceptance claim.
+
+Evidence requested by owner: `/workspace/codex-dbsync-REPORT.md`, `/workspace/codex-bench-before.txt`, `/workspace/codex-bench-after.txt`, `/workspace/codex-dbsync-progress.md`. Reusable benchmark: `tools/bench_db_sync.py`. Detailed test/compatibility outputs and runner also remain in `/workspace`. Durable card receipts across restart and changes to idle/offline polling policy are deferred; history/durability semantics stay. L1/L3/L4/L5 field acceptance remains pending; this verifies the local code slice only.
+
 ## Preserve legacy JSON null response behavior (2026-10-20)
 
 Review of the faster public-row reader found a subtle representation difference: a JSON column containing the literal `null` must be omitted just like SQL NULL. Added a legacy-row fixture and kept the original decoded-value check. The focused compatibility regression fails without the check and passes with it. Latest complete requested Python run: 136 tests, OK, one platform skip; gateway 41/41. A final run after this small compatibility correction is still required.

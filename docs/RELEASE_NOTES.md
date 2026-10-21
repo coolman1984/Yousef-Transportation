@@ -1,6 +1,11 @@
 <!-- first-sale-contract: 2026-10-06 -->
 > **Owner decision — 6 October 2026:** Read [the first-sale contract](../LAUNCH_SCOPE.md) before using this document. The limited pilot core and its launch gates take priority; extra features belong to later releases or separately accepted add-ons. Existing implementation/history below is preserved and is not a claim of first-sale acceptance.
 
+# Trip Orders 1.1.10
+
+- **رفع ملف العربيات والسواقين من الإكسيل:** ملف المكتب بيترفع زي ما هو: العناوين الإنجليزي بتتفهم، أرقام الموبايل اللي الصفر بتاعها ضاع بيرجعلها، السواق المتكرر بيتدمج في واحد، والأعمدة الزيادة بتتحفظ في ملاحظات العربية. الصفوف الغلط بس هي اللي بتترفض وبيتقالك السبب.
+- Fleet Excel import accepts the office roster file as is: English headers, mobiles that lost their leading zero, repeated drivers merged, extra columns kept in the vehicle notes.
+
 # Trip Orders 1.1.9
 
 - **صندوق السواقين ما بيقفش لما الشغل يكتر:** لما يبقى عندك رحلات ورسائل سواقين كتير مرة واحدة، البرنامج بيبعتها ويستلمها على دفعات صغيرة، فالمزامنة ما بتقفش ولا بتعلّق.

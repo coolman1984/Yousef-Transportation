@@ -71,20 +71,24 @@ def _aliases(pairs):
 
 
 _VEHICLE_ALIASES = _aliases([
-    ('plate', ['اللوحة', 'رقم اللوحة', 'رقم السيارة', 'رقم العربية', 'لوحة السيارة', 'Car Plate', 'Plate', 'Plate Number', 'plate']),
-    ('type', ['النوع', 'نوع السيارة', 'الماركة', 'Type', 'type']),
+    ('plate', ['اللوحة', 'رقم اللوحة', 'رقم السيارة', 'رقم العربية', 'لوحة السيارة', 'Car Plate', 'Plate', 'Plate Number', 'plate',
+               'Vehicle no.', 'Vehicle No', 'Vehicle Number', 'Car No', 'Car Number', 'رقم المركبة']),
+    ('type', ['النوع', 'نوع السيارة', 'الماركة', 'Type', 'type', 'Car Type', 'Car Tybe', 'Vehicle Type']),
     ('category', ['الفئة', 'التصنيف', 'Category', 'category']),
     ('ownership', ['الملكية', 'Ownership', 'ownership']),
-    ('vendor', ['الشركة', 'الشركة المؤجرة', 'Vendor', 'vendor']),
+    ('vendor', ['الشركة', 'الشركة المؤجرة', 'Vendor', 'vendor', 'Name of Vendor', 'Vendor Name', 'اسم المورد', 'المورد']),
     ('startKm', ['العداد وقت الإضافة', 'عداد البداية', 'العداد', 'Baseline Odometer', 'Start KM', 'Start km', 'Odometer']),
     ('notes', ['ملاحظات', 'Notes', 'notes']),
     ('active', ['نشط', 'نشطة', 'الحالة', 'Active', 'active']),
 ])
 _DRIVER_ALIASES = _aliases([
-    ('name', ['الاسم', 'اسم السائق', 'السائق', 'Driver Name', 'Name', 'name']),
-    ('mobile', ['الموبايل', 'رقم الموبايل', 'الهاتف', 'التليفون', 'الجوال', 'Mobile', 'Phone', 'mobile']),
-    ('vendor', ['الشركة', 'الشركة المؤجرة', 'Vendor', 'vendor']),
-    ('licenseNo', ['رقم الرخصة', 'الرخصة', 'License No', 'License', 'licenseNo']),
+    ('name', ['الاسم', 'اسم السائق', 'السائق', 'Driver Name', 'Name', 'name',
+              'Name of Driver', 'Driver']),
+    ('mobile', ['الموبايل', 'رقم الموبايل', 'الهاتف', 'التليفون', 'الجوال', 'Mobile', 'Phone', 'mobile',
+                'Phone Number', 'Phone No', 'Mobile Number', 'رقم الهاتف', 'رقم التليفون']),
+    ('vendor', ['الشركة', 'الشركة المؤجرة', 'Vendor', 'vendor', 'Name of Vendor', 'Vendor Name', 'اسم المورد', 'المورد']),
+    ('licenseNo', ['رقم الرخصة', 'الرخصة', 'License No', 'License', 'licenseNo',
+                   "Driver's License no.", "Driver's License No", 'Driver License No', 'Driving License No', 'رقم رخصة القيادة']),
     ('licenseExpiry', ['انتهاء الرخصة', 'تاريخ انتهاء الرخصة', 'تاريخ الرخصة', 'License Expiry', 'licenseExpiry']),
     ('active', ['نشط', 'نشطة', 'الحالة', 'Active', 'active']),
 ])
@@ -200,6 +204,9 @@ def _parse_date(value):
 
 def _parse_mobile(text):
     raw = domain.norm_text(text)
+    # Excel drops the leading zero of a number cell: 1090802840 is 01090802840.
+    if re.fullmatch(r'1[0125]\d{8}', raw.translate(domain._AR_DIGITS)):
+        raw = '0' + raw
     if not raw:
         return None
     parts = [p.strip() for p in re.split(r'\s*[/،,;]\s*', raw) if p.strip()]
@@ -300,6 +307,27 @@ def _parse_row(kind, cells, columns, state):
         else:
             values[field] = text
 
+    if kind == 'vehicles' and columns.get('_extra'):
+        # Columns the program has no field for (model year, driver, line, inspection …) are kept in the notes
+        # as "Header: value" so nothing in the office's sheet is lost.
+        parts = []
+        for index, header in columns['_extra']:
+            value = cells[index] if index < len(cells) else None
+            if _blank_cell(value):
+                continue
+            text = _as_text(value)
+            if _alias_key(header) in _PHONE_HEADERS:
+                try:
+                    text = _parse_mobile(text).replace('+20', '0') or text
+                except ValueError:
+                    pass
+            parts.append(f'{header}: {text}')
+        if parts:
+            extra = ' | '.join(parts)
+            base = values.get('notes', '')
+            values['notes'] = ((base + ' | ') if base else '') + extra
+            values['notes'] = values['notes'][:_LIMITS['notes']]
+
     if kind == 'vehicles' and 'category' in columns and not _blank_cell(cell('category')):
         raw_cat = _as_text(cell('category'))
         if len(domain.norm_text(raw_cat)) > _LIMITS['category']:
@@ -357,15 +385,33 @@ def _parse_row(kind, cells, columns, state):
     return key, label, values, messages
 
 
-def _header_map(kind, cells):
-    aliases, columns = _ALIAS[kind], {}
+def _header_map(kind, cells, skip=()):
+    aliases, columns, extra = _ALIAS[kind], {}, []
     for index, value in enumerate(cells):
-        field = aliases.get(_alias_key(_as_text(value)))
+        header = domain.norm_text(_as_text(value))
+        field = aliases.get(_alias_key(header))
         if field and field not in columns:
             columns[field] = index
+        elif header and not field and index not in skip and _alias_key(header) not in _SERIAL_HEADERS:
+            extra.append((index, header[:40]))
     if _REQUIRED[kind] not in columns:
         return None
+    columns['_extra'] = extra
     return columns
+
+
+# A running number column says nothing about the car and is not kept in the notes.
+_PHONE_HEADERS = {key for key, field in _DRIVER_ALIASES.items() if field == 'mobile'}
+_SERIAL_HEADERS = {_alias_key(x) for x in ('No', 'No.', 'م', 'مسلسل', '#', 'Serial', 'S/N')}
+
+
+def _formula_columns(sheet, header_at):
+    """0-based columns filled by a formula such as =TODAY()-F2: a value that changes every day, so not kept."""
+    out = set()
+    for (row, col), cell in getattr(sheet, 'cells', {}).items():
+        if row > header_at and cell.f:
+            out.add(col - 1)
+    return out
 
 
 def _sheet_matrix(sheet):
@@ -395,6 +441,7 @@ def parse_workbook(book, kind, state):
             columns = _header_map(kind, cells)
             if columns:
                 header_at = number
+                columns = _header_map(kind, cells, _formula_columns(sheet, number))
                 break
         if header_at:
             found.append((sheet.name, header_at, columns, matrix))
@@ -403,7 +450,7 @@ def parse_workbook(book, kind, state):
 
     existing = _index(state or {}, kind)
     items, blanks = [], []
-    seen = {}
+    seen, seen_values = {}, {}
     data_count = 0
     for sheet_name, header_at, columns, matrix in found:
         last = header_at
@@ -420,13 +467,21 @@ def parse_workbook(book, kind, state):
             if data_count > MAX_ROWS:
                 raise FleetError(f'The file has more than {MAX_ROWS} rows. Split it into smaller files.', 'err.flt.big')
             key, label, values, messages = _parse_row(kind, cells, columns, state or {})
+            repeat = False
             if key:
                 if key in seen:
-                    messages.append(_msg('dup_file', row=seen[key]))
+                    # The same driver on two cars is one person: an identical row is not an error.
+                    if not messages and seen_values.get(key) == values:
+                        repeat = True
+                    else:
+                        messages.append(_msg('dup_file', row=seen[key]))
                 elif not messages:
                     seen[key] = number
+                    seen_values[key] = values
             if messages:
                 status = 'error'
+            elif repeat:
+                status = 'same'
             elif key in existing:
                 status = 'same' if _unchanged(existing[key], values) else 'update'
             else:

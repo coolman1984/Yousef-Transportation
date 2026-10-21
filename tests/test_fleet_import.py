@@ -462,3 +462,55 @@ class PracticeSheetTest(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+OWNER_ROSTER = os.path.join(ROOT, 'tests', 'fixtures', 'fleet_roster_owner_anon.xlsx')
+
+
+class OwnerRosterTest(unittest.TestCase):
+    """The office's real fleet roster (names, plates and numbers replaced): one sheet "Sedan", an Excel table,
+    English headers such as «Vehicle no.» and «Name of Driver», phone numbers stored as numbers without the
+    leading zero, a =TODAY()-F2 formula column and a used range that runs to column XEA."""
+
+    def setUp(self):
+        with open(OWNER_ROSTER, 'rb') as fh:
+            self.data = fh.read()
+
+    def test_vehicles_map_every_column_and_keep_the_rest_in_notes(self):
+        plan = F.parse_bytes(self.data, 'roster.xlsx', 'vehicles', {})
+        self.assertEqual(plan['sheets'], ['Sedan'])
+        self.assertEqual(plan['stats'], {'rows': 114, 'new': 113, 'update': 0, 'same': 0, 'error': 1, 'blank': 0})
+        first = plan['rows'][0]
+        self.assertEqual(first['row'], 2)
+        self.assertEqual(first['values']['type'], 'SUV')
+        self.assertEqual(first['values']['vendor'], 'Misr Car Travel')
+        notes = first['values']['notes']
+        for part in ('Model Year: 2022', 'Valid Date of Car License: 2027-11-26', 'Name of Driver: Driver 038',
+                     'Leader name: Korean SUV', 'Line: Korean SUV', 'Inspection date: 2026-08-27', 'Statue: Passed'):
+            self.assertIn(part, notes)
+        self.assertRegex(notes, r'Phone Number: 01\d{9}')
+        self.assertNotIn('expiration', notes)       # the =TODAY() column changes daily and is not kept
+        self.assertNotIn('No:', notes)              # the running number is not kept
+        types = {item['values']['type'] for item in plan['rows']}
+        self.assertEqual(types, {'SUV', 'Sedan', 'Microbus'})
+        # The same plate on rows 50 and 108 with two different drivers: the second row is reported.
+        self.assertEqual([(e['row'], codes(e)) for e in plan['errors']], [(108, ['dup_file'])])
+
+    def test_drivers_fix_the_lost_zero_and_merge_a_driver_on_two_cars(self):
+        plan = F.parse_bytes(self.data, 'roster.xlsx', 'drivers', {})
+        self.assertEqual(plan['stats'], {'rows': 114, 'new': 95, 'update': 0, 'same': 15, 'error': 4, 'blank': 0})
+        first = plan['rows'][0]
+        self.assertEqual(first['label'], 'Driver 038')
+        self.assertEqual(first['values']['vendor'], 'Misr Car Travel')
+        self.assertEqual(len(first['values']['licenseNo']), 14)
+        self.assertRegex(first['values']['mobile'], r'^\+201\d{9}$')     # 1053934637 in the cell -> +201053934637
+        texted = [i for i in plan['rows'] if i['row'] == 17][0]          # «0 11 1xxxxxxx» typed as text
+        self.assertRegex(texted['values']['mobile'], r'^\+2011\d{8}$')
+        self.assertEqual([(e['row'], codes(e)) for e in plan['errors']],
+                         [(45, ['mobile']), (51, ['mobile']), (57, ['mobile']), (81, ['name_required'])])
+
+    def test_lost_zero_mobile(self):
+        self.assertEqual(F._parse_mobile('1090802840'), '+201090802840')
+        self.assertEqual(F._parse_mobile('٠١٠٩٠٨٠٢٨٤٠'), '+201090802840')
+        with self.assertRaises(ValueError):
+            F._parse_mobile('100149222')

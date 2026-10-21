@@ -1432,7 +1432,7 @@
     'gd.importFleet.3': 'Press [[flt.template]].',
     'gd.importFleet.4': 'The plate is required. The other columns are optional.',
     'gd.importFleet.5': 'The category must already exist in Settings. Ownership is own or rent. The odometer is a whole number.',
-    'gd.importFleet.6': 'The file is xlsx or csv. Headers may be Arabic or English, in any order. Arabic digits are accepted.',
+    'gd.importFleet.6': 'The file is xlsx or csv. Headers may be Arabic or English, in any order. Arabic digits are accepted. The company roster (Vehicle no., Name of Driver, Phone Number) is read as it is, and extra columns are kept in the vehicle notes. A mobile that lost its leading zero is fixed, and a driver listed on two cars is saved once.',
     'gd.importFleet.7': 'Press [[flt.import]].',
     'gd.importFleet.8': 'Press the upload box, or drag the file onto it.',
     'gd.importFleet.9': 'Read the column card before you upload. Required and optional are marked.',
